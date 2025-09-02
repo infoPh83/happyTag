@@ -2,6 +2,8 @@ import sys
 import os
 import re
 import gc
+import subprocess
+import plistlib
 from datetime import datetime
 from PIL import Image
 from PIL.ExifTags import TAGS
@@ -73,8 +75,8 @@ try:
                 print(f"Detected 32-bit Windows, looking for: {exiftool_path}")
         
         elif system == 'darwin':  # macOS
-            # For Mac, we'll use the .pkg content when available
-            exiftool_path = os.path.join(base_path, 'exiftool_mac', 'exiftool')
+            # For Mac, we'll use the Perl version from Image-ExifTool
+            exiftool_path = os.path.join(base_path, 'Image-ExifTool-13.34', 'exiftool')
             print(f"Detected macOS, looking for: {exiftool_path}")
         
         elif system == 'linux':
@@ -485,6 +487,26 @@ class MainWindow(QMainWindow):
                                         keywords.append(keyword_values.strip())
                     except Exception as e:
                         print(f"[DEBUG] XMP Subject read failed: {e}")
+                    
+                    try:
+                        # Try to get XMP-dc:Subject (Dublin Core Subject - for macOS Finder compatibility)
+                        xmp_dc_subject = et.execute('-XMP-dc:Subject', file_path)
+                        if xmp_dc_subject and not xmp_dc_subject.startswith('Warning') and xmp_dc_subject.strip():
+                            for line in xmp_dc_subject.strip().split('\n'):
+                                if 'subject' in line.lower() and ':' in line:
+                                    keyword_values = line.split(':', 1)[1].strip()
+                                    
+                                    # Try semicolon separator first, then comma separator
+                                    if ';' in keyword_values:
+                                        split_keywords = [k.strip() for k in keyword_values.split(';') if k.strip()]
+                                        keywords.extend(split_keywords)
+                                    elif ',' in keyword_values:
+                                        split_keywords = [k.strip() for k in keyword_values.split(',') if k.strip()]
+                                        keywords.extend(split_keywords)
+                                    else:
+                                        keywords.append(keyword_values.strip())
+                    except Exception as e:
+                        print(f"[DEBUG] XMP-dc:Subject read failed: {e}")
                 
             # Fallback to PIL for date if ExifTool not available
             elif not year:
@@ -585,6 +607,85 @@ class MainWindow(QMainWindow):
         
         return changed
 
+    def write_macos_finder_tags(self, file_path, keywords):
+        """Write macOS Finder tags using extended attributes and Spotlight metadata"""
+        try:
+            if not keywords or os.name != 'posix' or not hasattr(os, 'uname') or os.uname().sysname != 'Darwin':
+                return True, "Not macOS or no keywords"
+            
+            # Method 1: Write Extended Attributes (for Finder display)
+            # Use the EXACT format that macOS Finder uses: simple array of strings
+            # Based on analysis of working macOS-tagged files
+            tag_data = keywords  # Simple list of strings, no color info needed here
+            
+            # Convert to binary plist format (same as macOS native)
+            plist_data = plistlib.dumps(tag_data, fmt=plistlib.FMT_BINARY)
+            
+            # Convert binary data to hex string
+            hex_data = plist_data.hex()
+            
+            # Use xattr command with hex data
+            result = subprocess.run([
+                'xattr', '-w', '-x', 'com.apple.metadata:_kMDItemUserTags',
+                hex_data, file_path
+            ], capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                print(f"[DEBUG] Failed to write extended attributes: {result.stderr}")
+                return False, f"xattr error: {result.stderr}"
+            
+            # Method 2: Write Spotlight Metadata (for search and indexing)
+            try:
+                # Use mdimport to write Spotlight-compatible metadata
+                # Create a temporary sidecar file with metadata
+                import tempfile
+                import json
+                
+                # Create metadata in format Spotlight understands
+                spotlight_metadata = {
+                    'kMDItemUserTags': keywords,
+                    'kMDItemKeywords': keywords,
+                    'kMDItemSubject': ', '.join(keywords)
+                }
+                
+                # Write using xattr for Spotlight metadata as well
+                for key, value in spotlight_metadata.items():
+                    if isinstance(value, list):
+                        # For arrays, write as plist
+                        array_plist = plistlib.dumps(value, fmt=plistlib.FMT_BINARY)
+                        array_hex = array_plist.hex()
+                        subprocess.run([
+                            'xattr', '-w', '-x', f'com.apple.metadata:{key}',
+                            array_hex, file_path
+                        ], capture_output=True)
+                    else:
+                        # For strings, write directly
+                        subprocess.run([
+                            'xattr', '-w', f'com.apple.metadata:{key}',
+                            value, file_path
+                        ], capture_output=True)
+                
+                print(f"[DEBUG] Successfully wrote Spotlight metadata")
+                
+            except Exception as spotlight_error:
+                print(f"[DEBUG] Spotlight metadata write failed: {spotlight_error}")
+                # Continue anyway, extended attributes are still written
+            
+            print(f"[DEBUG] Successfully wrote macOS Finder tags to {os.path.basename(file_path)}")
+            
+            # Force Spotlight reindex for immediate visibility
+            try:
+                subprocess.run(['mdimport', file_path], capture_output=True, timeout=5)
+                print(f"[DEBUG] Triggered Spotlight reindex for {os.path.basename(file_path)}")
+            except:
+                pass  # Non-critical if reindex fails
+            
+            return True, "Success"
+                
+        except Exception as e:
+            print(f"[DEBUG] Error writing macOS Finder tags: {e}")
+            return False, f"Error: {str(e)}"
+
     def save_keywords_to_image(self, file_path, keywords_text):
         """Save keywords to image metadata using ExifTool (with fallback notification)"""
         # Check if keywords have actually changed
@@ -624,75 +725,131 @@ class MainWindow(QMainWindow):
                 
                 # Write only to keyword fields (not subject fields)
                 try:
-                    # For JPEG/TIFF: Write to IPTC and XMP Keywords + XMP Subject for cross-platform compatibility
+                    # For JPEG/TIFF: Write to multiple fields for cross-platform compatibility
                     if file_ext in ['.jpg', '.jpeg', '.tiff', '.tif']:
-                        # Write IPTC Keywords (semicolon-separated for legacy compatibility)
+                        # 1. Write IPTC Keywords (semicolon-separated for legacy compatibility)
                         keywords_str = ';'.join(keywords) if keywords else ''
                         et.execute(f'-IPTC:Keywords={keywords_str}', '-overwrite_original', file_path)
                         
-                        # Write XMP Keywords (semicolon-separated for macOS compatibility)
+                        # 2. Write XMP Keywords (semicolon-separated for some applications)
                         et.execute(f'-XMP:Keywords={keywords_str}', '-overwrite_original', file_path)
                         
-                        # Write XMP Subject as individual array elements (for Windows Explorer)
+                        # 3. Write XMP-dc:Subject as individual array elements (for macOS Finder)
+                        if keywords:
+                            # Clear existing Dublin Core subject first
+                            et.execute('-XMP-dc:Subject=', '-overwrite_original', file_path)
+                            # Add each keyword as separate array element in a single command
+                            dc_subject_cmd = [f'-XMP-dc:Subject+={keyword}' for keyword in keywords]
+                            dc_subject_cmd.extend(['-overwrite_original', file_path])
+                            et.execute(*dc_subject_cmd)
+                        else:
+                            et.execute('-XMP-dc:Subject=', '-overwrite_original', file_path)
+                        
+                        # 4. Write XMP Subject as individual array elements (for Windows Explorer)
                         if keywords:
                             # Clear existing subject first
                             et.execute('-XMP:Subject=', '-overwrite_original', file_path)
-                            # Add each keyword as separate array element
-                            for keyword in keywords:
-                                et.execute(f'-XMP:Subject+={keyword}', '-overwrite_original', file_path)
+                            # Add each keyword as separate array element in a single command
+                            subject_cmd = [f'-XMP:Subject+={keyword}' for keyword in keywords]
+                            subject_cmd.extend(['-overwrite_original', file_path])
+                            et.execute(*subject_cmd)
                         else:
                             et.execute('-XMP:Subject=', '-overwrite_original', file_path)
                     
-                    # For PNG: Use XMP Keywords + XMP Subject for cross-platform compatibility
+                    # For PNG: Use XMP Keywords + XMP-dc:Subject + XMP Subject for cross-platform compatibility
                     elif file_ext == '.png':
-                        # Write XMP Keywords (semicolon-separated for macOS compatibility)
+                        # 1. Write XMP Keywords (semicolon-separated for some applications)
                         keywords_str = ';'.join(keywords) if keywords else ''
                         et.execute(f'-XMP:Keywords={keywords_str}', '-overwrite_original', file_path)
                         
-                        # Write XMP Subject as individual array elements (for Windows Explorer)
+                        # 2. Write XMP-dc:Subject as individual array elements (for macOS Finder)
+                        if keywords:
+                            # Clear existing Dublin Core subject first
+                            et.execute('-XMP-dc:Subject=', '-overwrite_original', file_path)
+                            # Add each keyword as separate array element in a single command
+                            dc_subject_cmd = [f'-XMP-dc:Subject+={keyword}' for keyword in keywords]
+                            dc_subject_cmd.extend(['-overwrite_original', file_path])
+                            et.execute(*dc_subject_cmd)
+                        else:
+                            et.execute('-XMP-dc:Subject=', '-overwrite_original', file_path)
+                        
+                        # 3. Write XMP Subject as individual array elements (for Windows Explorer)
                         if keywords:
                             # Clear existing subject first
                             et.execute('-XMP:Subject=', '-overwrite_original', file_path)
-                            # Add each keyword as separate array element
-                            for keyword in keywords:
-                                et.execute(f'-XMP:Subject+={keyword}', '-overwrite_original', file_path)
+                            # Add each keyword as separate array element in a single command
+                            subject_cmd = [f'-XMP:Subject+={keyword}' for keyword in keywords]
+                            subject_cmd.extend(['-overwrite_original', file_path])
+                            et.execute(*subject_cmd)
                         else:
                             et.execute('-XMP:Subject=', '-overwrite_original', file_path)
                     
-                    # For GIF: Use XMP Keywords + XMP Subject for cross-platform compatibility
+                    # For GIF: Use XMP Keywords + XMP-dc:Subject + XMP Subject for cross-platform compatibility
                     elif file_ext == '.gif':
-                        # Write XMP Keywords (semicolon-separated for macOS compatibility)
+                        # 1. Write XMP Keywords (semicolon-separated for some applications)
                         keywords_str = ';'.join(keywords) if keywords else ''
                         et.execute(f'-XMP:Keywords={keywords_str}', '-overwrite_original', file_path)
                         
-                        # Write XMP Subject as individual array elements (for Windows Explorer)
+                        # 2. Write XMP-dc:Subject as individual array elements (for macOS Finder)
+                        if keywords:
+                            # Clear existing Dublin Core subject first
+                            et.execute('-XMP-dc:Subject=', '-overwrite_original', file_path)
+                            # Add each keyword as separate array element in a single command
+                            dc_subject_cmd = [f'-XMP-dc:Subject+={keyword}' for keyword in keywords]
+                            dc_subject_cmd.extend(['-overwrite_original', file_path])
+                            et.execute(*dc_subject_cmd)
+                        else:
+                            et.execute('-XMP-dc:Subject=', '-overwrite_original', file_path)
+                        
+                        # 3. Write XMP Subject as individual array elements (for Windows Explorer)
                         if keywords:
                             # Clear existing subject first
                             et.execute('-XMP:Subject=', '-overwrite_original', file_path)
-                            # Add each keyword as separate array element
-                            for keyword in keywords:
-                                et.execute(f'-XMP:Subject+={keyword}', '-overwrite_original', file_path)
+                            # Add each keyword as separate array element in a single command
+                            subject_cmd = [f'-XMP:Subject+={keyword}' for keyword in keywords]
+                            subject_cmd.extend(['-overwrite_original', file_path])
+                            et.execute(*subject_cmd)
                         else:
                             et.execute('-XMP:Subject=', '-overwrite_original', file_path)
                     
-                    # For WebP: Use XMP Keywords + XMP Subject for cross-platform compatibility
+                    # For WebP: Use XMP Keywords + XMP-dc:Subject + XMP Subject for cross-platform compatibility
                     elif file_ext == '.webp':
-                        # Write XMP Keywords (semicolon-separated for macOS compatibility)
+                        # 1. Write XMP Keywords (semicolon-separated for some applications)
                         keywords_str = ';'.join(keywords) if keywords else ''
                         et.execute(f'-XMP:Keywords={keywords_str}', '-overwrite_original', file_path)
                         
-                        # Write XMP Subject as individual array elements (for Windows Explorer)
+                        # 2. Write XMP-dc:Subject as individual array elements (for macOS Finder)
+                        if keywords:
+                            # Clear existing Dublin Core subject first
+                            et.execute('-XMP-dc:Subject=', '-overwrite_original', file_path)
+                            # Add each keyword as separate array element in a single command
+                            dc_subject_cmd = [f'-XMP-dc:Subject+={keyword}' for keyword in keywords]
+                            dc_subject_cmd.extend(['-overwrite_original', file_path])
+                            et.execute(*dc_subject_cmd)
+                        else:
+                            et.execute('-XMP-dc:Subject=', '-overwrite_original', file_path)
+                        
+                        # 3. Write XMP Subject as individual array elements (for Windows Explorer)
                         if keywords:
                             # Clear existing subject first
                             et.execute('-XMP:Subject=', '-overwrite_original', file_path)
-                            # Add each keyword as separate array element
-                            for keyword in keywords:
-                                et.execute(f'-XMP:Subject+={keyword}', '-overwrite_original', file_path)
+                            # Add each keyword as separate array element in a single command
+                            subject_cmd = [f'-XMP:Subject+={keyword}' for keyword in keywords]
+                            subject_cmd.extend(['-overwrite_original', file_path])
+                            et.execute(*subject_cmd)
                         else:
                             et.execute('-XMP:Subject=', '-overwrite_original', file_path)
                     
                     # Update original keywords after successful save (including year)
                     self.original_keywords[file_path] = keywords.copy()
+                    
+                    # Also write macOS Finder tags for better integration
+                    if keywords:  # Only write if there are keywords
+                        finder_success, finder_msg = self.write_macos_finder_tags(file_path, keywords)
+                        if finder_success:
+                            print(f"[DEBUG] macOS Finder tags also written successfully")
+                        else:
+                            print(f"[DEBUG] macOS Finder tags not written: {finder_msg}")
                     
                     # Remove from new files tracking after successful save
                     if hasattr(self, 'new_files_with_year') and file_path in self.new_files_with_year:

@@ -724,8 +724,19 @@ class TagManager(QDialog):
         try:
             import pandas as pd
             
+            # Determine the appropriate engine based on file extension
+            file_extension = file_path.lower().split('.')[-1]
+            if file_extension == 'ods':
+                engine = 'odf'
+            elif file_extension in ['xlsx', 'xlsm']:
+                engine = 'openpyxl'  # openpyxl handles both xlsx and xlsm
+            elif file_extension == 'xls':
+                engine = 'xlrd'  # xlrd for legacy .xls files
+            else:
+                engine = 'odf'  # Default to ODF
+            
             # Read the TAGs sheet
-            df = pd.read_excel(file_path, sheet_name='TAGs', engine='odf')
+            df = pd.read_excel(file_path, sheet_name='TAGs', engine=engine)
             
             categories_data = []
             
@@ -962,15 +973,30 @@ class TagManager(QDialog):
         return indexes
     
     def read_businesses_from_ods(self, file_path):
-        """Read business data from the B2B + B2C final ODS file, Table1 sheet"""
+        """Read business data from the B2B + B2C final file (supports ODS, Excel XLSX, and Excel XLSM formats), Table1 sheet"""
         try:
-            print(f"[DEBUG] Starting to read ODS file: {file_path}")
+            print(f"[DEBUG] Starting to read file: {file_path}")
             import pandas as pd
             
+            # Determine the appropriate engine based on file extension
+            file_extension = file_path.lower().split('.')[-1]
+            if file_extension == 'ods':
+                engine = 'odf'
+                print(f"[DEBUG] Detected ODS file, using 'odf' engine")
+            elif file_extension in ['xlsx', 'xlsm']:
+                engine = 'openpyxl'  # openpyxl handles both xlsx and xlsm
+                print(f"[DEBUG] Detected Excel file (.{file_extension}), using 'openpyxl' engine")
+            elif file_extension == 'xls':
+                engine = 'xlrd'
+                print(f"[DEBUG] Detected legacy Excel file (.xls), using 'xlrd' engine")
+            else:
+                print(f"[DEBUG] Unknown file extension '{file_extension}', trying 'odf' engine as default")
+                engine = 'odf'
+            
             # Read the Table1 sheet
-            print(f"[DEBUG] Reading Table1 sheet from ODS file...")
-            df = pd.read_excel(file_path, sheet_name='Table1', engine='odf')
-            print(f"[DEBUG] ODS file loaded, total rows: {len(df)}")
+            print(f"[DEBUG] Reading Table1 sheet from file...")
+            df = pd.read_excel(file_path, sheet_name='Table1', engine=engine)
+            print(f"[DEBUG] File loaded, total rows: {len(df)}")
             
             # Find column indexes by header names
             required_columns = ["Tenant Name", "Property", "Street name", "Category", "B2B/B2C", "Trading As"]
@@ -1057,19 +1083,34 @@ class TagManager(QDialog):
             return business_data
             
         except Exception as e:
-            print(f"[DEBUG] Error reading business data from ODS file: {e}")
+            print(f"[DEBUG] Error reading business data from file: {e}")
             return []
 
     def read_non_tle_businesses_from_ods(self, file_path):
-        """Read non-TLE business data from the NON TLE tenants list ODS file"""
+        """Read non-TLE business data from the NON TLE tenants list file (supports ODS, Excel XLSX, and Excel XLSM formats)"""
         try:
-            print(f"[DEBUG] Starting to read NON TLE ODS file: {file_path}")
+            print(f"[DEBUG] Starting to read NON TLE file: {file_path}")
             import pandas as pd
             
+            # Determine the appropriate engine based on file extension
+            file_extension = file_path.lower().split('.')[-1]
+            if file_extension == 'ods':
+                engine = 'odf'
+                print(f"[DEBUG] Detected ODS file, using 'odf' engine")
+            elif file_extension in ['xlsx', 'xlsm']:
+                engine = 'openpyxl'  # openpyxl handles both xlsx and xlsm
+                print(f"[DEBUG] Detected Excel file (.{file_extension}), using 'openpyxl' engine")
+            elif file_extension == 'xls':
+                engine = 'xlrd'
+                print(f"[DEBUG] Detected legacy Excel file (.xls), using 'xlrd' engine")
+            else:
+                print(f"[DEBUG] Unknown file extension '{file_extension}', trying 'odf' engine as default")
+                engine = 'odf'
+            
             # Read the default sheet (usually Sheet1)
-            print(f"[DEBUG] Reading default sheet from NON TLE ODS file...")
-            df = pd.read_excel(file_path, engine='odf')
-            print(f"[DEBUG] NON TLE ODS file loaded, total rows: {len(df)}")
+            print(f"[DEBUG] Reading default sheet from NON TLE file...")
+            df = pd.read_excel(file_path, engine=engine)
+            print(f"[DEBUG] NON TLE file loaded, total rows: {len(df)}")
             
             # Find column indexes by header names (NON TLE file has different headers)
             required_columns = ["Non-TLE Businesses", "Street", "Address", "B2B/B2C", "Category"]
@@ -1164,7 +1205,7 @@ class TagManager(QDialog):
             return business_data
             
         except Exception as e:
-            print(f"[DEBUG] Error reading non-TLE business data from ODS file: {e}")
+            print(f"[DEBUG] Error reading non-TLE business data from file: {e}")
             return []
     
     def create_business_category_container(self, category_name, category_color, businesses):
@@ -1241,15 +1282,30 @@ class TagManager(QDialog):
             print(f"[DEBUG] Error loading streets from file: {e}")
 
     def read_streets_from_ods(self, file_path):
-        """Read street and building data from the Buildings and Streets ODS file"""
+        """Read street and building data from the Buildings and Streets file (supports both ODS and Excel formats)"""
         try:
-            print(f"[DEBUG] Starting to read Buildings and Streets ODS file: {file_path}")
+            print(f"[DEBUG] Starting to read Buildings and Streets file: {file_path}")
             import pandas as pd
             
+            # Determine the appropriate engine based on file extension
+            file_extension = file_path.lower().split('.')[-1]
+            if file_extension == 'ods':
+                engine = 'odf'
+                print(f"[DEBUG] Detected ODS file, using 'odf' engine")
+            elif file_extension in ['xlsx', 'xlsm']:
+                engine = 'openpyxl'  # openpyxl handles both xlsx and xlsm
+                print(f"[DEBUG] Detected Excel file (.{file_extension}), using 'openpyxl' engine")
+            elif file_extension == 'xls':
+                engine = 'xlrd'
+                print(f"[DEBUG] Detected legacy Excel file (.xls), using 'xlrd' engine")
+            else:
+                print(f"[DEBUG] Unknown file extension '{file_extension}', trying 'odf' engine as default")
+                engine = 'odf'
+            
             # Read the Buildings and Streets sheet
-            print(f"[DEBUG] Reading 'Buildings and Streets' sheet from ODS file...")
-            df = pd.read_excel(file_path, sheet_name='Buildings and Streets', engine='odf')
-            print(f"[DEBUG] Buildings and Streets ODS file loaded, total rows: {len(df)}")
+            print(f"[DEBUG] Reading 'Buildings and Streets' sheet from file...")
+            df = pd.read_excel(file_path, sheet_name='Buildings and Streets', engine=engine)
+            print(f"[DEBUG] Buildings and Streets file loaded, total rows: {len(df)}")
             
             # Find column indexes by header names
             required_columns = ["BUILDINGS", "STREET"]
@@ -1314,7 +1370,7 @@ class TagManager(QDialog):
             return result
             
         except Exception as e:
-            print(f"[DEBUG] Error reading Buildings and Streets data from ODS file: {e}")
+            print(f"[DEBUG] Error reading Buildings and Streets data from file: {e}")
             return None
 
     def extract_header_color(self, df, col_index):
