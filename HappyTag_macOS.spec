@@ -1,22 +1,23 @@
 # -*- mode: python ; coding: utf-8 -*-
+# HappyTag macOS Production Build
+# Clean, organized build specification following unified folder structure
 
 block_cipher = None
 
 a = Analysis(
     ['main.py'],
-    pathex=['/Volumes/Marketing/Simone Morciano/python working folder/happyTag/happyTag'],
+    pathex=[],
     binaries=[
-        # Include ExifTool binary
+        # ExifTool Perl executable (requires execute permissions)
         ('packages/Image-ExifTool-13.34/exiftool', 'packages/Image-ExifTool-13.34/'),
-        # Include all ExifTool library files
-        ('packages/Image-ExifTool-13.34/lib/*', 'packages/Image-ExifTool-13.34/lib/'),
     ],
     datas=[
-        # Include UI files
-        ('ui/*.ui', 'ui/'),
-        ('ui/*.py', 'ui/'),
-        # Include any other data files
-        ('packages/Image-ExifTool-13.34/lib', 'packages/Image-ExifTool-13.34/lib'),
+        # UI files
+        ('ui/', 'ui/'),
+        # Utilities package (organized Python modules)
+        ('utilities/', 'utilities/'),
+        # ExifTool Perl library files (data, not executable)
+        ('packages/Image-ExifTool-13.34/lib/', 'packages/Image-ExifTool-13.34/lib/'),
     ],
     hiddenimports=[
         'PyQt5.QtCore',
@@ -31,7 +32,18 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'tkinter',
+        'unittest',
+        'email',
+        'http',
+        'urllib',
+        'xml',
+        'pydoc',
+        'doctest',
+        'argparse',
+        'difflib',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -46,13 +58,13 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name='HappyTag',
-    debug=False,             # Disable debug for GUI mode
+    debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,           # Disable console for proper GUI app
+    console=False,
     disable_windowed_traceback=False,
-    argv_emulation=True,     # Enable for proper macOS app behavior
+    argv_emulation=True,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
@@ -85,10 +97,10 @@ app = BUNDLE(
         'CFBundleIconFile': 'icon.icns',
         'NSPrincipalClass': 'NSApplication',
         'NSHighResolutionCapable': True,
-        'LSUIElement': False,  # Ensure app appears in Dock and has menu bar
-        'LSBackgroundOnly': False,  # Not a background-only app
-        'CFBundlePackageType': 'APPL',  # Application bundle
-        # Permissions for file access
+        'LSUIElement': False,
+        'LSBackgroundOnly': False,
+        'CFBundlePackageType': 'APPL',
+        # File access permissions
         'NSDocumentsFolderUsageDescription': 'HappyTag needs access to documents to read and tag image files.',
         'NSDesktopFolderUsageDescription': 'HappyTag needs access to desktop to read and tag image files.',
         'NSDownloadsFolderUsageDescription': 'HappyTag needs access to downloads to read and tag image files.',

@@ -13,8 +13,8 @@ from PyQt5.QtWidgets import (QMainWindow, QApplication, QFileDialog,
 from PyQt5.QtCore import Qt, QTimer, QSize, QRect, QPoint, QEvent
 from PyQt5.QtGui import QPixmap
 from PyQt5 import uic
-from tag_manager import TagManager
-from settings_dialog import SettingsDialog
+from utilities.tag_manager import TagManager
+from utilities.settings_dialog import SettingsDialog
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -2146,7 +2146,34 @@ class MainWindow(QMainWindow):
                     widget.updateContainerHeight()
 
 if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec_())
+    try:
+        print("[DEBUG] Starting HappyTag application...")
+        app = QApplication(sys.argv)
+        print("[DEBUG] QApplication created successfully")
+        
+        window = MainWindow()
+        print("[DEBUG] MainWindow created successfully")
+        
+        window.show()
+        print("[DEBUG] Window shown, starting event loop...")
+        
+        result = app.exec_()
+        print(f"[DEBUG] Application exited with code: {result}")
+        sys.exit(result)
+        
+    except Exception as e:
+        print(f"\n=== CRITICAL ERROR ===")
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+        print("======================")
+        
+        # If running as PyInstaller executable, pause before exit
+        if getattr(sys, 'frozen', False):
+            print("\nRunning as executable. Press Enter to close...")
+            try:
+                input()
+            except:
+                import time
+                time.sleep(5)
+        sys.exit(1)
