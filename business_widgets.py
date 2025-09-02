@@ -3,12 +3,13 @@ from PyQt5.QtGui import QPalette, QColor, QFont
 from PyQt5.QtCore import Qt
 
 class BusinessButton(QPushButton):
-    def __init__(self, tenant_name, street_name, property_name, category, background_color="#E6F3FF", business_type="TLE Tenant", parent=None):
+    def __init__(self, tenant_name, street_name, property_name, category, trading_as, background_color="#E6F3FF", business_type="TLE Tenant", parent=None):
         super().__init__(parent)
         self.tenant_name = tenant_name
         self.street_name = street_name
         self.property_name = property_name
         self.category = category
+        self.trading_as = trading_as
         self.business_type = business_type  # "TLE Tenant" or "non-tenant"
         
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -18,6 +19,7 @@ class BusinessButton(QPushButton):
         # self.street_name = self.street_name.replace(',', '|')
         # self.property_name = self.property_name.replace(',', '|')
         # self.category = self.category.replace(',', '|')
+        # self.trading_as = self.trading_as.replace(',', '|')
         # self.business_type = self.business_type.replace(',', '|')
         
         # Create the content
@@ -64,7 +66,8 @@ class BusinessButton(QPushButton):
             self.property_name,
             self.street_name,
             self.category,
-            self.business_type  # Use the dynamic business_type instead of hardcoded "TLE Tenant"
+            self.business_type,
+            self.trading_as  # Add trading_as after business_type
         ]
         
         for detail in details:
@@ -134,7 +137,7 @@ class BusinessButton(QPushButton):
     
     def get_full_description(self):
         """Return concatenated description of all business fields with comma separation"""
-        return f"{self.tenant_name}, {self.property_name}, {self.street_name}, {self.category}, {self.business_type}"
+        return f"{self.tenant_name}, {self.property_name}, {self.street_name}, {self.category}, {self.business_type}, {self.trading_as}"
     
     def get_individual_fields(self):
         """Return list of individual business fields for duplicate checking"""
@@ -143,7 +146,8 @@ class BusinessButton(QPushButton):
             self.property_name.strip(), 
             self.street_name.strip(),
             self.category.strip(),
-            self.business_type.strip()
+            self.business_type.strip(),
+            self.trading_as.strip()
         ]
     
     def get_search_text(self):

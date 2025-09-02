@@ -20,6 +20,7 @@ def test_business_button():
         street_name="Margaret Street", 
         property_name="5 Margaret Street",
         category="Lifestyle",
+        trading_as="Workpad Co-working",
         background_color="#F8F8F0"
     )
     

@@ -275,6 +275,7 @@ class MainWindow(QMainWindow):
         
         # Track metadata errors for reporting
         self.metadata_errors = []
+        self.unsupported_files = []  # Track files that couldn't be loaded due to unsupported format
         
         # Flag to enable/disable metadata reading (can be toggled if causing issues)
         self.enable_metadata_reading = True
@@ -812,6 +813,20 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "Metadata Reading Errors", error_message)
         self.metadata_errors.clear()  # Clear after showing
 
+    def show_unsupported_files(self):
+        """Show list of unsupported files to the user"""
+        if not self.unsupported_files:
+            return
+        
+        error_message = "Some files could not be loaded due to unsupported formats:\n\n"
+        for file_path, reason in self.unsupported_files:
+            filename = os.path.basename(file_path)
+            error_message += f"• {filename}: {reason}\n"
+        
+        error_message += "\nSupported formats: JPG, PNG, TIFF, BMP, GIF, WEBP"
+        QMessageBox.information(self, "Unsupported Files", error_message)
+        self.unsupported_files.clear()  # Clear after showing
+
     def create_progress_overlay(self):
         """Create a centered progress bar overlay"""
         # Create overlay widget
@@ -910,6 +925,13 @@ class MainWindow(QMainWindow):
         try:
             print(f"Creating preview from file: {file_path}")
             
+            # Check file extension first
+            _, ext = os.path.splitext(file_path.lower())
+            if ext == '.psd':
+                print(f"Warning: PSD files are not currently supported for preview: {file_path}")
+                self.unsupported_files.append((file_path, "PSD format not supported"))
+                return None
+            
             with Image.open(file_path) as img:
                 orig_width, orig_height = img.size
                 print(f"Original size: {orig_width}x{orig_height}")
@@ -969,11 +991,23 @@ class MainWindow(QMainWindow):
                     
                     return pixmap
                 else:
-                    print(f"Error: Could not create preview for {file_path}")
+                    print(f"Error: Could not create preview for {file_path} - QPixmap returned null (unsupported format or corrupted file)")
                     return None
                     
         except Exception as e:
-            print(f"Error creating preview for {file_path}: {e}")
+            file_ext = os.path.splitext(file_path)[1].lower()
+            if file_ext in ['.psd', '.psb']:
+                reason = "PSD/PSB format not supported"
+                print(f"Error creating preview for {file_path}: {reason}")
+                self.unsupported_files.append((file_path, reason))
+            elif file_ext in ['.ai', '.eps']:
+                reason = "Vector formats (AI/EPS) not supported"
+                print(f"Error creating preview for {file_path}: {reason}")
+                self.unsupported_files.append((file_path, reason))
+            else:
+                reason = f"File error: {str(e)}"
+                print(f"Error creating preview for {file_path}: {e}")
+                self.unsupported_files.append((file_path, reason))
             return None
 
     def create_image_widget(self, preview, max_width, file_path):
@@ -1534,6 +1568,11 @@ class MainWindow(QMainWindow):
         print(f"Grid layout: {num_columns} columns, item width: {item_width}px")
         
         for i, file_path in enumerate(self.image_files):
+            # Check if preview exists before accessing it
+            if file_path not in self.image_previews:
+                print(f"Warning: No preview available for {file_path}, skipping...")
+                continue
+                
             preview = self.image_previews[file_path]
             print(f"\nProcessing image {i+1}/{len(self.image_files)}")
             widget = self.create_image_widget(preview, item_width, file_path)
@@ -1580,7 +1619,7 @@ class MainWindow(QMainWindow):
             self,
             "Select Images",
             "",
-            "Images (*.png *.xpm *.jpg *.bmp *.gif, *.tiff *.tif, *.webp)"
+            "Images (*.png *.xpm *.jpg *.bmp *.gif, *.tiff *.tif, *.webp, *.psd)"
         )
         
         print(f"Selected files: {files}")
@@ -1588,8 +1627,10 @@ class MainWindow(QMainWindow):
         if files:
             # Clear previous metadata errors and data
             self.metadata_errors.clear()
+            self.unsupported_files.clear()
             
-            self.image_files = files
+            # Initialize empty lists - we'll only add files that successfully create previews
+            self.image_files = []
             self.image_previews.clear()
             self.image_metadata.clear()  # Clear metadata storage
             self.selected_images.clear()
@@ -1601,8 +1642,8 @@ class MainWindow(QMainWindow):
             self.show_progress(len(files))
             
             batch_size = 10
-            self.image_files = files
             processed_count = 0
+            successfully_loaded_files = []  # Track files that successfully create previews
             
             for i in range(0, len(files), batch_size):
                 batch = files[i:i + batch_size]
@@ -1611,17 +1652,27 @@ class MainWindow(QMainWindow):
                     preview = self.create_preview(file_path)
                     if preview is None:
                         print(f"Warning: Could not create preview for {file_path}")
+                    else:
+                        # Only add files that successfully created previews
+                        successfully_loaded_files.append(file_path)
                     
                     processed_count += 1
                     self.update_progress(processed_count)
                 
                 if i + batch_size >= len(files):
                     print("Processing final batch, updating layout...")
+                    # Set image_files to only the successfully loaded files
+                    self.image_files = successfully_loaded_files
+                    print(f"Successfully loaded {len(successfully_loaded_files)} out of {len(files)} files")
+                    
                     self.update_layout()
                     self.hide_progress()  # Hide progress bar when done
                     # Show any metadata errors encountered
                     if self.metadata_errors:
                         QTimer.singleShot(500, self.show_metadata_errors)  # Delay to let UI settle
+                    # Show any unsupported files encountered
+                    if self.unsupported_files:
+                        QTimer.singleShot(1000, self.show_unsupported_files)  # Delay more to avoid overlapping dialogs
                 else:
                     import gc
                     gc.collect()
@@ -1656,9 +1707,10 @@ class MainWindow(QMainWindow):
             if image_files:
                 # Clear previous metadata errors and data
                 self.metadata_errors.clear()
+                self.unsupported_files.clear()
                 
-                # Clear existing data
-                self.image_files = image_files
+                # Clear existing data - initialize empty lists
+                self.image_files = []
                 self.image_previews.clear()
                 self.image_metadata.clear()  # Clear metadata storage
                 self.selected_images.clear()
@@ -1671,8 +1723,8 @@ class MainWindow(QMainWindow):
                 
                 # Process images in batches (same as open_files)
                 batch_size = 10
-                self.image_files = image_files
                 processed_count = 0
+                successfully_loaded_files = []  # Track files that successfully create previews
                 
                 for i in range(0, len(image_files), batch_size):
                     batch = image_files[i:i + batch_size]
@@ -1681,17 +1733,27 @@ class MainWindow(QMainWindow):
                         preview = self.create_preview(file_path)
                         if preview is None:
                             print(f"Warning: Could not create preview for {file_path}")
+                        else:
+                            # Only add files that successfully created previews
+                            successfully_loaded_files.append(file_path)
                         
                         processed_count += 1
                         self.update_progress(processed_count)
                     
                     if i + batch_size >= len(image_files):
                         print("Processing final batch, updating layout...")
+                        # Set image_files to only the successfully loaded files
+                        self.image_files = successfully_loaded_files
+                        print(f"Successfully loaded {len(successfully_loaded_files)} out of {len(image_files)} files")
+                        
                         self.update_layout()
                         self.hide_progress()  # Hide progress bar when done
                         # Show any metadata errors encountered
                         if self.metadata_errors:
                             QTimer.singleShot(500, self.show_metadata_errors)  # Delay to let UI settle
+                        # Show any unsupported files encountered
+                        if self.unsupported_files:
+                            QTimer.singleShot(1000, self.show_unsupported_files)  # Delay more to avoid overlapping dialogs
                     else:
                         import gc
                         gc.collect()

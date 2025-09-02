@@ -597,12 +597,12 @@ class TagManager(QDialog):
         for category_name, category_color, businesses in self.original_business_data:
             # Filter businesses that contain the search text in any field
             filtered_businesses = []
-            for tenant_name, street_name, property_name, category, business_color, business_type in businesses:
+            for tenant_name, street_name, property_name, category, trading_as, business_color, business_type in businesses:
                 # Create a temporary business button to get searchable text
-                temp_button = BusinessButton(tenant_name, street_name, property_name, category, business_color, business_type)
+                temp_button = BusinessButton(tenant_name, street_name, property_name, category, trading_as, business_color, business_type)
                 searchable_text = temp_button.get_search_text()
                 if search_text in searchable_text:
-                    filtered_businesses.append((tenant_name, street_name, property_name, category, business_color, business_type))
+                    filtered_businesses.append((tenant_name, street_name, property_name, category, trading_as, business_color, business_type))
             
             # Only include the category if it has matching businesses
             if filtered_businesses:
@@ -655,11 +655,11 @@ class TagManager(QDialog):
         for category_name, category_color, businesses in self.original_business_data:
             # Filter businesses that contain the search text in any field
             filtered_businesses = []
-            for tenant_name, street_name, property_name, category, business_color, business_type in businesses:
+            for tenant_name, street_name, property_name, category, trading_as, business_color, business_type in businesses:
                 # Create searchable text directly without temporary widget
-                searchable_text = f"{tenant_name}, {property_name}, {street_name}, {category}, {business_type}".lower()
+                searchable_text = f"{tenant_name}, {property_name}, {street_name}, {category}, {business_type}, {trading_as}".lower()
                 if search_text in searchable_text:
-                    filtered_businesses.append((tenant_name, street_name, property_name, category, business_color, business_type))
+                    filtered_businesses.append((tenant_name, street_name, property_name, category, trading_as, business_color, business_type))
             
             # Only include the category if it has matching businesses
             if filtered_businesses:
@@ -973,7 +973,7 @@ class TagManager(QDialog):
             print(f"[DEBUG] ODS file loaded, total rows: {len(df)}")
             
             # Find column indexes by header names
-            required_columns = ["Tenant Name", "Property", "Street name", "Category", "B2B/B2C"]
+            required_columns = ["Tenant Name", "Property", "Street name", "Category", "B2B/B2C", "Trading As"]
             col_indexes = self.find_column_indexes(df, required_columns)
             
             # Check if all required columns were found
@@ -1008,6 +1008,7 @@ class TagManager(QDialog):
                     property_name = str(row.iloc[col_indexes["Property"]]) if pd.notna(row.iloc[col_indexes["Property"]]) else "Unknown Property"
                     tenant_name = str(row.iloc[col_indexes["Tenant Name"]]) if pd.notna(row.iloc[col_indexes["Tenant Name"]]) else "Unknown Tenant"
                     category = str(row.iloc[col_indexes["Category"]]) if pd.notna(row.iloc[col_indexes["Category"]]) else "Other"
+                    trading_as = str(row.iloc[col_indexes["Trading As"]]) if pd.notna(row.iloc[col_indexes["Trading As"]]) else ""
                     
                     # Get category color (default to light gray if not found)
                     category_color = category_colors.get(category.lower(), '#F0F0F0')
@@ -1024,7 +1025,8 @@ class TagManager(QDialog):
                         'tenant_name': tenant_name,
                         'street_name': street_name,
                         'property_name': property_name,
-                        'category': category
+                        'category': category,
+                        'trading_as': trading_as
                     })
                     
                 except Exception as e:
@@ -1041,6 +1043,7 @@ class TagManager(QDialog):
                         business['street_name'],
                         business['property_name'],
                         business['category'],
+                        business['trading_as'],
                         data['color'],  # Business color same as category
                         'TLE Tenant'    # Business type for regular businesses
                     ))
@@ -1070,7 +1073,9 @@ class TagManager(QDialog):
             
             # Find column indexes by header names (NON TLE file has different headers)
             required_columns = ["Non-TLE Businesses", "Street", "Address", "B2B/B2C", "Category"]
+            optional_columns = ["Trading As"]
             col_indexes = self.find_column_indexes(df, required_columns)
+            optional_indexes = self.find_column_indexes(df, optional_columns)
             
             # Check if all required columns were found
             missing_columns = [col for col, idx in col_indexes.items() if idx is None]
@@ -1105,6 +1110,11 @@ class TagManager(QDialog):
                     property_name = str(row.iloc[col_indexes["Address"]]) if pd.notna(row.iloc[col_indexes["Address"]]) else "Unknown Address"
                     category = str(row.iloc[col_indexes["Category"]]) if pd.notna(row.iloc[col_indexes["Category"]]) else "Other"
                     
+                    # Get trading_as from optional column if available
+                    trading_as = ""
+                    if optional_indexes.get("Trading As") is not None:
+                        trading_as = str(row.iloc[optional_indexes["Trading As"]]) if pd.notna(row.iloc[optional_indexes["Trading As"]]) else ""
+                    
                     # Get category color (default to light gray if not found)
                     category_color = category_colors.get(category.lower(), '#F0F0F0')
                     
@@ -1116,12 +1126,13 @@ class TagManager(QDialog):
                         }
                     
                     # Add business to category
-                    # For non-TLE businesses: tenant_name, street_name, property_name, category, hard-coded "non-tenant"
+                    # For non-TLE businesses: tenant_name, street_name, property_name, category, trading_as, hard-coded "non-tenant"
                     businesses_by_category[category]['businesses'].append({
                         'tenant_name': tenant_name,          # Tenant Name column
                         'street_name': street_name,          # Street name column
                         'property_name': property_name,      # Property column
                         'category': category,                # Category column
+                        'trading_as': trading_as,            # Trading As column (if available)
                         'business_type': 'non-tenant'        # Hard-coded identifier
                     })
                     
@@ -1139,6 +1150,7 @@ class TagManager(QDialog):
                         business['street_name'],     # Street name column  
                         business['property_name'],   # Property column
                         business['category'],        # Category column
+                        business['trading_as'],      # Trading As column
                         data['color'],              # Category color
                         'non-tenant'                # Business type for non-TLE businesses
                     ))
@@ -1185,8 +1197,8 @@ class TagManager(QDialog):
         businesses_flow_layout = FlowLayout(businesses_widget, margin=3, spacing=3)
         
         # Create business buttons for this category
-        for tenant_name, street_name, property_name, category, business_color, business_type in businesses:
-            business_button = BusinessButton(tenant_name, street_name, property_name, category, business_color, business_type)
+        for tenant_name, street_name, property_name, category, trading_as, business_color, business_type in businesses:
+            business_button = BusinessButton(tenant_name, street_name, property_name, category, trading_as, business_color, business_type)
             business_button.clicked.connect(lambda checked, btn=business_button: self.on_business_clicked(btn))
             businesses_flow_layout.addWidget(business_button)
         

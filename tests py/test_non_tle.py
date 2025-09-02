@@ -38,11 +38,12 @@ def test_non_tle_reading():
             print(f"     Businesses: {len(businesses)}")
             
             # Show first few businesses as examples
-            for i, (tenant_name, street_name, property_name, category, business_color, business_type) in enumerate(businesses[:3]):
+            for i, (tenant_name, street_name, property_name, category, trading_as, business_color, business_type) in enumerate(businesses[:3]):
                 print(f"     {i+1}. {tenant_name}")
                 print(f"        Street: {street_name}")
                 print(f"        Address: {property_name}")
                 print(f"        Category: {category}")
+                print(f"        Trading As: {trading_as}")
                 print(f"        Type: {business_type}")
             
             if len(businesses) > 3:
