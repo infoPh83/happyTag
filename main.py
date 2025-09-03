@@ -256,6 +256,13 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'menuTags_Window'):
             self.menuTags_Window.triggered.connect(self.show_tag_manager)
         
+        # Connect button actions
+        self.clearTagsButton.clicked.connect(self.clear_selected_tags)
+        self.SelectAlButton.clicked.connect(self.select_all_images)
+        
+        # Initially disable clear tags button (no images selected)
+        self.clearTagsButton.setEnabled(False)
+        
         # Store loaded images
         self.image_files = []
         self.image_previews = {}
@@ -723,122 +730,55 @@ class MainWindow(QMainWindow):
                     print(f"[DEBUG] {format_msg}")
                     return False, format_msg
                 
-                # Write only to keyword fields (not subject fields)
+                # OPTIMIZED: Write all tags in a single ExifTool call to avoid regenerating the file multiple times
                 try:
+                    # Build command arguments for single ExifTool execution
+                    cmd_args = []
+                    
                     # For JPEG/TIFF: Write to multiple fields for cross-platform compatibility
                     if file_ext in ['.jpg', '.jpeg', '.tiff', '.tif']:
                         # 1. Write IPTC Keywords (semicolon-separated for legacy compatibility)
                         keywords_str = ';'.join(keywords) if keywords else ''
-                        et.execute(f'-IPTC:Keywords={keywords_str}', '-overwrite_original', file_path)
+                        cmd_args.append(f'-IPTC:Keywords={keywords_str}')
                         
                         # 2. Write XMP Keywords (semicolon-separated for some applications)
-                        et.execute(f'-XMP:Keywords={keywords_str}', '-overwrite_original', file_path)
+                        cmd_args.append(f'-XMP:Keywords={keywords_str}')
                         
-                        # 3. Write XMP-dc:Subject as individual array elements (for macOS Finder)
+                        # 3. Clear and write XMP-dc:Subject as individual array elements (for macOS Finder)
+                        cmd_args.append('-XMP-dc:Subject=')  # Clear existing
                         if keywords:
-                            # Clear existing Dublin Core subject first
-                            et.execute('-XMP-dc:Subject=', '-overwrite_original', file_path)
-                            # Add each keyword as separate array element in a single command
-                            dc_subject_cmd = [f'-XMP-dc:Subject+={keyword}' for keyword in keywords]
-                            dc_subject_cmd.extend(['-overwrite_original', file_path])
-                            et.execute(*dc_subject_cmd)
-                        else:
-                            et.execute('-XMP-dc:Subject=', '-overwrite_original', file_path)
+                            for keyword in keywords:
+                                cmd_args.append(f'-XMP-dc:Subject+={keyword}')
                         
-                        # 4. Write XMP Subject as individual array elements (for Windows Explorer)
+                        # 4. Clear and write XMP Subject as individual array elements (for Windows Explorer)
+                        cmd_args.append('-XMP:Subject=')  # Clear existing
                         if keywords:
-                            # Clear existing subject first
-                            et.execute('-XMP:Subject=', '-overwrite_original', file_path)
-                            # Add each keyword as separate array element in a single command
-                            subject_cmd = [f'-XMP:Subject+={keyword}' for keyword in keywords]
-                            subject_cmd.extend(['-overwrite_original', file_path])
-                            et.execute(*subject_cmd)
-                        else:
-                            et.execute('-XMP:Subject=', '-overwrite_original', file_path)
+                            for keyword in keywords:
+                                cmd_args.append(f'-XMP:Subject+={keyword}')
                     
-                    # For PNG: Use XMP Keywords + XMP-dc:Subject + XMP Subject for cross-platform compatibility
-                    elif file_ext == '.png':
+                    # For PNG/GIF/WebP: Use XMP Keywords + XMP-dc:Subject + XMP Subject for cross-platform compatibility
+                    elif file_ext in ['.png', '.gif', '.webp']:
                         # 1. Write XMP Keywords (semicolon-separated for some applications)
                         keywords_str = ';'.join(keywords) if keywords else ''
-                        et.execute(f'-XMP:Keywords={keywords_str}', '-overwrite_original', file_path)
+                        cmd_args.append(f'-XMP:Keywords={keywords_str}')
                         
-                        # 2. Write XMP-dc:Subject as individual array elements (for macOS Finder)
+                        # 2. Clear and write XMP-dc:Subject as individual array elements (for macOS Finder)
+                        cmd_args.append('-XMP-dc:Subject=')  # Clear existing
                         if keywords:
-                            # Clear existing Dublin Core subject first
-                            et.execute('-XMP-dc:Subject=', '-overwrite_original', file_path)
-                            # Add each keyword as separate array element in a single command
-                            dc_subject_cmd = [f'-XMP-dc:Subject+={keyword}' for keyword in keywords]
-                            dc_subject_cmd.extend(['-overwrite_original', file_path])
-                            et.execute(*dc_subject_cmd)
-                        else:
-                            et.execute('-XMP-dc:Subject=', '-overwrite_original', file_path)
+                            for keyword in keywords:
+                                cmd_args.append(f'-XMP-dc:Subject+={keyword}')
                         
-                        # 3. Write XMP Subject as individual array elements (for Windows Explorer)
+                        # 3. Clear and write XMP Subject as individual array elements (for Windows Explorer)
+                        cmd_args.append('-XMP:Subject=')  # Clear existing
                         if keywords:
-                            # Clear existing subject first
-                            et.execute('-XMP:Subject=', '-overwrite_original', file_path)
-                            # Add each keyword as separate array element in a single command
-                            subject_cmd = [f'-XMP:Subject+={keyword}' for keyword in keywords]
-                            subject_cmd.extend(['-overwrite_original', file_path])
-                            et.execute(*subject_cmd)
-                        else:
-                            et.execute('-XMP:Subject=', '-overwrite_original', file_path)
+                            for keyword in keywords:
+                                cmd_args.append(f'-XMP:Subject+={keyword}')
                     
-                    # For GIF: Use XMP Keywords + XMP-dc:Subject + XMP Subject for cross-platform compatibility
-                    elif file_ext == '.gif':
-                        # 1. Write XMP Keywords (semicolon-separated for some applications)
-                        keywords_str = ';'.join(keywords) if keywords else ''
-                        et.execute(f'-XMP:Keywords={keywords_str}', '-overwrite_original', file_path)
-                        
-                        # 2. Write XMP-dc:Subject as individual array elements (for macOS Finder)
-                        if keywords:
-                            # Clear existing Dublin Core subject first
-                            et.execute('-XMP-dc:Subject=', '-overwrite_original', file_path)
-                            # Add each keyword as separate array element in a single command
-                            dc_subject_cmd = [f'-XMP-dc:Subject+={keyword}' for keyword in keywords]
-                            dc_subject_cmd.extend(['-overwrite_original', file_path])
-                            et.execute(*dc_subject_cmd)
-                        else:
-                            et.execute('-XMP-dc:Subject=', '-overwrite_original', file_path)
-                        
-                        # 3. Write XMP Subject as individual array elements (for Windows Explorer)
-                        if keywords:
-                            # Clear existing subject first
-                            et.execute('-XMP:Subject=', '-overwrite_original', file_path)
-                            # Add each keyword as separate array element in a single command
-                            subject_cmd = [f'-XMP:Subject+={keyword}' for keyword in keywords]
-                            subject_cmd.extend(['-overwrite_original', file_path])
-                            et.execute(*subject_cmd)
-                        else:
-                            et.execute('-XMP:Subject=', '-overwrite_original', file_path)
-                    
-                    # For WebP: Use XMP Keywords + XMP-dc:Subject + XMP Subject for cross-platform compatibility
-                    elif file_ext == '.webp':
-                        # 1. Write XMP Keywords (semicolon-separated for some applications)
-                        keywords_str = ';'.join(keywords) if keywords else ''
-                        et.execute(f'-XMP:Keywords={keywords_str}', '-overwrite_original', file_path)
-                        
-                        # 2. Write XMP-dc:Subject as individual array elements (for macOS Finder)
-                        if keywords:
-                            # Clear existing Dublin Core subject first
-                            et.execute('-XMP-dc:Subject=', '-overwrite_original', file_path)
-                            # Add each keyword as separate array element in a single command
-                            dc_subject_cmd = [f'-XMP-dc:Subject+={keyword}' for keyword in keywords]
-                            dc_subject_cmd.extend(['-overwrite_original', file_path])
-                            et.execute(*dc_subject_cmd)
-                        else:
-                            et.execute('-XMP-dc:Subject=', '-overwrite_original', file_path)
-                        
-                        # 3. Write XMP Subject as individual array elements (for Windows Explorer)
-                        if keywords:
-                            # Clear existing subject first
-                            et.execute('-XMP:Subject=', '-overwrite_original', file_path)
-                            # Add each keyword as separate array element in a single command
-                            subject_cmd = [f'-XMP:Subject+={keyword}' for keyword in keywords]
-                            subject_cmd.extend(['-overwrite_original', file_path])
-                            et.execute(*subject_cmd)
-                        else:
-                            et.execute('-XMP:Subject=', '-overwrite_original', file_path)
+                    # Execute ALL operations in a SINGLE ExifTool call
+                    if cmd_args:
+                        cmd_args.extend(['-overwrite_original', file_path])
+                        print(f"[DEBUG] Executing single optimized ExifTool command with {len(cmd_args)-2} tag operations")
+                        et.execute(*cmd_args)
                     
                     # Update original keywords after successful save (including year)
                     self.original_keywords[file_path] = keywords.copy()
@@ -881,8 +821,9 @@ class MainWindow(QMainWindow):
         skipped_count = 0
         error_files = []
         
-        # Show progress bar
-        self.show_progress(len(self.image_widgets))
+        # Show progress bar with saving message
+        saving_message = f"Saving tags..."
+        self.show_progress(len(self.image_widgets), saving_message)
         
         for i, widget in enumerate(self.image_widgets):
             if hasattr(widget, 'file_path') and hasattr(widget, 'input_field'):
@@ -1013,11 +954,11 @@ class MainWindow(QMainWindow):
         progress_layout = QVBoxLayout(progress_container)
         progress_layout.setSpacing(10)
         
-        # Add loading label
-        loading_label = QLabel("Loading images...")
-        loading_label.setAlignment(Qt.AlignCenter)
-        loading_label.setStyleSheet("font-size: 12px; font-weight: bold;")
-        progress_layout.addWidget(loading_label)
+        # Add dynamic progress label (will be updated based on operation)
+        self.progress_label = QLabel("Loading images...")
+        self.progress_label.setAlignment(Qt.AlignCenter)
+        self.progress_label.setStyleSheet("font-size: 12px; font-weight: bold;")
+        progress_layout.addWidget(self.progress_label)
         
         # Create progress bar
         self.progress_bar = QProgressBar()
@@ -1042,10 +983,17 @@ class MainWindow(QMainWindow):
         self.progress_overlay.resize(self.size())
         self.progress_overlay.hide()
     
-    def show_progress(self, total_files):
-        """Show progress bar with total file count"""
+    def show_progress(self, total_files, message=None):
+        """Show progress bar with total file count and custom message"""
         if not self.progress_overlay:
             self.create_progress_overlay()
+        
+        # Set custom message or default based on context
+        if message:
+            self.progress_label.setText(message)
+        else:
+            # Default fallback
+            self.progress_label.setText("Processing files...")
         
         self.progress_bar.setRange(0, total_files)
         self.progress_bar.setValue(0)
@@ -1063,6 +1011,8 @@ class MainWindow(QMainWindow):
         """Hide progress bar"""
         if self.progress_overlay:
             self.progress_overlay.hide()
+        # Update status bar and button states when loading is complete
+        self.update_status_bar()
     
     def resizeEvent(self, event):
         """Handle window resize to reposition progress overlay"""
@@ -1074,8 +1024,77 @@ class MainWindow(QMainWindow):
         """Update the status bar with selection info"""
         if self.selected_images:
             self.statusBar().showMessage(f"Selected {len(self.selected_images)} images")
+            # Enable clear tags button when images are selected
+            self.clearTagsButton.setEnabled(True)
         else:
             self.statusBar().showMessage("Ready")
+            # Disable clear tags button when no images are selected
+            self.clearTagsButton.setEnabled(False)
+
+    def select_all_images(self):
+        """Select all currently loaded images"""
+        if not self.image_widgets:
+            return
+        
+        print("[DEBUG] Selecting all images")
+        
+        # Select all images
+        for widget in self.image_widgets:
+            if hasattr(widget, 'file_path') and hasattr(widget, 'image_label') and hasattr(widget, 'input_field'):
+                # Add to selected set
+                self.selected_images.add(widget.file_path)
+                
+                # Update visual selection
+                widget.image_label.setProperty("selected", True)
+                widget.input_field.setProperty("selected", True)
+                widget.image_label.style().polish(widget.image_label)
+                widget.input_field.style().polish(widget.input_field)
+        
+        # Update status bar and button state
+        self.update_status_bar()
+        print(f"[DEBUG] Selected {len(self.selected_images)} images")
+
+    def clear_selected_tags(self):
+        """Clear all tags from selected images"""
+        if not self.selected_images:
+            return
+        
+        print(f"[DEBUG] Clearing tags from {len(self.selected_images)} selected images")
+        
+        # Show confirmation dialog
+        from PyQt5.QtWidgets import QMessageBox
+        reply = QMessageBox.question(
+            self, 
+            'Clear Tags Confirmation',
+            f'Are you sure you want to clear all tags from {len(self.selected_images)} selected images?',
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply != QMessageBox.Yes:
+            return
+        
+        # Clear tags from selected images
+        cleared_count = 0
+        for widget in self.image_widgets:
+            if hasattr(widget, 'file_path') and widget.file_path in self.selected_images:
+                if hasattr(widget, 'input_field'):
+                    # Clear the text field
+                    widget.input_field.clear()
+                    cleared_count += 1
+                    
+                    # Update metadata to empty
+                    if widget.file_path in self.image_metadata:
+                        self.image_metadata[widget.file_path]['keywords'] = ""
+        
+        print(f"[DEBUG] Cleared tags from {cleared_count} images")
+        
+        # Show completion message
+        QMessageBox.information(
+            self,
+            'Tags Cleared',
+            f'Successfully cleared tags from {cleared_count} images.'
+        )
 
     def create_preview(self, file_path):
         """Create and store a preview of the image with metadata reading for accurate progress"""
@@ -1648,11 +1667,7 @@ class MainWindow(QMainWindow):
                             newly_selected.append(file_path)
         
         # Update status bar
-        if hasattr(self, 'statusBar') and self.statusBar():
-            if self.selected_images:
-                self.statusBar().showMessage(f"Selected {len(self.selected_images)} images")
-            else:
-                self.statusBar().showMessage("Ready")
+        self.update_status_bar()
         
         print(f"[DEBUG] Rubber band selection: {len(newly_selected)} images selected")
 
@@ -1661,6 +1676,7 @@ class MainWindow(QMainWindow):
         for file_path in list(self.selected_images):
             self.update_selection_state(file_path, False)
         self.selected_images.clear()
+        self.update_status_bar()
 
     def update_selection_state(self, file_path, selected):
         """Update the visual selection state of an image widget"""
@@ -1795,8 +1811,9 @@ class MainWindow(QMainWindow):
                 widget.setParent(None)
             self.image_widgets.clear()
             
-            # Show progress bar
-            self.show_progress(len(files))
+            # Show progress bar with specific loading message
+            loading_message = f"Loading {len(files)} images..."
+            self.show_progress(len(files), loading_message)
             
             batch_size = 10
             processed_count = 0
@@ -1875,8 +1892,9 @@ class MainWindow(QMainWindow):
                     widget.setParent(None)
                 self.image_widgets.clear()
                 
-                # Show progress bar
-                self.show_progress(len(image_files))
+                # Show progress bar with specific loading message
+                loading_message = f"Loading {len(image_files)} images..."
+                self.show_progress(len(image_files), loading_message)
                 
                 # Process images in batches (same as open_files)
                 batch_size = 10

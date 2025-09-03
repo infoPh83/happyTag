@@ -7,7 +7,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from settings_dialog import SettingsDialog
+from utilities.settings_dialog import SettingsDialog
 from PyQt5.QtWidgets import QApplication
 
 def test_file_filters():
@@ -57,7 +57,7 @@ def test_validation_logic():
     
     # Read the validation method source
     import inspect
-    from settings_dialog import SettingsDialog
+    from utilities.settings_dialog import SettingsDialog
     
     dialog = SettingsDialog()
     source = inspect.getsource(dialog.validate_files)
