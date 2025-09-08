@@ -7,6 +7,10 @@ import plistlib
 from datetime import datetime
 from PIL import Image
 from PIL.ExifTags import TAGS
+
+# Debug control flags - set to False to reduce console output
+DEBUG_LAYOUT = False  # Set to True for layout debugging  
+DEBUG_SELECTION = False  # Set to True for selection debugging
 from PyQt5.QtWidgets import (QMainWindow, QApplication, QFileDialog, 
                            QWidget, QLabel, QTextEdit, QMessageBox,
                            QVBoxLayout, QGridLayout, QSizePolicy, QProgressBar, QRubberBand, QDialog)
@@ -418,7 +422,8 @@ class MainWindow(QMainWindow):
     # ImageFlowManager Signal Handlers
     def on_grid_selection_changed(self, selected_files):
         """Handle selection changes from the ImageFlowManager"""
-        print(f"[DEBUG] Flow selection changed: {len(selected_files)} files selected")
+        if DEBUG_SELECTION:
+            print(f"[DEBUG] Flow selection changed: {len(selected_files)} files selected")
         self.selected_images = set(selected_files)
         self.update_status_bar()
         
@@ -1114,12 +1119,14 @@ class MainWindow(QMainWindow):
         if not self.image_flow_manager.image_widgets:
             return
         
-        print("[DEBUG] Selecting all images using ImageFlowManager")
+        if DEBUG_SELECTION:
+            print("[DEBUG] Selecting all images using ImageFlowManager")
         
         # Use ImageFlowManager's select_all method
         self.image_flow_manager.select_all()
         
-        print(f"[DEBUG] Selected {len(self.image_flow_manager.selected_files)} images")
+        if DEBUG_SELECTION:
+            print(f"[DEBUG] Selected {len(self.image_flow_manager.selected_files)} images")
 
     def clear_selected_tags(self):
         """Clear all tags from selected images"""
@@ -1421,9 +1428,10 @@ class MainWindow(QMainWindow):
                 input_field.setFixedHeight(final_height)
                 updateContainerHeight()  # Update container height after input field height change
                 
-                print(f"[DEBUG] updateHeight | file_path: {file_path} | width: {current_width} | available_width: {available_width}")
-                print(f"[DEBUG]   content_chars: {len(content)} | doc_height: {doc_height} | estimated_lines: {estimated_lines} | final_height: {final_height}")
-                print(f"[DEBUG]   block_count: {block_count} | line_height: {line_height}")
+                if DEBUG_LAYOUT:
+                    print(f"[DEBUG] updateHeight | file_path: {file_path} | width: {current_width} | available_width: {available_width}")
+                    print(f"[DEBUG]   content_chars: {len(content)} | doc_height: {doc_height} | estimated_lines: {estimated_lines} | final_height: {final_height}")
+                    print(f"[DEBUG]   block_count: {block_count} | line_height: {line_height}")
             else:
                 # Fallback if document is not available
                 input_field.setFixedHeight(28)
@@ -1471,9 +1479,10 @@ class MainWindow(QMainWindow):
                 input_field.setFixedHeight(final_height)
                 updateContainerHeight()  # Update container height after input field height change
                 
-                print(f"[DEBUG] updateHeightImmediate | file_path: {file_path} | width: {current_width} | available_width: {available_width}")
-                print(f"[DEBUG]   content_chars: {len(content)} | doc_height: {doc_height} | estimated_lines: {estimated_lines} | final_height: {final_height}")
-                print(f"[DEBUG]   block_count: {block_count} | line_height: {line_height}")
+                if DEBUG_LAYOUT:
+                    print(f"[DEBUG] updateHeightImmediate | file_path: {file_path} | width: {current_width} | available_width: {available_width}")
+                    print(f"[DEBUG]   content_chars: {len(content)} | doc_height: {doc_height} | estimated_lines: {estimated_lines} | final_height: {final_height}")
+                    print(f"[DEBUG]   block_count: {block_count} | line_height: {line_height}")
             else:
                 # Fallback if document is not available
                 input_field.setFixedHeight(28)
@@ -1786,6 +1795,10 @@ class MainWindow(QMainWindow):
         # Update backward compatibility references
         self.image_widgets = list(self.image_flow_manager.image_widgets.values())
         
+        # Update Cloudinary sync status for loaded images
+        if self.cloudinary_connected:
+            self.update_cloudinary_status_for_loaded_images()
+        
         print(f"Layout update completed - {len(image_data)} images loaded with {widget_width}px width")
         print(f"ImageFlowManager now manages {len(self.image_widgets)} widgets")
 
@@ -1814,11 +1827,59 @@ class MainWindow(QMainWindow):
                 widget.setParent(None)
             self.image_widgets.clear()
             
-            # Start assessment phase
-            self.start_image_assessment(files, "files")
+            # Start complete integrated processing (new approach)
+            self.start_integrated_processing(files, "files")
+
+    def start_integrated_processing(self, files, source_type):
+        """
+        Start the new integrated processing that combines all operations:
+        - Cloudinary operations (if connected)
+        - Preview creation  
+        - Tag extraction
+        All in a single pass through the images
+        """
+        try:
+            # Filter to only supported image files
+            image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.xmp', '.tiff', '.tif', '.webp'}
+            valid_files = []
+            
+            for file_path in files:
+                if os.path.isfile(file_path):
+                    _, ext = os.path.splitext(file_path.lower())
+                    if ext in image_extensions:
+                        valid_files.append(file_path)
+                    else:
+                        # Track unsupported files
+                        if not hasattr(self, 'unsupported_files'):
+                            self.unsupported_files = []
+                        self.unsupported_files.append(file_path)
+            
+            print(f"[DEBUG] Starting integrated processing for {len(valid_files)} valid images (source: {source_type})")
+            
+            if valid_files:
+                # Start the integrated processing
+                self.process_images_integrated(valid_files)
+            else:
+                print("No valid image files found")
+                self.hide_progress()
+                if hasattr(self, 'unsupported_files') and self.unsupported_files:
+                    QTimer.singleShot(500, self.show_unsupported_files)
+                    
+        except Exception as e:
+            print(f"Error starting integrated processing: {e}")
+            # Fallback to old method
+            self.fallback_to_original_loading(files)
 
     def start_image_assessment(self, files, source_type):
-        """Start the assessment phase for the given files"""
+        """
+        LEGACY METHOD - redirects to new integrated processing
+        Start the assessment phase for the given files
+        """
+        print(f"[DEBUG] Redirecting to integrated processing (legacy assessment called)")
+        self.start_integrated_processing(files, source_type)
+        return
+        
+        # OLD CODE BELOW - kept for reference
         try:
             # Show progress bar with assessment message
             assessment_message = f"Assessing {len(files)} images..."
@@ -1920,8 +1981,8 @@ class MainWindow(QMainWindow):
                     widget.setParent(None)
                 self.image_widgets.clear()
                 
-                # Start assessment phase
-                self.start_image_assessment(image_files, "folder")
+                # Start complete integrated processing (new approach)
+                self.start_integrated_processing(image_files, "folder")
             else:
                 print("No image files found in the selected folder")
 
@@ -2031,6 +2092,61 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"[DEBUG] Error updating Cloudinary UI status: {str(e)}")
     
+    def update_cloudinary_status_for_loaded_images(self):
+        """Check and update Cloudinary sync status for all currently loaded images"""
+        if not self.cloudinary_connected or not self.cloudinary_updater:
+            print("[DEBUG] Cloudinary not connected - skipping status check")
+            return
+            
+        if not hasattr(self.image_flow_manager, 'image_widgets') or not self.image_flow_manager.image_widgets:
+            print("[DEBUG] No images loaded - skipping Cloudinary status check")
+            return
+            
+        print(f"[DEBUG] Checking Cloudinary sync status for {len(self.image_flow_manager.image_widgets)} loaded images...")
+        
+        try:
+            # Get the cloudinary files list for comparison
+            cloudinary_files = getattr(self.cloudinary_updater, 'cloudinary_files', [])
+            
+            if not cloudinary_files:
+                print("[DEBUG] No Cloudinary files list available - requesting update...")
+                # Could trigger a cloud status request here if needed
+                return
+            
+            synced_count = 0
+            for file_path, widget in self.image_flow_manager.image_widgets.items():
+                try:
+                    # Get file information for sync check
+                    from pathlib import Path
+                    file_path_obj = Path(file_path)
+                    
+                    if not file_path_obj.exists():
+                        continue
+                    
+                    # Get or calculate resized size (simplified check)
+                    # For a proper check, we'd need the exact resized size used by Cloudinary
+                    # For now, use original file size as approximation
+                    original_size = file_path_obj.stat().st_size
+                    
+                    # Check if file is synced using CloudinaryUpdater method
+                    is_synced = self.cloudinary_updater._is_file_synced_single(file_path_obj, original_size)
+                    
+                    # Update widget Cloudinary status
+                    widget.set_cloudinary_status(is_synced)
+                    
+                    if is_synced:
+                        synced_count += 1
+                        
+                except Exception as e:
+                    print(f"[DEBUG] Error checking Cloudinary status for {os.path.basename(file_path)}: {e}")
+                    # Set as not synced if there's an error
+                    widget.set_cloudinary_status(False)
+            
+            print(f"[DEBUG] Cloudinary status update complete: {synced_count}/{len(self.image_flow_manager.image_widgets)} images synced")
+            
+        except Exception as e:
+            print(f"[DEBUG] Error updating Cloudinary status for loaded images: {e}")
+    
     def setup_image_assessment_connections(self):
         """Setup connections for the image assessment system"""
         if self.image_assessment:
@@ -2074,20 +2190,133 @@ class MainWindow(QMainWindow):
             print(f"[DEBUG] Basic assessment complete: {len(valid_files)} valid files")
         
         if valid_files:
-            # Update progress message for loading phase
-            loading_message = f"Loading {len(valid_files)} assessed images..."
-            self.update_progress_label(loading_message)
-            
-            # Process assessed files with normal preview creation
-            self.process_assessed_images(valid_files)
+            # Use the new integrated processing approach
+            self.process_images_integrated(valid_files)
         else:
             # No files to process, finish up
             self.hide_progress()
             if hasattr(self, 'unsupported_files') and self.unsupported_files:
                 QTimer.singleShot(500, self.show_unsupported_files)
     
+    def process_images_integrated(self, image_files):
+        """
+        Integrated image processing - combines Cloudinary operations with preview creation
+        and tag extraction in a single pass through the images.
+        Cloudinary operations only occur if connected.
+        """
+        total_files = len(image_files)
+        processed_count = 0
+        successfully_loaded_files = []
+        
+        # Show single progress bar for complete processing
+        self.show_progress(total_files, f"Processing {total_files} images...")
+        
+        # Initialize Cloudinary if connected
+        cloudinary_enabled = self.cloudinary_connected and self.cloudinary_updater is not None
+        if cloudinary_enabled:
+            print(f"[DEBUG] Cloudinary enabled - will process with cloud operations")
+        else:
+            print(f"[DEBUG] Cloudinary disabled - processing locally only")
+        
+        # Process each image completely before moving to the next
+        for file_path in image_files:
+            try:
+                processed_count += 1
+                print(f"[DEBUG] Processing image {processed_count}/{total_files}: {os.path.basename(file_path)}")
+                
+                # Update progress
+                self.update_progress(processed_count)
+                self.update_progress_label(f"Processing {os.path.basename(file_path)} ({processed_count}/{total_files})")
+                
+                # Step 1: Cloudinary processing (only if connected)
+                optimized_file_path = None
+                cloudinary_result = None
+                
+                if cloudinary_enabled:
+                    try:
+                        # Use the single image processing method from cloudinary_updater
+                        from utilities.settings_dialog import SettingsDialog
+                        settings_dialog = SettingsDialog(self)
+                        
+                        success, cloudinary_result, optimized_file_path = self.cloudinary_updater.process_single_image_assessment(
+                            file_path, settings_dialog
+                        )
+                        
+                        if success and cloudinary_result:
+                            if cloudinary_result.get('already_synced'):
+                                print(f"[DEBUG] {os.path.basename(file_path)} - Already synced with Cloudinary")
+                            elif cloudinary_result.get('assessment_complete'):
+                                print(f"[DEBUG] {os.path.basename(file_path)} - Assessment complete, added to database")
+                            elif cloudinary_result.get('processed'):
+                                print(f"[DEBUG] {os.path.basename(file_path)} - Processed (resized) for assessment")
+                            elif cloudinary_result.get('in_database'):
+                                print(f"[DEBUG] {os.path.basename(file_path)} - Found in Cloudinary database")
+                        else:
+                            print(f"[DEBUG] {os.path.basename(file_path)} - Cloudinary assessment skipped")
+                            
+                    except Exception as e:
+                        print(f"[WARNING] Cloudinary processing failed for {os.path.basename(file_path)}: {e}")
+                        # Continue with local processing even if Cloudinary fails
+                
+                # Step 2: Create preview (use optimized file if available, otherwise original)
+                preview_source = optimized_file_path if optimized_file_path and os.path.exists(optimized_file_path) else file_path
+                preview = self.create_preview(preview_source)
+                
+                if preview:
+                    # Store preview under original file path for UI consistency
+                    self.image_previews[file_path] = preview
+                    successfully_loaded_files.append(file_path)
+                    
+                    # Step 3: Extract and store metadata and tags
+                    try:
+                        metadata = self.extract_metadata(file_path)  # Always use original file for metadata
+                        if metadata:
+                            self.image_metadata[file_path] = metadata
+                            print(f"[DEBUG] {os.path.basename(file_path)} - Metadata extracted")
+                        else:
+                            print(f"[DEBUG] {os.path.basename(file_path)} - No metadata found")
+                    except Exception as e:
+                        print(f"[WARNING] Metadata extraction failed for {os.path.basename(file_path)}: {e}")
+                        
+                    print(f"[DEBUG] {os.path.basename(file_path)} - Complete processing finished")
+                else:
+                    print(f"[WARNING] {os.path.basename(file_path)} - Preview creation failed")
+                
+                # Process events to keep UI responsive
+                QApplication.processEvents()
+                
+            except Exception as e:
+                print(f"[ERROR] Failed to process {os.path.basename(file_path)}: {e}")
+                continue
+        
+        # Finalize processing
+        print(f"[DEBUG] Integrated processing complete: {len(successfully_loaded_files)}/{total_files} images processed")
+        
+        # Set image_files to only the successfully loaded files
+        self.image_files = successfully_loaded_files
+        
+        # Update layout with processed images
+        self.update_layout()
+        self.hide_progress()
+        
+        # Show any metadata errors encountered
+        if hasattr(self, 'metadata_errors') and self.metadata_errors:
+            QTimer.singleShot(500, self.show_metadata_errors)
+            
+        # Show any unsupported files encountered  
+        if hasattr(self, 'unsupported_files') and self.unsupported_files:
+            QTimer.singleShot(1000, self.show_unsupported_files)
+    
     def process_assessed_images(self, assessed_files):
-        """Process the assessed images to create previews and load them into the UI"""
+        """
+        LEGACY METHOD - kept for compatibility
+        Process the assessed images to create previews and load them into the UI
+        """
+        # Redirect to new integrated processing
+        self.process_images_integrated(assessed_files)
+        return
+        
+        # OLD CODE BELOW - kept for reference but not used
         batch_size = 10
         processed_count = 0
         successfully_loaded_files = []

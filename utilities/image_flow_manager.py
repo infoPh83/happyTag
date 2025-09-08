@@ -10,6 +10,12 @@ from PyQt5.QtGui import QMouseEvent
 from .image_card_widget import ImageCardWidget
 from .tag_widgets import FlowLayout
 
+# Debug control flag
+DEBUG_FLOW = False  # Set to True for flow layout debugging
+
+# Debug control - set to False to reduce console output
+DEBUG_FLOW = False  # Set to True for flow layout debugging
+
 class ImageFlowManager(QWidget):
     """
     Manages a responsive flow layout of ImageCardWidget instances.
@@ -108,7 +114,8 @@ class ImageFlowManager(QWidget):
         # Add to flow layout
         self.flow_layout.addWidget(widget)
         
-        print(f"[DEBUG] Added image to flow: {file_path}")
+        if DEBUG_FLOW:
+            print(f"[DEBUG] Added image to flow: {file_path}")
     
     def remove_image(self, file_path):
         """Remove an image from the flow layout"""
@@ -122,11 +129,13 @@ class ImageFlowManager(QWidget):
             self.selected_files.discard(file_path)
             self.selection_changed.emit(list(self.selected_files))
             
-            print(f"[DEBUG] Removed image from flow: {file_path}")
+            if DEBUG_FLOW:
+                print(f"[DEBUG] Removed image from flow: {file_path}")
     
     def clear_all(self):
         """Remove all images from the flow layout"""
-        print("[DEBUG] Clearing all images from flow")
+        if DEBUG_FLOW:
+            print("[DEBUG] Clearing all images from flow")
         
         # Clear selection
         self.selected_files.clear()
@@ -138,7 +147,8 @@ class ImageFlowManager(QWidget):
         # Emit selection change
         self.selection_changed.emit([])
         
-        print(f"[DEBUG] Flow cleared - {len(self.image_widgets)} widgets remaining")
+        if DEBUG_FLOW:
+            print(f"[DEBUG] Flow cleared - {len(self.image_widgets)} widgets remaining")
     
     def update_layout(self):
         """Update the flow layout - much simpler than grid layout"""

@@ -474,6 +474,189 @@ class CloudinaryUpdater(QObject):
         upload_data = [uploaded_count, len(error_files) + resize_error_count]
         self.upload_complete_signal.emit(upload_data)
 
+    def process_single_image_assessment(self, file_path, settings_dialog=None):
+        """
+        Process a single image for assessment phase only - combining Cloudinary assessment with preview creation
+        This merges the assessment phase logic (no upload) with preview creation and tag extraction
+        Returns: (success: bool, result_data: dict, optimized_file_path: str or None)
+        """
+        try:
+            file_path_obj = Path(file_path)
+            
+            # Validate the file
+            if not file_path_obj.exists() or not file_path_obj.is_file():
+                return False, {'error': 'File does not exist'}, None
+            
+            if file_path_obj.suffix.lower() not in VALID_EXTENSIONS:
+                return False, {'error': 'Unsupported file format'}, None
+            
+            # Check if Cloudinary is configured (basic check)
+            if not hasattr(self, 'cloudName') or not self.cloudName:
+                # Cloudinary not configured - return success but no assessment processing
+                print(f"[DEBUG] Cloudinary not configured for {file_path_obj.name}")
+                return True, {
+                    'original_file': str(file_path),
+                    'processed': False,
+                    'assessment_complete': False,
+                    'already_synced': False,
+                    'cloudinary_available': False
+                }, None
+            
+            # Initialize database and Cloudinary data only if we have valid config
+            if not hasattr(self, 'database') or not self.database:
+                self._load_database_and_cloudinary_data(settings_dialog)
+            
+            # Get file details
+            original_size = file_path_obj.stat().st_size
+            filetype = file_path_obj.suffix.lower()
+            db_key = (original_size, filetype)
+            
+            result_data = {
+                'original_file': str(file_path),
+                'original_size': original_size,
+                'filetype': filetype,
+                'processed': False,
+                'assessment_complete': False,
+                'already_synced': False,
+                'resized_size': None,
+                'in_database': False,
+                'cloudinary_available': True
+            }
+            
+            # ASSESSMENT PHASE LOGIC - Check if file is in database
+            if self._is_file_in_database_single(original_size, filetype):
+                print(f"[DEBUG] Assessment - File found in database: {file_path_obj.name}")
+                result_data['in_database'] = True
+                
+                # Get resized size from database
+                resized_size = self.database[db_key]['resized_size']
+                result_data['resized_size'] = resized_size
+                
+                # Check if already synced with Cloudinary (for information only in assessment)
+                if self._is_file_synced_single(file_path_obj, resized_size):
+                    print(f"[DEBUG] Assessment - File already synced: {file_path_obj.name}")
+                    result_data['already_synced'] = True
+                else:
+                    print(f"[DEBUG] Assessment - File in DB but not synced: {file_path_obj.name}")
+                    # File will need to be uploaded later (not now - assessment only)
+                
+                result_data['assessment_complete'] = True
+                return True, result_data, None
+            else:
+                print(f"[DEBUG] Assessment - File not in database, needs processing: {file_path_obj.name}")
+                # File not in database - resize now for assessment and add to database
+                optimized_file = self._assess_new_file_single(file_path_obj, result_data, db_key)
+                return True, result_data, optimized_file
+                
+        except Exception as e:
+            print(f"[ERROR] Assessment failed for {file_path}: {e}")
+            return False, {'error': str(e)}, None
+    
+    def _load_database_and_cloudinary_data(self, settings_dialog=None):
+        """Load database and Cloudinary data for single image processing"""
+        try:
+            # Load database
+            if settings_dialog:
+                cloudinary_settings = settings_dialog.get_cloudinary_settings()
+                if cloudinary_settings and cloudinary_settings.get('log_folder'):
+                    log_folder = cloudinary_settings['log_folder']
+                    database_path = Path(log_folder) / DATABASE_FILE_NAME
+                else:
+                    database_path = Path("logs") / DATABASE_FILE_NAME
+            else:
+                database_path = Path("logs") / DATABASE_FILE_NAME
+            
+            self.database = load_csv_database(database_path)
+            print(f"[DEBUG] Single process - Loaded database with {len(self.database)} entries")
+            
+            # Load Cloudinary files list
+            self.cloudinary_files = list_all_files()
+            print(f"[DEBUG] Single process - Loaded {len(self.cloudinary_files)} Cloudinary files")
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to load database/Cloudinary data: {e}")
+            self.database = {}
+            self.cloudinary_files = []
+    
+    def _is_file_in_database_single(self, original_size, filetype):
+        """Check if file is in database (single image version)"""
+        db_key = (original_size, filetype)
+        return db_key in self.database
+    
+    def _is_file_synced_single(self, file_path_obj, resized_size):
+        """Check if file is synced with Cloudinary (single image version)"""
+        return is_file_synced(file_path_obj, resized_size, self.cloudinary_files)
+    
+    def _assess_new_file_single(self, file_path_obj, result_data, db_key):
+        """Assess a new file that's not in the database - resize and add to database for assessment"""
+        try:
+            # Create temp directory for this single file
+            temp_dir = Path(tempfile.mkdtemp(prefix="happytag_assessment_"))
+            
+            # Resize the image for assessment
+            resized_buffer = resize_image_to_fit(self, file_path_obj)
+            if resized_buffer is None:
+                print(f"[WARNING] Assessment - Failed to resize {file_path_obj.name}")
+                return None
+            
+            # Save resized file
+            resized_file_path = temp_dir / file_path_obj.name
+            with open(resized_file_path, 'wb') as f:
+                f.write(resized_buffer.getvalue())
+            
+            # Update database with the new file information
+            original_size = file_path_obj.stat().st_size
+            resized_size = resized_file_path.stat().st_size
+            filetype = file_path_obj.suffix.lower()
+            
+            self.database[db_key] = {
+                'file_name': file_path_obj.name,
+                'original_size': original_size,
+                'resized_size': resized_size,
+                'filetype': filetype
+            }
+            
+            result_data['processed'] = True
+            result_data['resized_size'] = resized_size
+            result_data['in_database'] = True  # Now it's in the database
+            
+            # Check if already synced with Cloudinary (for information only in assessment)
+            if not self._is_file_synced_single(file_path_obj, resized_size):
+                print(f"[DEBUG] Assessment - New file not synced, will need upload later: {file_path_obj.name}")
+                # File will need to be uploaded later (not now - assessment only)
+            else:
+                result_data['already_synced'] = True
+                print(f"[DEBUG] Assessment - New file already synced: {file_path_obj.name}")
+            
+            # Save updated database
+            self._save_database_single()
+            result_data['assessment_complete'] = True
+            
+            return str(resized_file_path)
+            
+        except Exception as e:
+            print(f"[ERROR] Assessment - Processing failed for new file {file_path_obj.name}: {e}")
+            return None
+    
+    def _save_database_single(self):
+        """Save the database after single image processing"""
+        try:
+            # Determine database path
+            if hasattr(self, 'logFilePath') and self.logFilePath:
+                database_path = Path(self.logFilePath) / DATABASE_FILE_NAME
+            else:
+                database_path = Path("logs") / DATABASE_FILE_NAME
+            
+            # Ensure directory exists
+            database_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Save database
+            save_csv_database(self.database, database_path)
+            print(f"[DEBUG] Single process - Database saved with {len(self.database)} entries")
+            
+        except Exception as e:
+            print(f"[ERROR] Single process - Failed to save database: {e}")
+
 # Configure logging with both file and console handlers
 logging.basicConfig(
     level=logging.INFO, 
@@ -736,6 +919,13 @@ def update_csv_database(csv_path, database):
         for data in database.values():  # Iterate over the values (dictionaries) in the database
             writer.writerow(data)  # Write each dictionary as a row
             logging.debug(f"Updated database: {data}")
+
+def save_csv_database(database, csv_path):
+    """
+    Save database to CSV file - wrapper for update_csv_database
+    Used by single image processing
+    """
+    update_csv_database(csv_path, database)
 
 
 # Function to check if a file is in the database using original_size and filetype
@@ -1283,7 +1473,7 @@ def delete_resize_tmp_dir(temp_dir_path):
         # print(f"error in deleting the temp folder {e}\nNow Forcing it")
         # Forcing deleting of tmp folder
         shutil.rmtree(temp_dir_path, ignore_errors=True)
-    
+
 
 # Main entry point
 # if __name__ == "__main__":

@@ -12,6 +12,10 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt5.QtCore import Qt, pyqtSignal, QSize, QTimer
 from PyQt5.QtGui import QPixmap, QFont, QFontMetrics, QPalette, QContextMenuEvent
 
+# Debug control - set to False to reduce console output
+DEBUG_LAYOUT = False  # Set to True for layout debugging
+DEBUG_HEIGHT = False  # Set to True for height calculation debugging
+
 class ImageCardWidget(QWidget):
     """
     A comprehensive widget for displaying images with metadata and tags.
@@ -29,13 +33,14 @@ class ImageCardWidget(QWidget):
     def __init__(self, file_path, max_width=300, preview_pixmap=None, parent=None):
         super().__init__(parent)
         
-        print(f"[DEBUG] Creating ImageCardWidget for {os.path.basename(file_path)}")
+        print(f"[DEBUG] Creating ImageCardWidget for {os.path.basename(file_path)}" if DEBUG_LAYOUT else "", end="")
         
         # Core data
         self.file_path = file_path
         self.max_width = max_width
         self.preview_pixmap = preview_pixmap  # Store preview pixmap if provided
         self.is_selected = False
+        self.is_on_cloudinary = False  # Cloudinary sync status
         self.metadata = {}
         self.tags = []
         
@@ -43,6 +48,10 @@ class ImageCardWidget(QWidget):
         self.image_label = None
         self.text_edit = None
         self.container_frame = None
+        self.filename_label = None  # New filename overlay label
+        
+        # Filename label styling constants
+        self.filename_margin = 4   # Margin from edges (increased for better spacing)
         
         # Configuration
         self.image_margin = 5
@@ -99,6 +108,24 @@ class ImageCardWidget(QWidget):
         self.image_label.setMaximumSize(16777215, 16777215)
         container_layout.addWidget(self.image_label)
         
+        # Create filename overlay label
+        self.filename_label = QLabel(self.image_label)
+        self.filename_label.setStyleSheet("""
+            QLabel {
+                background-color: rgba(0, 0, 0, 127);  /* 50% transparency */
+                color: white;
+                padding: 3px 6px;
+                border-radius: 3px;
+                font-size: 9px;
+                font-weight: bold;
+            }
+        """)
+        self.filename_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.filename_label.setWordWrap(True)  # Enable word wrapping for multi-line support
+        # Limit filename label to maximum 25% of image height to avoid covering too much
+        self.filename_max_height_ratio = 0.25  
+        self.filename_label.hide()  # Hide until image is loaded and positioned
+        
         # Text edit for tags/metadata
         self.text_edit = QTextEdit()
         # Remove maximum height constraint for full dynamic sizing
@@ -154,13 +181,17 @@ class ImageCardWidget(QWidget):
             
             print(f"[DEBUG] Scaling image {os.path.basename(self.file_path)}: max_width={self.max_width}, available_width={available_width}")
             scaled_pixmap = self._scale_pixmap(pixmap, available_width)
-            print(f"[DEBUG] Scaled pixmap size: {scaled_pixmap.width()}x{scaled_pixmap.height()}")
+            if DEBUG_LAYOUT:
+                print(f"[DEBUG] Scaled pixmap size: {scaled_pixmap.width()}x{scaled_pixmap.height()}")
             
             # Set the pixmap and force the label to match the pixmap size exactly
             self.image_label.setPixmap(scaled_pixmap)
             # Force the image label to be exactly the size of the scaled pixmap
             self.image_label.setFixedSize(scaled_pixmap.size())
             print(f"[DEBUG] Set image label size to: {scaled_pixmap.width()}x{scaled_pixmap.height()}")
+            
+            # Update filename label after image is loaded
+            self._update_filename_label()
             
             # After image is loaded, calculate and set minimum height to prevent overlapping
             QTimer.singleShot(50, lambda: self._safe_minimum_height_calculation())
@@ -195,6 +226,77 @@ class ImageCardWidget(QWidget):
                 font-size: 10px;
             }
         """)
+        
+        # Hide filename label for error images
+        if self.filename_label:
+            self.filename_label.hide()
+    
+    def _update_filename_label(self):
+        """Update the filename label with proper positioning and reverse truncation"""
+        if not self.filename_label or not self.image_label:
+            return
+            
+        # Get just the filename with extension (not the full path)
+        filename = os.path.basename(self.file_path)
+        
+        # Get the current image label size
+        image_width = self.image_label.width()
+        available_width = image_width - (2 * self.filename_margin)
+        
+        # Ensure we have a reasonable minimum width
+        label_width = max(available_width, 60)
+        
+        # Set the exact width for the filename label (use full available width)
+        self.filename_label.setFixedWidth(label_width)
+        
+        # Calculate font metrics for truncation
+        font_metrics = self.filename_label.fontMetrics()
+        
+        # Check if filename fits within available width using the actual label width
+        text_width = font_metrics.horizontalAdvance(filename)
+        
+        # Set the text (with truncation if needed)
+        if text_width > label_width - 12:  # Account for padding (6px * 2)
+            # Use REVERSE truncation (ElideLeft) to show the end of filename including extension
+            effective_width = label_width - 12  # Subtract padding
+            truncated_filename = font_metrics.elidedText(filename, Qt.ElideLeft, effective_width)
+            self.filename_label.setText(truncated_filename)
+            if DEBUG_LAYOUT:
+                print(f"[DEBUG] Applied reverse truncation: '{truncated_filename}' (width: {effective_width})")
+        else:
+            # Filename fits, use as-is
+            self.filename_label.setText(filename)
+            if DEBUG_LAYOUT:
+                print(f"[DEBUG] Full filename fits: '{filename}'")
+        
+        # Position the label at top-left of the image
+        self.filename_label.move(self.filename_margin, self.filename_margin)
+        
+        # Let the label determine its natural height based on content and word wrapping
+        # but constrain the height to not cover too much of the image
+        max_height = min(
+            self.image_label.height() - (2 * self.filename_margin),
+            int(self.image_label.height() * self.filename_max_height_ratio)
+        )
+        
+        # Set the height constraint and let Qt handle the text layout
+        self.filename_label.setMaximumHeight(max_height)
+        self.filename_label.adjustSize()  # Let it size vertically based on content
+        
+        # Now fix the width again (adjustSize might have changed it)
+        self.filename_label.setFixedWidth(label_width)
+        
+        # Final height adjustment if needed
+        if self.filename_label.height() > max_height:
+            self.filename_label.setFixedHeight(max_height)
+        
+        # Show the label now that it's positioned
+        self.filename_label.show()
+        
+        if DEBUG_LAYOUT:
+            print(f"[DEBUG] Filename label for {filename}: positioned at ({self.filename_margin}, {self.filename_margin}), "
+                  f"size {self.filename_label.width()}x{self.filename_label.height()}, "
+                  f"available_width={available_width}, label_width={label_width}, text_width={text_width}, max_height={max_height}")
     
     def _setup_connections(self):
         """Setup signal connections"""
@@ -270,10 +372,11 @@ class ImageCardWidget(QWidget):
             self.text_edit.setMinimumHeight(optimal_height)
             self.text_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             
-            print(f"[DEBUG] Document-based height calculation for {os.path.basename(self.file_path)}:")
-            print(f"[DEBUG]   width: {current_width} | available_width: {available_width}")
-            print(f"[DEBUG]   content_chars: {len(text_content)} | doc_height: {doc_height} | estimated_lines: {estimated_lines} | final_height: {optimal_height}")
-            print(f"[DEBUG]   block_count: {block_count} | line_height: {line_height}")
+            if DEBUG_HEIGHT:
+                print(f"[DEBUG] Document-based height calculation for {os.path.basename(self.file_path)}:")
+                print(f"[DEBUG]   width: {current_width} | available_width: {available_width}")
+                print(f"[DEBUG]   content_chars: {len(text_content)} | doc_height: {doc_height} | estimated_lines: {estimated_lines} | final_height: {optimal_height}")
+                print(f"[DEBUG]   block_count: {block_count} | line_height: {line_height}")
             
             QTimer.singleShot(100, lambda: self._safe_check_actual_height(f"{len(text_content)} chars ({estimated_lines} lines)"))
             
@@ -310,13 +413,12 @@ class ImageCardWidget(QWidget):
                 actual_height = self.text_edit.height()
                 size_hint = self.text_edit.sizeHint().height()
                 minimum_size = self.text_edit.minimumHeight()
-                print(f"[DEBUG] ACTUAL HEIGHT CHECK for {description}:")
-                print(f"[DEBUG]   - Set height: {self.text_edit.minimumHeight() if hasattr(self.text_edit, 'minimumHeight') else 'unknown'}")
-                print(f"[DEBUG]   - Actual rendered height: {actual_height}px")
-                print(f"[DEBUG]   - Size hint: {size_hint}px")
+                # Debug output reduced - only log significant issues
+                if actual_height < minimum_size * 0.8:  # Only log if significantly different
+                    print(f"[DEBUG] Height issue for {description}: actual={actual_height}px, expected={minimum_size}px")
         except RuntimeError:
             # Widget has been deleted, ignore the callback
-            print(f"[DEBUG] Widget deleted before height check could complete for {description}")
+            pass  # Reduced debug output
         except Exception as e:
             print(f"[DEBUG] Error during height check for {description}: {e}")
             print(f"[DEBUG]   - Minimum height: {minimum_size}px")
@@ -375,34 +477,51 @@ class ImageCardWidget(QWidget):
             return
             
         self.is_selected = selected
-        self._update_selection_style()
+        self._update_visual_style()
         self.selection_changed.emit(self.file_path, selected)
     
     def is_selected_state(self):
         """Get current selection state"""
         return self.is_selected
     
-    def _update_selection_style(self):
-        """Update visual style based on selection state"""
-        if self.is_selected:
-            self.container_frame.setStyleSheet(f"""
-                QFrame {{
-                    border: {self.selection_border_width}px solid #0078d4;
-                    border-radius: 4px;
-                    background-color: #f0f8ff;
-                }}
-            """)
+    def _update_visual_style(self):
+        """Update visual style based on selection state and Cloudinary sync status"""
+        # Determine background color and border based on both states
+        if self.is_on_cloudinary:
+            # Dark yellow background when synced with Cloudinary
+            background_color = "#DAA520"  # Dark golden rod color
+            hover_color = "#B8860B"       # Darker gold for hover
         else:
-            self.container_frame.setStyleSheet("""
-                QFrame {
-                    border: 1px solid #cccccc;
-                    border-radius: 4px;
-                    background-color: white;
-                }
-                QFrame:hover {
-                    border: 1px solid #0078d4;
-                }
-            """)
+            # Default white background
+            background_color = "white"
+            hover_color = "#f0f8ff"       # Light blue for hover
+        
+        if self.is_selected:
+            # Selected state: blue border with appropriate background
+            border_color = "#0078d4"
+            border_width = self.selection_border_width
+            if self.is_on_cloudinary:
+                # Slightly lighter background when selected and on Cloudinary
+                background_color = "#F0E68C"  # Khaki - lighter golden
+            else:
+                background_color = "#f0f8ff"  # Light blue
+        else:
+            # Non-selected state: subtle border
+            border_color = "#cccccc"
+            border_width = 1
+        
+        # Apply the calculated styles
+        self.container_frame.setStyleSheet(f"""
+            QFrame {{
+                border: {border_width}px solid {border_color};
+                border-radius: 4px;
+                background-color: {background_color};
+            }}
+            QFrame:hover {{
+                border: 1px solid #0078d4;
+                background-color: {hover_color};
+            }}
+        """)
     
     def set_max_width(self, width):
         """Update the target width for image scaling"""
@@ -422,16 +541,29 @@ class ImageCardWidget(QWidget):
         """Get just the filename"""
         return Path(self.file_path).name
     
+    def set_cloudinary_status(self, is_on_cloudinary):
+        """Set Cloudinary sync status and update visual style"""
+        if self.is_on_cloudinary == is_on_cloudinary:
+            return
+            
+        self.is_on_cloudinary = is_on_cloudinary
+        self._update_visual_style()
+        
+    def get_cloudinary_status(self):
+        """Get current Cloudinary sync status"""
+        return self.is_on_cloudinary
+    
     def refresh_image(self):
         """Reload the image from disk"""
         self._load_image()
     
     def resizeEvent(self, event):
-        """Handle widget resize - disabled to prevent stretching issues"""
+        """Handle widget resize - update filename label positioning"""
         super().resizeEvent(event)
-        # Disabled automatic image reloading on resize to prevent stretching
-        # Images will be resized when the grid layout changes instead
-        pass
+        # Update filename label when widget size changes
+        if hasattr(self, 'filename_label') and self.filename_label:
+            # Use a timer to avoid multiple rapid updates during resize
+            QTimer.singleShot(50, self._update_filename_label)
     
     # Event handlers
     
@@ -510,7 +642,10 @@ class ImageCardWidget(QWidget):
                                       5 +  # Spacing between image and text
                                       10)  # Additional padding for borders
                     
-                    print(f"[DEBUG] Setting minimum height for {os.path.basename(self.file_path)}: {total_min_height}px (image: {image_height}, text: {text_height})")
+                    # Only log significant height changes for debugging
+                    if DEBUG_HEIGHT and hasattr(self, '_last_min_height') and abs(total_min_height - self._last_min_height) > 20:
+                        print(f"[DEBUG] Height change for {os.path.basename(self.file_path)}: {self._last_min_height}px → {total_min_height}px")
+                    self._last_min_height = total_min_height
                     
                     # Set the minimum height to prevent compression
                     self.setMinimumHeight(total_min_height)
