@@ -9,12 +9,16 @@ from PIL import Image
 from PIL.ExifTags import TAGS
 from PyQt5.QtWidgets import (QMainWindow, QApplication, QFileDialog, 
                            QWidget, QLabel, QTextEdit, QMessageBox,
-                           QVBoxLayout, QGridLayout, QSizePolicy, QProgressBar, QRubberBand)
+                           QVBoxLayout, QGridLayout, QSizePolicy, QProgressBar, QRubberBand, QDialog)
 from PyQt5.QtCore import Qt, QTimer, QSize, QRect, QPoint, QEvent
 from PyQt5.QtGui import QPixmap
 from PyQt5 import uic
 from utilities.tag_manager import TagManager
 from utilities.settings_dialog import SettingsDialog
+from utilities.cloudinary_update_v13 import CloudinaryUpdater
+from ui.cloudinaryCreditsBar import CloudinaryCreditsBar
+from utilities.image_assessment import ImageAssessment
+from utilities.image_flow_manager import ImageFlowManager
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -174,58 +178,16 @@ class MainWindow(QMainWindow):
             QSizePolicy.Expanding
         )
         
-        # Setup grid layout with minimal spacing
-        self.grid_layout = QGridLayout(self.picturesContainer)
-        self.grid_layout.setSpacing(5)  # Reduced from 10 to 5
-        self.grid_layout.setContentsMargins(5, 5, 5, 5)
-        
-        # Rubber band selection variables
-        self.selection_start = None
-        self.selection_rect = None
-        self.rubber_band = None
-        self.is_selecting = False
-        
-        # Install event filter for rubber band selection
-        self.picturesContainer.installEventFilter(self)
-        self.picturesContainer.setMouseTracking(True)
-        
-        # Add mouse press handler to pictures container for deselecting on empty area clicks
-        def picturesContainerMousePress(event):
-            # Check if click is on empty area (not on any widget)
-            clicked_widget = self.picturesContainer.childAt(event.pos())
-            
-            # More precise empty area detection
-            is_empty_area = True
-            if clicked_widget is not None:
-                # Check if the clicked widget is actually one of our image containers
-                for widget in self.image_widgets:
-                    if hasattr(widget, 'file_path'):
-                        # Check if click is within the actual widget bounds (not extended layout area)
-                        widget_rect = widget.geometry()
-                        if widget_rect.contains(event.pos()):
-                            is_empty_area = False
-                            break
-                        
-                        # Also check if clicked on the image_container or input_field specifically
-                        if (hasattr(widget, 'image_container') and widget.image_container == clicked_widget) or \
-                           (hasattr(widget, 'input_field') and widget.input_field == clicked_widget):
-                            is_empty_area = False
-                            break
-            
-            if is_empty_area:
-                print("[DEBUG] Clicked on empty area - deselecting all")
-                # Deselect all images
-                for widget in self.image_widgets:
-                    if hasattr(widget, 'file_path'):
-                        if hasattr(widget, 'image_label') and hasattr(widget, 'input_field'):
-                            widget.image_label.setProperty("selected", False)
-                            widget.input_field.setProperty("selected", False)
-                            widget.image_label.style().polish(widget.image_label)
-                            widget.input_field.style().polish(widget.input_field)
-                self.selected_images.clear()
-                self.update_status_bar()
-        
-        self.picturesContainer.mousePressEvent = picturesContainerMousePress
+        # Remove any existing layout from picturesContainer
+        if self.picturesContainer.layout():
+            old_layout = self.picturesContainer.layout()
+            # Clear all items from the old layout
+            while old_layout.count():
+                item = old_layout.takeAt(0)
+                if item and item.widget():
+                    item.widget().setParent(None)
+            # Delete the old layout
+            old_layout.setParent(None)
         
         # Connect signals
         self.actionOpenFiles.triggered.connect(self.open_files)
@@ -268,12 +230,28 @@ class MainWindow(QMainWindow):
         self.image_previews = {}
         self.image_metadata = {}  # Store metadata (year, keywords) for each image
         self.original_keywords = {}  # Track original keywords for change detection
-        self.image_widgets = []
         
-        # Initialize column slider (1-7 columns, default to 6)
-        self.horizontalSlider.setMinimum(1)
-        self.horizontalSlider.setMaximum(7)
-        self.horizontalSlider.setValue(6)
+        # Initialize the new ImageFlowManager for responsive layout
+        # Use external scroll mode since we're placing it in the main window's scroll area
+        self.image_flow_manager = ImageFlowManager(use_internal_scroll=False)
+        
+        # Connect ImageFlowManager signals
+        self.image_flow_manager.selection_changed.connect(self.on_grid_selection_changed)
+        self.image_flow_manager.image_double_clicked.connect(self.on_image_double_clicked)
+        self.image_flow_manager.tags_changed.connect(self.on_image_tags_changed)
+        self.image_flow_manager.context_menu_requested.connect(self.on_image_context_menu)
+        
+        # Set the flow manager as the widget for our existing scroll area
+        self.scrollArea.setWidget(self.image_flow_manager)
+        
+        # Backward compatibility - keep reference to image_widgets for existing code
+        self.image_widgets = []  # Will be updated by flow manager
+        
+        # Initialize widget width slider (100-400px, default to 200px)
+        # Maps slider values to pixel widths
+        self.horizontalSlider.setMinimum(100)  # 100px minimum width
+        self.horizontalSlider.setMaximum(400)  # 400px maximum width
+        self.horizontalSlider.setValue(200)    # 200px default width
         
         self.MAX_PREVIEW_SIZE = 800
         self.selected_images = set()
@@ -281,6 +259,16 @@ class MainWindow(QMainWindow):
         # Create progress bar overlay (initially hidden)
         self.progress_overlay = None
         self.progress_bar = None
+        
+        # Cloudinary connection status
+        self.cloudinary_connected = False
+        
+        # Initialize Cloudinary integration
+        self.initialize_cloudinary()
+        
+        # Initialize Image Assessment System (after Cloudinary setup)
+        self.image_assessment = ImageAssessment(cloudinary_updater=self.cloudinary_updater)
+        self.setup_image_assessment_connections()
         
         # Track metadata errors for reporting
         self.metadata_errors = []
@@ -296,6 +284,44 @@ class MainWindow(QMainWindow):
         self.persistent_exiftool = None
         self.exiftool_available = False
         self.init_persistent_exiftool()
+        
+        # Set initial UI state based on Cloudinary connection status
+        # This ensures the UI is properly initialized even if Cloudinary takes time to connect
+        self._update_cloudinary_ui_status(self.cloudinary_connected)
+
+    def get_widget_text_field(self, widget):
+        """
+        Helper function to get the text field from any widget type.
+        Handles both ImageCardWidget (text_edit) and legacy widgets (input_field).
+        """
+        if hasattr(widget, 'text_edit'):
+            return widget.text_edit  # ImageCardWidget
+        elif hasattr(widget, 'input_field'):
+            return widget.input_field  # Legacy widget
+        return None
+
+    def get_widget_text(self, widget):
+        """
+        Helper function to get text content from any widget type.
+        """
+        text_field = self.get_widget_text_field(widget)
+        if text_field:
+            return text_field.toPlainText().strip()
+        return ""
+
+    def set_widget_text(self, widget, text):
+        """
+        Helper function to set text content for any widget type.
+        Uses appropriate method for each widget type.
+        """
+        if hasattr(widget, 'set_tags'):
+            # ImageCardWidget - use the proper method
+            widget.set_tags(text)
+        else:
+            # Legacy widget - set text directly
+            text_field = self.get_widget_text_field(widget)
+            if text_field:
+                text_field.setText(text)
 
     def init_persistent_exiftool(self):
         """Initialize a persistent ExifTool instance for better performance"""
@@ -364,6 +390,30 @@ class MainWindow(QMainWindow):
         """Handle application close event to clean up resources"""
         self.cleanup_persistent_exiftool()
         super().closeEvent(event)
+
+    # ImageFlowManager Signal Handlers
+    def on_grid_selection_changed(self, selected_files):
+        """Handle selection changes from the ImageFlowManager"""
+        print(f"[DEBUG] Flow selection changed: {len(selected_files)} files selected")
+        self.selected_images = set(selected_files)
+        self.update_status_bar()
+        
+    def on_image_double_clicked(self, file_path):
+        """Handle image double-click from the ImageFlowManager"""
+        print(f"[DEBUG] Image double-clicked: {file_path}")
+        # Add your double-click logic here (e.g., open image in external viewer)
+        
+    def on_image_tags_changed(self, file_path, new_tags):
+        """Handle tag changes from the ImageFlowManager"""
+        print(f"[DEBUG] Tags changed for {file_path}: {new_tags}")
+        # Update the metadata storage
+        if file_path in self.image_metadata:
+            self.image_metadata[file_path]['keywords'] = new_tags
+        
+    def on_image_context_menu(self, file_path, position):
+        """Handle context menu requests from the ImageFlowManager"""
+        print(f"[DEBUG] Context menu requested for {file_path} at {position}")
+        # Add your context menu logic here
 
     def get_image_metadata(self, file_path):
         """Extract year and keywords from image metadata using persistent ExifTool (unified approach)"""
@@ -826,9 +876,9 @@ class MainWindow(QMainWindow):
         self.show_progress(len(self.image_widgets), saving_message)
         
         for i, widget in enumerate(self.image_widgets):
-            if hasattr(widget, 'file_path') and hasattr(widget, 'input_field'):
+            if hasattr(widget, 'file_path'):
                 file_path = widget.file_path
-                keywords_text = widget.input_field.toPlainText().strip()
+                keywords_text = self.get_widget_text(widget)
                 
                 self.update_progress(i + 1)
                 QApplication.processEvents()  # Keep UI responsive
@@ -1015,10 +1065,14 @@ class MainWindow(QMainWindow):
         self.update_status_bar()
     
     def resizeEvent(self, event):
-        """Handle window resize to reposition progress overlay"""
+        """Handle window resize to reposition progress overlay and update layout"""
         super().resizeEvent(event)
         if self.progress_overlay:
             self.progress_overlay.resize(self.size())
+            
+        # Trigger layout update with a delay to handle window resizing
+        if hasattr(self, 'resize_timer'):
+            self.resize_timer.start()
 
     def update_status_bar(self):
         """Update the status bar with selection info"""
@@ -1033,26 +1087,15 @@ class MainWindow(QMainWindow):
 
     def select_all_images(self):
         """Select all currently loaded images"""
-        if not self.image_widgets:
+        if not self.image_flow_manager.image_widgets:
             return
         
-        print("[DEBUG] Selecting all images")
+        print("[DEBUG] Selecting all images using ImageFlowManager")
         
-        # Select all images
-        for widget in self.image_widgets:
-            if hasattr(widget, 'file_path') and hasattr(widget, 'image_label') and hasattr(widget, 'input_field'):
-                # Add to selected set
-                self.selected_images.add(widget.file_path)
-                
-                # Update visual selection
-                widget.image_label.setProperty("selected", True)
-                widget.input_field.setProperty("selected", True)
-                widget.image_label.style().polish(widget.image_label)
-                widget.input_field.style().polish(widget.input_field)
+        # Use ImageFlowManager's select_all method
+        self.image_flow_manager.select_all()
         
-        # Update status bar and button state
-        self.update_status_bar()
-        print(f"[DEBUG] Selected {len(self.selected_images)} images")
+        print(f"[DEBUG] Selected {len(self.image_flow_manager.selected_files)} images")
 
     def clear_selected_tags(self):
         """Clear all tags from selected images"""
@@ -1078,14 +1121,13 @@ class MainWindow(QMainWindow):
         cleared_count = 0
         for widget in self.image_widgets:
             if hasattr(widget, 'file_path') and widget.file_path in self.selected_images:
-                if hasattr(widget, 'input_field'):
-                    # Clear the text field
-                    widget.input_field.clear()
-                    cleared_count += 1
-                    
-                    # Update metadata to empty
-                    if widget.file_path in self.image_metadata:
-                        self.image_metadata[widget.file_path]['keywords'] = ""
+                # Clear the text field using helper function
+                self.set_widget_text(widget, "")
+                cleared_count += 1
+                
+                # Update metadata to empty
+                if widget.file_path in self.image_metadata:
+                    self.image_metadata[widget.file_path]['keywords'] = ""
         
         print(f"[DEBUG] Cleared tags from {cleared_count} images")
         
@@ -1186,7 +1228,7 @@ class MainWindow(QMainWindow):
                 self.unsupported_files.append((file_path, reason))
             return None
 
-    def create_image_widget(self, preview, max_width, file_path):
+    # Deprecated method removed - see ImageCardWidget for new implementation
         """Create a widget containing an image and its input field"""
         print(f"Creating image widget with max_width: {max_width}")
         
@@ -1323,20 +1365,45 @@ class MainWindow(QMainWindow):
                 
             # Ensure document width matches the current text field width
             current_width = input_field.width()
-            input_field.document().setTextWidth(current_width - 10)  # Account for margins
+            available_width = current_width - 10  # Account for margins
             
-            # Calculate required height based on document content
-            input_field.document().adjustSize()
-            doc_height = int(input_field.document().size().height())
-            margins = input_field.contentsMargins()
-            padding = 8
-            new_height = doc_height + margins.top() + margins.bottom() + padding
-            
-            # Set minimum height but no maximum - always show all content
-            final_height = max(28, new_height)
-            input_field.setFixedHeight(final_height)
-            updateContainerHeight()  # Update container height after input field height change
-            print(f"[DEBUG] updateHeight | file_path: {file_path} | width: {current_width} | content_lines: {content.count(chr(10))+1} | new_height: {final_height}")
+            # Get the document and ensure it has the correct width for wrapping
+            document = input_field.document()
+            if document:
+                # Set the document width to force proper wrapping calculation
+                document.setTextWidth(available_width)
+                
+                # Force document to recalculate size with proper width
+                document.adjustSize()
+                
+                # Get the actual document size after wrapping
+                doc_size = document.size()
+                doc_height = int(doc_size.height())
+                
+                # Calculate actual line count by measuring text layout
+                block_count = document.blockCount()
+                
+                # Use font metrics to estimate actual wrapped lines
+                font_metrics = input_field.fontMetrics()
+                line_height = font_metrics.height()
+                estimated_lines = max(1, doc_height // line_height) if line_height > 0 else 1
+                
+                margins = input_field.contentsMargins()
+                padding = 8
+                new_height = doc_height + margins.top() + margins.bottom() + padding
+                
+                # Set minimum height but no maximum - always show all content
+                final_height = max(28, new_height)
+                input_field.setFixedHeight(final_height)
+                updateContainerHeight()  # Update container height after input field height change
+                
+                print(f"[DEBUG] updateHeight | file_path: {file_path} | width: {current_width} | available_width: {available_width}")
+                print(f"[DEBUG]   content_chars: {len(content)} | doc_height: {doc_height} | estimated_lines: {estimated_lines} | final_height: {final_height}")
+                print(f"[DEBUG]   block_count: {block_count} | line_height: {line_height}")
+            else:
+                # Fallback if document is not available
+                input_field.setFixedHeight(28)
+                updateContainerHeight()
         
         def updateHeightImmediate():
             """Immediate height update without timer delay"""
@@ -1348,21 +1415,45 @@ class MainWindow(QMainWindow):
                 
             # Ensure document width matches the current text field width
             current_width = input_field.width()
-            input_field.document().setTextWidth(current_width - 10)  # Account for margins
+            available_width = current_width - 10  # Account for margins
             
-            # Force document to recalculate size with proper width
-            input_field.document().adjustSize()
-            
-            # Calculate required height based on document content  
-            doc_height = int(input_field.document().size().height())
-            margins = input_field.contentsMargins()
-            padding = 8
-            new_height = doc_height + margins.top() + margins.bottom() + padding
-            
-            # Set minimum height but no maximum - always show all content
-            final_height = max(28, new_height)
-            input_field.setFixedHeight(final_height)
-            updateContainerHeight()  # Update container height after input field height change
+            # Get the document and ensure it has the correct width for wrapping
+            document = input_field.document()
+            if document:
+                # Set the document width to force proper wrapping calculation
+                document.setTextWidth(available_width)
+                
+                # Force document to recalculate size with proper width
+                document.adjustSize()
+                
+                # Get the actual document size after wrapping
+                doc_size = document.size()
+                doc_height = int(doc_size.height())
+                
+                # Calculate actual line count by measuring text layout
+                block_count = document.blockCount()
+                
+                # Use font metrics to estimate actual wrapped lines
+                font_metrics = input_field.fontMetrics()
+                line_height = font_metrics.height()
+                estimated_lines = max(1, doc_height // line_height) if line_height > 0 else 1
+                
+                margins = input_field.contentsMargins()
+                padding = 8
+                new_height = doc_height + margins.top() + margins.bottom() + padding
+                
+                # Set minimum height but no maximum - always show all content
+                final_height = max(28, new_height)
+                input_field.setFixedHeight(final_height)
+                updateContainerHeight()  # Update container height after input field height change
+                
+                print(f"[DEBUG] updateHeightImmediate | file_path: {file_path} | width: {current_width} | available_width: {available_width}")
+                print(f"[DEBUG]   content_chars: {len(content)} | doc_height: {doc_height} | estimated_lines: {estimated_lines} | final_height: {final_height}")
+                print(f"[DEBUG]   block_count: {block_count} | line_height: {line_height}")
+            else:
+                # Fallback if document is not available
+                input_field.setFixedHeight(28)
+                updateContainerHeight()
         
         resize_timer = QTimer(input_field)
         resize_timer.setSingleShot(True)
@@ -1504,6 +1595,8 @@ class MainWindow(QMainWindow):
         
         if initial_text_parts:
             input_field.setText(', '.join(initial_text_parts) + ', ')
+            # Force height calculation after setting initial text
+            updateHeightImmediate()
         else:
             input_field.setPlaceholderText("Enter tags...")
         
@@ -1631,160 +1724,46 @@ class MainWindow(QMainWindow):
                         
                         # Find widgets within selection rectangle
                         self.select_widgets_in_rect(selection_rect)
-                    
-                    return True
-        
-        return super().eventFilter(obj, event)
-
-    def select_widgets_in_rect(self, rect):
-        """Select all image widgets that intersect with the selection rectangle"""
-        # Clear current selection if not holding Ctrl
-        modifiers = QApplication.keyboardModifiers()
-        if not (modifiers & 0x04000000):  # Qt.ControlModifier
-            self.clear_selection()
-        
-        # Find widgets that intersect with selection rect
-        newly_selected = []
-        for widget in self.image_widgets:
-            if hasattr(widget, 'geometry'):
-                widget_rect = widget.geometry()
-                if rect.intersects(widget_rect):
-                    file_path = getattr(widget, 'file_path', None)
-                    if file_path:
-                        if modifiers & 0x04000000:  # Qt.ControlModifier
-                            # Toggle selection with Ctrl
-                            if file_path in self.selected_images:
-                                self.selected_images.remove(file_path)
-                                self.update_selection_state(file_path, False)
-                            else:
-                                self.selected_images.add(file_path)
-                                self.update_selection_state(file_path, True)
-                                newly_selected.append(file_path)
-                        else:
-                            # Add to selection
-                            self.selected_images.add(file_path)
-                            self.update_selection_state(file_path, True)
-                            newly_selected.append(file_path)
-        
-        # Update status bar
-        self.update_status_bar()
-        
-        print(f"[DEBUG] Rubber band selection: {len(newly_selected)} images selected")
-
-    def clear_selection(self):
-        """Clear all selected images"""
-        for file_path in list(self.selected_images):
-            self.update_selection_state(file_path, False)
-        self.selected_images.clear()
-        self.update_status_bar()
-
-    def update_selection_state(self, file_path, selected):
-        """Update the visual selection state of an image widget"""
-        # Find the widget for this file path
-        for widget in self.image_widgets:
-            if hasattr(widget, 'file_path') and widget.file_path == file_path:
-                if hasattr(widget, 'image_label'):
-                    widget.image_label.setProperty("selected", selected)
-                    widget.image_label.style().polish(widget.image_label)
-                if hasattr(widget, 'input_field'):
-                    widget.input_field.setProperty("selected", selected)
-                    widget.input_field.style().polish(widget.input_field)
-                break
-
     def update_layout(self, value=None):
-        print("\nStarting update_layout...")
+        """Update the layout using the new ImageFlowManager"""
+        print("\nStarting update_layout with ImageFlowManager...")
+        
         if not self.image_files:
             print("No image files to display")
             return
         
-        # PRESERVE EXISTING TEXT CONTENT before clearing widgets
-        preserved_text = {}
-        for widget in self.image_widgets:
-            if hasattr(widget, 'file_path') and hasattr(widget, 'input_field'):
-                preserved_text[widget.file_path] = widget.input_field.toPlainText()
-                print(f"[DEBUG] Preserving text for {widget.file_path}: '{preserved_text[widget.file_path]}'")
-            
-        while self.grid_layout.count():
-            item = self.grid_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().setParent(None)
-        self.image_widgets.clear()
+        # Get widget width from slider
+        widget_width = self.horizontalSlider.value()
+        print(f"Setting widget width to {widget_width}px")
         
-        scroll_bar_width = 30
-        safety_margin = 10
+        # Update the flow manager's widget width
+        self.image_flow_manager.set_widget_width(widget_width)
         
-        container_margin = self.grid_layout.contentsMargins()
-        total_margins = (container_margin.left() + container_margin.right() + 
-                        self.scrollArea.verticalScrollBar().width())
-        
-        grid_spacing = self.grid_layout.spacing()
-        scroll_area_margins = self.scrollArea.widget().layout().contentsMargins()
-        total_margins += (scroll_area_margins.left() + scroll_area_margins.right())
-        
-        viewport_width = self.scrollArea.viewport().width()
-        available_width = viewport_width - scroll_bar_width - total_margins - safety_margin
-        
-        num_columns = self.horizontalSlider.value()
-        spacing_width = (num_columns - 1) * grid_spacing
-        
-        if available_width - spacing_width <= 0:
-            available_width = viewport_width - total_margins - safety_margin
-            spacing_width = 0
-            num_columns = 1
-            self.horizontalSlider.setValue(1)
-            
-        item_width = (available_width - spacing_width) // num_columns
-        item_width = max(100, min(item_width, 800))
-        
-        print(f"Viewport width: {viewport_width}px")
-        print(f"Available width: {available_width}px")
-        print(f"Grid layout: {num_columns} columns, item width: {item_width}px")
-        
-        for i, file_path in enumerate(self.image_files):
-            # Check if preview exists before accessing it
-            if file_path not in self.image_previews:
+        # Prepare image data for the flow manager
+        image_data = []
+        for file_path in self.image_files:
+            if file_path in self.image_previews:
+                # Get existing metadata/tags if available
+                metadata = self.image_metadata.get(file_path, {})
+                existing_tags = metadata.get('keywords', f"{metadata.get('year', '')}, ")
+                
+                image_data.append({
+                    'file_path': file_path,
+                    'preview': self.image_previews[file_path],
+                    'metadata': metadata,
+                    'tags': existing_tags
+                })
+            else:
                 print(f"Warning: No preview available for {file_path}, skipping...")
-                continue
-                
-            preview = self.image_previews[file_path]
-            print(f"\nProcessing image {i+1}/{len(self.image_files)}")
-            widget = self.create_image_widget(preview, item_width, file_path)
-            
-            # RESTORE PRESERVED TEXT CONTENT AND PROPER HEIGHT
-            if file_path in preserved_text and hasattr(widget, 'input_field'):
-                restored_text = preserved_text[file_path]
-                
-                # Ensure the text field width matches the new item width
-                widget.input_field.setFixedWidth(item_width)
-                
-                # Set the text
-                widget.input_field.setText(restored_text)
-                print(f"[DEBUG] Restored text for {file_path}: '{restored_text}' | New width: {item_width}")
-                
-                # Apply proper height calculation for restored text
-                if restored_text:
-                    # Force document to recalculate size with the restored text and new width
-                    widget.input_field.document().adjustSize()
-                    
-                    # Give the document a moment to recalculate with the new width
-                    widget.input_field.document().setTextWidth(item_width - 10)  # Account for margins
-                    widget.input_field.document().adjustSize()
-                    
-                    doc_height = int(widget.input_field.document().size().height())
-                    margins = widget.input_field.contentsMargins()
-                    padding = 8
-                    new_height = doc_height + margins.top() + margins.bottom() + padding
-                    final_height = max(28, new_height)
-                    widget.input_field.setFixedHeight(final_height)
-                    print(f"[DEBUG] Applied width {item_width} and height {final_height} for restored text")
-            
-            row = i // num_columns
-            col = i % num_columns
-            print(f"Placing at position: row={row}, col={col}")
-            self.grid_layout.addWidget(widget, row, col)
-            self.image_widgets.append(widget)
-            
-        print("Layout update completed")
+        
+        # Load images into the flow manager - much simpler than grid!
+        self.image_flow_manager.load_images(image_data)
+        
+        # Update backward compatibility references
+        self.image_widgets = list(self.image_flow_manager.image_widgets.values())
+        
+        print(f"Layout update completed - {len(image_data)} images loaded with {widget_width}px width")
+        print(f"ImageFlowManager now manages {len(self.image_widgets)} widgets")
 
     def open_files(self):
         print("Opening file dialog...")
@@ -1811,45 +1790,70 @@ class MainWindow(QMainWindow):
                 widget.setParent(None)
             self.image_widgets.clear()
             
-            # Show progress bar with specific loading message
-            loading_message = f"Loading {len(files)} images..."
-            self.show_progress(len(files), loading_message)
+            # Start assessment phase
+            self.start_image_assessment(files, "files")
+
+    def start_image_assessment(self, files, source_type):
+        """Start the assessment phase for the given files"""
+        try:
+            # Show progress bar with assessment message
+            assessment_message = f"Assessing {len(files)} images..."
+            self.show_progress(len(files), assessment_message)
             
-            batch_size = 10
-            processed_count = 0
-            successfully_loaded_files = []  # Track files that successfully create previews
+            # Create settings dialog instance to pass settings
+            from utilities.settings_dialog import SettingsDialog
+            settings_dialog = SettingsDialog(self)
             
-            for i in range(0, len(files), batch_size):
-                batch = files[i:i + batch_size]
-                for file_path in batch:
-                    print(f"Creating preview for: {file_path} ({processed_count+1}/{len(files)})")
-                    preview = self.create_preview(file_path)
-                    if preview is None:
-                        print(f"Warning: Could not create preview for {file_path}")
-                    else:
-                        # Only add files that successfully created previews
-                        successfully_loaded_files.append(file_path)
-                    
-                    processed_count += 1
-                    self.update_progress(processed_count)
-                
-                if i + batch_size >= len(files):
-                    print("Processing final batch, updating layout...")
-                    # Set image_files to only the successfully loaded files
-                    self.image_files = successfully_loaded_files
-                    print(f"Successfully loaded {len(successfully_loaded_files)} out of {len(files)} files")
-                    
-                    self.update_layout()
-                    self.hide_progress()  # Hide progress bar when done
-                    # Show any metadata errors encountered
-                    if self.metadata_errors:
-                        QTimer.singleShot(500, self.show_metadata_errors)  # Delay to let UI settle
-                    # Show any unsupported files encountered
-                    if self.unsupported_files:
-                        QTimer.singleShot(1000, self.show_unsupported_files)  # Delay more to avoid overlapping dialogs
+            # Start the assessment with settings dialog for configuration access
+            self.image_assessment.assess_images(files, settings_dialog)
+            
+        except Exception as e:
+            print(f"Error starting assessment: {e}")
+            # Fallback to original loading method
+            self.fallback_to_original_loading(files)
+    
+    def fallback_to_original_loading(self, files):
+        """Fallback to the original loading method if assessment fails"""
+        print("Falling back to original loading method...")
+        # Show progress bar with specific loading message
+        loading_message = f"Loading {len(files)} images..."
+        self.show_progress(len(files), loading_message)
+        
+        batch_size = 10
+        processed_count = 0
+        successfully_loaded_files = []  # Track files that successfully create previews
+        
+        for i in range(0, len(files), batch_size):
+            batch = files[i:i + batch_size]
+            for file_path in batch:
+                print(f"Creating preview for: {file_path} ({processed_count+1}/{len(files)})")
+                preview = self.create_preview(file_path)
+                if preview is None:
+                    print(f"Warning: Could not create preview for {file_path}")
                 else:
-                    import gc
-                    gc.collect()
+                    # Only add files that successfully created previews
+                    successfully_loaded_files.append(file_path)
+                
+                processed_count += 1
+                self.update_progress(processed_count)
+            
+            if i + batch_size >= len(files):
+                print("Processing final batch, updating layout...")
+                # Set image_files to only the successfully loaded files
+                self.image_files = successfully_loaded_files
+                print(f"Successfully loaded {len(successfully_loaded_files)} out of {len(files)} files")
+                
+                self.update_layout()
+                self.hide_progress()  # Hide progress bar when done
+                # Show any metadata errors encountered
+                if self.metadata_errors:
+                    QTimer.singleShot(500, self.show_metadata_errors)  # Delay to let UI settle
+                # Show any unsupported files encountered
+                if self.unsupported_files:
+                    QTimer.singleShot(1000, self.show_unsupported_files)  # Delay more to avoid overlapping dialogs
+            else:
+                import gc
+                gc.collect()
 
     def open_folder(self):
         """Open a folder dialog and import all image files from the selected folder"""
@@ -1865,7 +1869,7 @@ class MainWindow(QMainWindow):
         
         if folder_path:
             # Define supported image extensions
-            image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.xpm', '.tiff', '.tif', '.webp'}
+            image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.xmp', '.tiff', '.tif', '.webp'}
             
             # Find all image files in the folder
             image_files = []
@@ -1892,46 +1896,8 @@ class MainWindow(QMainWindow):
                     widget.setParent(None)
                 self.image_widgets.clear()
                 
-                # Show progress bar with specific loading message
-                loading_message = f"Loading {len(image_files)} images..."
-                self.show_progress(len(image_files), loading_message)
-                
-                # Process images in batches (same as open_files)
-                batch_size = 10
-                processed_count = 0
-                successfully_loaded_files = []  # Track files that successfully create previews
-                
-                for i in range(0, len(image_files), batch_size):
-                    batch = image_files[i:i + batch_size]
-                    for file_path in batch:
-                        print(f"Creating preview for: {file_path} ({processed_count+1}/{len(image_files)})")
-                        preview = self.create_preview(file_path)
-                        if preview is None:
-                            print(f"Warning: Could not create preview for {file_path}")
-                        else:
-                            # Only add files that successfully created previews
-                            successfully_loaded_files.append(file_path)
-                        
-                        processed_count += 1
-                        self.update_progress(processed_count)
-                    
-                    if i + batch_size >= len(image_files):
-                        print("Processing final batch, updating layout...")
-                        # Set image_files to only the successfully loaded files
-                        self.image_files = successfully_loaded_files
-                        print(f"Successfully loaded {len(successfully_loaded_files)} out of {len(image_files)} files")
-                        
-                        self.update_layout()
-                        self.hide_progress()  # Hide progress bar when done
-                        # Show any metadata errors encountered
-                        if self.metadata_errors:
-                            QTimer.singleShot(500, self.show_metadata_errors)  # Delay to let UI settle
-                        # Show any unsupported files encountered
-                        if self.unsupported_files:
-                            QTimer.singleShot(1000, self.show_unsupported_files)  # Delay more to avoid overlapping dialogs
-                    else:
-                        import gc
-                        gc.collect()
+                # Start assessment phase
+                self.start_image_assessment(image_files, "folder")
             else:
                 print("No image files found in the selected folder")
 
@@ -1949,11 +1915,318 @@ class MainWindow(QMainWindow):
         if self.tag_manager.isHidden():
             self.tag_manager.show()
             self.tag_manager.raise_()
+    
+    def initialize_cloudinary(self):
+        """Initialize Cloudinary integration with proper error handling"""
+        print("[DEBUG] Initializing Cloudinary integration...")
+        
+        # Initialize as disconnected
+        self.cloudinary_connected = False
+        self.cloudinary_updater = None
+        
+        try:
+            # Get Cloudinary settings from our unified settings system
+            settings = SettingsDialog.get_saved_settings()
+            cloudinary_settings = SettingsDialog.get_cloudinary_settings()
+            
+            print(f"[DEBUG] Retrieved settings: {cloudinary_settings}")
+            
+            # Check if Cloudinary is configured
+            if not SettingsDialog.is_cloudinary_configured():
+                print("[DEBUG] Cloudinary not configured - skipping CloudinaryUpdater setup")
+                print("[DEBUG] Configure Cloudinary settings in File > Settings to enable cloud features")
+                self._update_cloudinary_ui_status(False, "Not configured")
+                return
+            
+            # Create CloudinaryUpdater instance
+            self.cloudinary_updater = CloudinaryUpdater()
+            print("[DEBUG] CloudinaryUpdater instance created successfully")
+            
+            print("[DEBUG] Cloudinary settings found - configuring CloudinaryUpdater...")
+            
+            # Prepare config in the format expected by CloudinaryUpdater
+            cloudinary_config = [
+                cloudinary_settings.get('log_folder', ''),
+                cloudinary_settings.get('cloud_name', ''),
+                cloudinary_settings.get('api_key', ''),
+                cloudinary_settings.get('api_secret', ''),
+                cloudinary_settings.get('max_size', '10')  # Default 10MB
+            ]
+            
+            print(f"[DEBUG] Cloudinary config prepared: {[cloudinary_config[0], cloudinary_config[1], '*****', '*****', cloudinary_config[4]]}")
+            
+            # Configure the CloudinaryUpdater
+            self.cloudinary_updater.setCloudinaryUpdaterConfig(cloudinary_config)
+            print("[DEBUG] CloudinaryUpdater configured successfully")
+            
+            # Test initial connection and retrieve account info
+            print("[DEBUG] Testing Cloudinary connection and retrieving account info...")
+            try:
+                # Connect signals to capture the response
+                self.cloudinary_updater.beginning_signal.connect(self.on_cloudinary_status_received)
+                self.cloudinary_updater.update_ui_signal.connect(self.on_cloudinary_ui_update)
+                
+                # Request account status
+                self.cloudinary_updater.cloud_status()
+                print("[DEBUG] Cloudinary status request sent")
+                
+                # For now, assume connection will succeed (will be updated by signal handlers)
+                # The actual status will be set when we receive the response
+                
+            except Exception as e:
+                print(f"[DEBUG] Error testing Cloudinary connection: {str(e)}")
+                self.cloudinary_connected = False
+                self._update_cloudinary_ui_status(False, "Connection failed")
+                
+        except Exception as e:
+            print(f"[ERROR] Failed to initialize Cloudinary: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            self.cloudinary_updater = None
+            self.cloudinary_connected = False
+            self._update_cloudinary_ui_status(False, "Initialization failed")
+    
+    def _update_cloudinary_ui_status(self, connected, status_message=""):
+        """Update UI elements based on Cloudinary connection status"""
+        self.cloudinary_connected = connected
+        
+        try:
+            # Update the label text
+            if hasattr(self, 'label'):
+                if connected:
+                    self.label.setText("Current Credits Usage")
+                else:
+                    self.label.setText("Not connected to Cloudinary")
+            
+            # Update credits bar visibility
+            if hasattr(self, 'creditsBar'):
+                self.creditsBar.setVisible(connected)
+                
+            print(f"[DEBUG] Cloudinary UI status updated - Connected: {connected}, Message: {status_message}")
+            
+        except Exception as e:
+            print(f"[DEBUG] Error updating Cloudinary UI status: {str(e)}")
+    
+    def setup_image_assessment_connections(self):
+        """Setup connections for the image assessment system"""
+        if self.image_assessment:
+            # Connect signals for progress updates during assessment
+            self.image_assessment.assessment_progress.connect(self.update_progress)
+            self.image_assessment.assessment_status.connect(self.update_progress_label)
+            self.image_assessment.image_processed.connect(self.on_image_assessed)
+            self.image_assessment.assessment_complete.connect(self.on_assessment_complete)
+            print("[DEBUG] Image assessment system connected")
+    
+    def on_image_assessed(self, file_path, assessment_result):
+        """Handle individual image assessment completion"""
+        # Update any UI elements or tracking for individual image assessment
+        pass
+    
+    def on_assessment_complete(self, assessment_summary):
+        """Handle completion of image assessment phase"""
+        print(f"[DEBUG] Assessment complete: {assessment_summary}")
+        
+        # Check if Cloudinary was enabled in assessment
+        cloudinary_enabled = assessment_summary.get('cloudinary_enabled', False)
+        
+        if cloudinary_enabled:
+            # Extract Cloudinary-specific information
+            total_files = assessment_summary.get('total_files', 0)
+            already_synced = assessment_summary.get('already_synced', 0)
+            files_to_upload = assessment_summary.get('files_to_upload', 0)
+            files_to_resize = assessment_summary.get('files_to_resize', 0)
+            
+            print(f"[DEBUG] Cloudinary assessment results:")
+            print(f"  Total files: {total_files}")
+            print(f"  Already synced: {already_synced}")
+            print(f"  Files to upload: {files_to_upload}")
+            print(f"  Files to resize: {files_to_resize}")
+            
+            # Continue with normal loading for all valid files
+            valid_files = assessment_summary.get('valid_files', [])
+        else:
+            # Basic assessment without Cloudinary
+            valid_files = assessment_summary.get('valid_files', [])
+            print(f"[DEBUG] Basic assessment complete: {len(valid_files)} valid files")
+        
+        if valid_files:
+            # Update progress message for loading phase
+            loading_message = f"Loading {len(valid_files)} assessed images..."
+            self.update_progress_label(loading_message)
+            
+            # Process assessed files with normal preview creation
+            self.process_assessed_images(valid_files)
+        else:
+            # No files to process, finish up
+            self.hide_progress()
+            if hasattr(self, 'unsupported_files') and self.unsupported_files:
+                QTimer.singleShot(500, self.show_unsupported_files)
+    
+    def process_assessed_images(self, assessed_files):
+        """Process the assessed images to create previews and load them into the UI"""
+        batch_size = 10
+        processed_count = 0
+        successfully_loaded_files = []
+        
+        # Reset progress for loading phase
+        self.show_progress(len(assessed_files), f"Loading {len(assessed_files)} images...")
+        
+        for i in range(0, len(assessed_files), batch_size):
+            batch = assessed_files[i:i + batch_size]
+            for file_path in batch:
+                print(f"Creating preview for assessed file: {file_path} ({processed_count+1}/{len(assessed_files)})")
+                
+                # Check if we have optimized version from assessment
+                assessment_data = self.image_assessment.get_assessment_data(file_path)
+                if assessment_data and 'optimized_file' in assessment_data:
+                    # Use the optimized version for preview if available
+                    optimized_file = assessment_data['optimized_file']
+                    if os.path.exists(optimized_file):
+                        print(f"Using optimized version: {optimized_file}")
+                        preview = self.create_preview(optimized_file)
+                        if preview:
+                            # Store under original file path for UI consistency
+                            self.image_previews[file_path] = preview
+                            successfully_loaded_files.append(file_path)
+                        else:
+                            # Fallback to original file
+                            preview = self.create_preview(file_path)
+                            if preview:
+                                successfully_loaded_files.append(file_path)
+                    else:
+                        # Optimized file doesn't exist, use original
+                        preview = self.create_preview(file_path)
+                        if preview:
+                            successfully_loaded_files.append(file_path)
+                else:
+                    # No optimization data, use original file
+                    preview = self.create_preview(file_path)
+                    if preview:
+                        successfully_loaded_files.append(file_path)
+                
+                processed_count += 1
+                self.update_progress(processed_count)
+            
+            if i + batch_size >= len(assessed_files):
+                print("Processing final batch, updating layout...")
+                # Set image_files to only the successfully loaded files
+                self.image_files = successfully_loaded_files
+                print(f"Successfully loaded {len(successfully_loaded_files)} out of {len(assessed_files)} files")
+                
+                self.update_layout()
+                self.hide_progress()  # Hide progress bar when done
+                
+                # Show any metadata errors encountered
+                if self.metadata_errors:
+                    QTimer.singleShot(500, self.show_metadata_errors)  # Delay to let UI settle
+                # Show any unsupported files encountered
+                if self.unsupported_files:
+                    QTimer.singleShot(1000, self.show_unsupported_files)  # Delay more to avoid overlapping dialogs
+                    
+                # Clean up assessment temporary files
+                if hasattr(self.image_assessment, 'cleanup'):
+                    QTimer.singleShot(2000, self.image_assessment.cleanup)  # Clean up after dialogs
+            else:
+                import gc
+                gc.collect()
+        
+    def update_progress_label(self, message):
+        """Update the progress label with a custom message"""
+        if hasattr(self, 'progress_label') and self.progress_label:
+            self.progress_label.setText(message)
+    
+    def on_cloudinary_status_received(self, data):
+        """Handle Cloudinary status data received from cloud_status"""
+        print(f"[DEBUG] Cloudinary status received: {data}")
+        if data and len(data) > 0:
+            if data[0] == True:  # Status retrieval successful
+                print("[DEBUG] ✅ Cloudinary connection successful!")
+                self._update_cloudinary_ui_status(True, "Connected")
+                
+                if len(data) > 10:
+                    storage_credits = data[8] if len(data) > 8 else "Unknown"
+                    transformations = data[9] if len(data) > 9 else "Unknown"
+                    bandwidth = data[10] if len(data) > 10 else "Unknown"
+                    print(f"[DEBUG] 📊 Account Usage - Storage: {storage_credits}, Transformations: {transformations}, Bandwidth: {bandwidth}")
+                    
+                    # Use the correct percentage values from the data (indices 5, 6, 7)
+                    storage_percent = data[5] if len(data) > 5 else 0
+                    transformations_percent = data[6] if len(data) > 6 else 0
+                    bandwidth_percent = data[7] if len(data) > 7 else 0
+                    
+                    # Update the CloudinaryCreditsBar if it exists
+                    self.update_credits_bar(storage_percent, transformations_percent, bandwidth_percent)
+            else:
+                print(f"[DEBUG] ❌ Cloudinary connection failed: {data}")
+                self._update_cloudinary_ui_status(False, "Connection failed")
+        else:
+            print("[DEBUG] ❌ No data received from Cloudinary")
+            self._update_cloudinary_ui_status(False, "No response")
+    
+    def update_credits_bar(self, storage_percent, transformations_percent, bandwidth_percent):
+        """Update the CloudinaryCreditsBar with usage data"""
+        # Only update if Cloudinary is connected
+        if not self.cloudinary_connected:
+            print("[DEBUG] Cloudinary not connected - skipping credits bar update")
+            return
+            
+        try:
+            # Check if the credits bar widget exists (whatever name it has in the UI)
+            credits_bar = None
+            
+            # Try common names for the credits bar widget
+            for attr_name in ['cloudinaryCreditsBar', 'creditsBar', 'credits_bar']:
+                if hasattr(self, attr_name):
+                    credits_bar = getattr(self, attr_name)
+                    print(f"[DEBUG] Found credits bar widget: {attr_name}")
+                    break
+            
+            if credits_bar is not None:
+                # Define colors matching the original Cloudinary app
+                STORAGE_COLOUR = "#b83232"      # Red
+                TRANSFORMATIONS_COLOUR = "#32a4ba"  # Blue  
+                BANDWIDTH_COLOUR = "#dbde3e"    # Yellow
+                
+                # Set colors
+                credits_bar.setColors(STORAGE_COLOUR, TRANSFORMATIONS_COLOUR, BANDWIDTH_COLOUR)
+                
+                # Use the percentages directly (they're already calculated correctly in the Cloudinary data)
+                storage_perc = float(storage_percent) if isinstance(storage_percent, (int, float)) else 0
+                transformations_perc = float(transformations_percent) if isinstance(transformations_percent, (int, float)) else 0
+                bandwidth_perc = float(bandwidth_percent) if isinstance(bandwidth_percent, (int, float)) else 0
+                
+                # Set the percentages
+                credits_bar.setPercentages(storage_perc, transformations_perc, bandwidth_perc)
+                
+                print(f"[DEBUG] 📊 Credits bar updated - Storage: {storage_perc:.2f}%, Transformations: {transformations_perc:.2f}%, Bandwidth: {bandwidth_perc:.2f}%")
+                
+                # Force a repaint
+                credits_bar.update()
+                
+            else:
+                print("[DEBUG] ⚠️ Credits bar widget not found in main window")
+                # List all widget attributes for debugging
+                widget_attrs = [attr for attr in dir(self) if not attr.startswith('_') and hasattr(getattr(self, attr, None), 'setVisible')]
+                print(f"[DEBUG] Available widget attributes: {widget_attrs[:10]}...")  # Show first 10
+                
+        except Exception as e:
+            print(f"[DEBUG] ❌ Error updating credits bar: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
+    def on_cloudinary_ui_update(self, message):
+        """Handle UI update messages from Cloudinary"""
+        print(f"[DEBUG] Cloudinary UI update: {message}")
             
     def show_settings(self):
         """Create and show the settings dialog"""
         settings_dialog = SettingsDialog(self)
-        settings_dialog.exec_()
+        result = settings_dialog.exec_()
+        
+        # If user clicked OK and settings were saved, re-initialize Cloudinary
+        if result == QDialog.Accepted:
+            print("[DEBUG] Settings saved, re-initializing Cloudinary...")
+            self.initialize_cloudinary()
             
     def on_tag_clicked(self, tag_text):
         print(f"[DEBUG] Tag clicked: '{tag_text}' | Selected images: {self.selected_images}")
@@ -1963,8 +2236,7 @@ class MainWindow(QMainWindow):
         # Update each selected image's input field
         for widget in self.image_widgets:
             if hasattr(widget, 'file_path') and widget.file_path in self.selected_images:
-                input_field = widget.input_field
-                current_text = input_field.toPlainText().strip()
+                current_text = self.get_widget_text(widget)
                 print(f"[DEBUG] Before append | file_path: {widget.file_path} | current_text: '{current_text}'")
                 # Split tags, strip whitespace, and ensure uniqueness
                 tags = [t.strip() for t in current_text.split(',') if t.strip()]
@@ -1979,24 +2251,9 @@ class MainWindow(QMainWindow):
                         seen.add(t)
                 new_text = ', '.join(unique_tags)
                 
-                # Prevent real-time sync during programmatic text setting
-                input_field._updating = True
-                input_field.setText(new_text)
-                input_field._updating = False
+                # Use helper function to set the text (handles both ImageCardWidget and legacy widgets)
+                self.set_widget_text(widget, new_text)
                 print(f"[DEBUG] After append | file_path: {widget.file_path} | new_text: '{new_text}'")
-                
-                # Apply proper height calculation
-                input_field.document().adjustSize()
-                doc_height = int(input_field.document().size().height())
-                margins = input_field.contentsMargins()
-                padding = 8
-                new_height = doc_height + margins.top() + margins.bottom() + padding
-                final_height = max(28, new_height)
-                input_field.setFixedHeight(final_height)
-                
-                # Update container height if function is available
-                if hasattr(widget, 'updateContainerHeight'):
-                    widget.updateContainerHeight()
     
     def on_business_clicked(self, business_button):
         """Handle business button clicks and add business description to selected images with field-level duplicate checking"""
@@ -2006,11 +2263,10 @@ class MainWindow(QMainWindow):
         if not self.selected_images:
             return
 
-        # Update each selected image's input field
+        # Update each selected image's text field
         for widget in self.image_widgets:
             if hasattr(widget, 'file_path') and widget.file_path in self.selected_images:
-                input_field = widget.input_field
-                current_text = input_field.toPlainText().strip()
+                current_text = self.get_widget_text(widget)
                 print(f"[DEBUG] Before append | file_path: {widget.file_path} | current_text: '{current_text}'")
                 
                 # Advanced duplicate checking: check each field individually
@@ -2050,24 +2306,9 @@ class MainWindow(QMainWindow):
                 else:
                     new_text = new_business_text
                 
-                # Prevent real-time sync during programmatic text setting
-                input_field._updating = True
-                input_field.setText(new_text)
-                input_field._updating = False
+                # Use helper function to set the text (handles both ImageCardWidget and legacy widgets)
+                self.set_widget_text(widget, new_text)
                 print(f"[DEBUG] After append | file_path: {widget.file_path} | new_text: '{new_text}'")
-                
-                # Apply proper height calculation
-                input_field.document().adjustSize()
-                doc_height = int(input_field.document().size().height())
-                margins = input_field.contentsMargins()
-                padding = 8
-                new_height = doc_height + margins.top() + margins.bottom() + padding
-                final_height = max(28, new_height)
-                input_field.setFixedHeight(final_height)
-                
-                # Update container height if function is available
-                if hasattr(widget, 'updateContainerHeight'):
-                    widget.updateContainerHeight()
 
     def on_building_clicked(self, building_button):
         """Handle building button clicks and add building description to selected images"""
@@ -2079,8 +2320,7 @@ class MainWindow(QMainWindow):
         # Update each selected image's input field
         for widget in self.image_widgets:
             if hasattr(widget, 'file_path') and widget.file_path in self.selected_images:
-                input_field = widget.input_field
-                current_text = input_field.toPlainText().strip()
+                current_text = self.get_widget_text(widget)
                 print(f"[DEBUG] Before append | file_path: {widget.file_path} | current_text: '{current_text}'")
                 
                 # Check for duplicates
@@ -2097,24 +2337,9 @@ class MainWindow(QMainWindow):
                 else:
                     new_text = building_text
                 
-                # Prevent real-time sync during programmatic text setting
-                input_field._updating = True
-                input_field.setText(new_text)
-                input_field._updating = False
+                # Use helper function to set the text (handles both ImageCardWidget and legacy widgets)
+                self.set_widget_text(widget, new_text)
                 print(f"[DEBUG] After append | file_path: {widget.file_path} | new_text: '{new_text}'")
-                
-                # Apply proper height calculation
-                input_field.document().adjustSize()
-                doc_height = int(input_field.document().size().height())
-                margins = input_field.contentsMargins()
-                padding = 8
-                new_height = doc_height + margins.top() + margins.bottom() + padding
-                final_height = max(28, new_height)
-                input_field.setFixedHeight(final_height)
-                
-                # Update container height if function is available
-                if hasattr(widget, 'updateContainerHeight'):
-                    widget.updateContainerHeight()
 
     def on_street_clicked(self, street_button):
         """Handle street button clicks and add street name to selected images"""
@@ -2123,45 +2348,73 @@ class MainWindow(QMainWindow):
         if not self.selected_images:
             return
 
-        # Update each selected image's input field
+        # Update each selected image's text field
         for widget in self.image_widgets:
             if hasattr(widget, 'file_path') and widget.file_path in self.selected_images:
-                input_field = widget.input_field
-                current_text = input_field.toPlainText().strip()
-                print(f"[DEBUG] Before append | file_path: {widget.file_path} | current_text: '{current_text}'")
-                
-                # Check for duplicates
-                if street_text in current_text:
-                    print(f"[DEBUG] Street already present, skipping")
-                    continue
-                
-                # Add the street text
-                if current_text:
-                    if current_text.rstrip().endswith(','):
-                        new_text = f"{current_text} {street_text}"
+                # For ImageCardWidget, use text_edit instead of input_field
+                if hasattr(widget, 'text_edit'):
+                    text_field = widget.text_edit
+                    current_text = text_field.toPlainText().strip()
+                    print(f"[DEBUG] Before append | file_path: {widget.file_path} | current_text: '{current_text}'")
+                    
+                    # Check for duplicates
+                    if street_text in current_text:
+                        print(f"[DEBUG] Street already present, skipping")
+                        continue
+                    
+                    # Add the street text
+                    if current_text:
+                        if current_text.rstrip().endswith(','):
+                            new_text = f"{current_text} {street_text}"
+                        else:
+                            new_text = f"{current_text}, {street_text}"
                     else:
-                        new_text = f"{current_text}, {street_text}"
-                else:
-                    new_text = street_text
+                        new_text = street_text
+                    
+                    # For ImageCardWidget, use set_tags method which handles text properly
+                    # Convert current text to list, add street, and set back
+                    current_tags = [tag.strip() for tag in current_text.split(',') if tag.strip()] if current_text else []
+                    if street_text not in current_tags:
+                        current_tags.append(street_text)
+                        widget.set_tags(', '.join(current_tags))
+                        print(f"[DEBUG] After append | file_path: {widget.file_path} | new_tags: '{', '.join(current_tags)}'")
                 
-                # Prevent real-time sync during programmatic text setting
-                input_field._updating = True
-                input_field.setText(new_text)
-                input_field._updating = False
-                print(f"[DEBUG] After append | file_path: {widget.file_path} | new_text: '{new_text}'")
-                
-                # Apply proper height calculation
-                input_field.document().adjustSize()
-                doc_height = int(input_field.document().size().height())
-                margins = input_field.contentsMargins()
-                padding = 8
-                new_height = doc_height + margins.top() + margins.bottom() + padding
-                final_height = max(28, new_height)
-                input_field.setFixedHeight(final_height)
-                
-                # Update container height if function is available
-                if hasattr(widget, 'updateContainerHeight'):
-                    widget.updateContainerHeight()
+                # Handle legacy widget types (if any still exist)
+                elif hasattr(widget, 'input_field'):
+                    input_field = widget.input_field
+                    current_text = input_field.toPlainText().strip()
+                    
+                    # Check for duplicates
+                    if street_text in current_text:
+                        continue
+                    
+                    # Add the street text
+                    if current_text:
+                        if current_text.rstrip().endswith(','):
+                            new_text = f"{current_text} {street_text}"
+                        else:
+                            new_text = f"{current_text}, {street_text}"
+                    else:
+                        new_text = street_text
+                    
+                    # Prevent real-time sync during programmatic text setting
+                    input_field._updating = True
+                    input_field.setText(new_text)
+                    input_field._updating = False
+                    print(f"[DEBUG] After append | file_path: {widget.file_path} | new_text: '{new_text}'")
+                    
+                    # Apply proper height calculation
+                    input_field.document().adjustSize()
+                    doc_height = int(input_field.document().size().height())
+                    margins = input_field.contentsMargins()
+                    padding = 8
+                    new_height = doc_height + margins.top() + margins.bottom() + padding
+                    final_height = max(28, new_height)
+                    input_field.setFixedHeight(final_height)
+                    
+                    # Update container height if function is available
+                    if hasattr(widget, 'updateContainerHeight'):
+                        widget.updateContainerHeight()
 
 if __name__ == '__main__':
     try:

@@ -1,0 +1,45 @@
+=== HappyTag Assessment Session ===
+Session started: 2025-09-06 23:16:00
+Log file: D:\Python playfolder\happyTag\logs\happytag_assessment_2025-09-06_23-16-00.txt
+==================================================
+
+[2025-09-06 23:16:00] INFO: Starting assessment of 8 images
+[2025-09-06 23:16:00] INFO: Created temporary directory: C:\Users\simon\AppData\Local\Temp\happytag_assessment_n4lzaotf
+[2025-09-06 23:16:00] INFO: Loaded database with 541 entries from D:\Python playfolder\happyTag\logs\cloudinary_database.csv
+[2025-09-06 23:16:01] INFO: Retrieved 111 files from Cloudinary
+[2025-09-06 23:16:01] INFO: Assessing 1 macOs tags.jpg: 2535550 bytes, .jpg
+[2025-09-06 23:16:01] INFO: File found in database: 1 macOs tags.jpg
+[2025-09-06 23:16:01] INFO: File in database and SYNCED with Cloudinary: 1 macOs tags.jpg
+[2025-09-06 23:16:01] INFO: Assessing 1.jpg: 2536066 bytes, .jpg
+[2025-09-06 23:16:01] INFO: File found in database: 1.jpg
+[2025-09-06 23:16:01] INFO: File in database and SYNCED with Cloudinary: 1.jpg
+[2025-09-06 23:16:01] INFO: Assessing array_test.jpg: 5527 bytes, .jpg
+[2025-09-06 23:16:01] INFO: File found in database: array_test.jpg
+[2025-09-06 23:16:01] INFO: File in database but NOT synced with Cloudinary: array_test.jpg
+[2025-09-06 23:16:01] INFO: Assessing metadata_test.jpg: 4429 bytes, .jpg
+[2025-09-06 23:16:01] INFO: File found in database: metadata_test.jpg
+[2025-09-06 23:16:01] INFO: File in database but NOT synced with Cloudinary: metadata_test.jpg
+[2025-09-06 23:16:01] INFO: Assessing test_final.jpg: 4916 bytes, .jpg
+[2025-09-06 23:16:01] INFO: File found in database: test_final.jpg
+[2025-09-06 23:16:01] INFO: File in database but NOT synced with Cloudinary: test_final.jpg
+[2025-09-06 23:16:01] INFO: Assessing test_final.png: 1943 bytes, .png
+[2025-09-06 23:16:01] INFO: File found in database: test_final.png
+[2025-09-06 23:16:01] INFO: File in database but NOT synced with Cloudinary: test_final.png
+[2025-09-06 23:16:01] INFO: Assessing test_final.tiff: 123186 bytes, .tiff
+[2025-09-06 23:16:01] INFO: File found in database: test_final.tiff
+[2025-09-06 23:16:01] INFO: File in database but NOT synced with Cloudinary: test_final.tiff
+[2025-09-06 23:16:01] INFO: Assessing test_finder_tags_demo.jpg: 2263107 bytes, .jpg
+[2025-09-06 23:16:01] INFO: File found in database: test_finder_tags_demo.jpg
+[2025-09-06 23:16:01] INFO: File in database and SYNCED with Cloudinary: test_finder_tags_demo.jpg
+[2025-09-06 23:16:01] INFO: Assessment database saved
+[2025-09-06 23:16:02] INFO: === ASSESSMENT SUMMARY ===
+[2025-09-06 23:16:02] INFO: Total files processed: 8
+[2025-09-06 23:16:02] INFO: Files already synced: 3
+[2025-09-06 23:16:02] INFO: Files to upload: 0
+[2025-09-06 23:16:02] INFO: Files to resize: 5
+[2025-09-06 23:16:02] INFO: Total original size: 140,001 bytes
+[2025-09-06 23:16:02] INFO: Total upload size: 6,772 bytes
+
+
+Session ended: 2025-09-06 23:16:02
+==================================================

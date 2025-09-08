@@ -28,17 +28,28 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         uic.loadUi(resource_path('ui/settingsDialog.ui'), self)
         
-        # File paths
+        # File paths (existing HappyTag settings)
         self.b2b_final_path = ""
         self.non_tle_path = ""
         self.cloudinary_tags_path = ""
         self.buildings_file_path = ""
         
-        # Connect buttons to file selection
+        # Cloudinary settings
+        self.log_folder_path = ""
+        self.cloudinary_cloud_name = ""
+        self.cloudinary_api_key = ""
+        self.cloudinary_api_secret = ""
+        self.cloudinary_max_size = ""
+        
+        # Connect existing HappyTag buttons to file selection
         self.pushButton.clicked.connect(self.select_b2b_file)
         self.pushButton_2.clicked.connect(self.select_non_tle_file)
         self.pushButton_3.clicked.connect(self.select_cloudinary_tags_file)
         self.pushButton_4.clicked.connect(self.select_buildings_file)
+        
+        # Connect Cloudinary buttons and controls
+        self.logFolder_button.clicked.connect(self.select_log_folder)
+        self.maxSizeSetButton.clicked.connect(self.set_max_size)
         
         # Connect OK/Cancel buttons
         self.buttonBox.accepted.connect(self.accept_settings)
@@ -109,6 +120,76 @@ class SettingsDialog(QDialog):
             self.buildings_path.setText(file_path)
             self.buildings_checkbox.setChecked(True)
             self.update_all_set_checkbox()
+
+    # ==================== CLOUDINARY SETTINGS METHODS ====================
+    
+    def select_log_folder(self):
+        """Select Cloudinary log folder"""
+        folder_path = QFileDialog.getExistingDirectory(
+            self,
+            "Select Log Folder",
+            "",
+            QFileDialog.ShowDirsOnly
+        )
+        
+        if folder_path:
+            self.log_folder_path = folder_path
+            self.logFile_path.setText(folder_path)
+            
+    def set_max_size(self):
+        """Handle max size set button click"""
+        try:
+            max_size = float(self.maxSizeLineEdit.text())
+            if max_size <= 0:
+                QMessageBox.warning(self, "Invalid Size", "Max size must be greater than 0.")
+                return
+            
+            # Store the max size value
+            self.cloudinary_max_size = str(max_size)
+            QMessageBox.information(self, "Max Size Set", f"Max size set to {max_size} MB")
+            
+        except ValueError:
+            QMessageBox.warning(self, "Invalid Input", "Please enter a valid number for max size.")
+            
+    def validate_cloudinary_settings(self):
+        """Validate Cloudinary settings"""
+        # Check if any Cloudinary fields are filled
+        has_cloudinary_data = (
+            self.cloudName_text.text().strip() or
+            self.apiKey_text.text().strip() or
+            self.apiSecret_text.text().strip() or
+            self.maxSizeLineEdit.text().strip() or
+            self.log_folder_path
+        )
+        
+        if not has_cloudinary_data:
+            return True  # No Cloudinary settings to validate
+            
+        # If any Cloudinary data exists, validate required fields
+        if not self.cloudName_text.text().strip():
+            QMessageBox.warning(self, "Cloudinary Validation", "Cloud Name is required for Cloudinary integration.")
+            return False
+            
+        if not self.apiKey_text.text().strip():
+            QMessageBox.warning(self, "Cloudinary Validation", "API Key is required for Cloudinary integration.")
+            return False
+            
+        if not self.apiSecret_text.text().strip():
+            QMessageBox.warning(self, "Cloudinary Validation", "API Secret is required for Cloudinary integration.")
+            return False
+            
+        # Validate max size if provided
+        if self.maxSizeLineEdit.text().strip():
+            try:
+                max_size = float(self.maxSizeLineEdit.text())
+                if max_size <= 0:
+                    QMessageBox.warning(self, "Cloudinary Validation", "Max size must be greater than 0.")
+                    return False
+            except ValueError:
+                QMessageBox.warning(self, "Cloudinary Validation", "Max size must be a valid number.")
+                return False
+                
+        return True
             
     def update_all_set_checkbox(self):
         """Update the ALL SET checkbox based on other checkboxes"""
@@ -184,7 +265,7 @@ class SettingsDialog(QDialog):
         
     def accept_settings(self):
         """Handle OK button click"""
-        if self.validate_files():
+        if self.validate_files() and self.validate_cloudinary_settings():
             self.save_settings()
             self.accept()
         # If validation fails, dialog stays open
@@ -192,10 +273,18 @@ class SettingsDialog(QDialog):
     def save_settings(self):
         """Save settings to pickle file"""
         settings = {
+            # Existing HappyTag settings
             'b2b_final_path': self.b2b_final_path if self.B2B_final_checkbox.isChecked() else "",
             'non_tle_path': self.non_tle_path if self.nonTLE_checkbox.isChecked() else "",
             'cloudinary_tags_path': self.cloudinary_tags_path if self.cloudinaryTags_checkbox.isChecked() else "",
-            'buildings_path': self.buildings_file_path if self.buildings_checkbox.isChecked() else ""
+            'buildings_path': self.buildings_file_path if self.buildings_checkbox.isChecked() else "",
+            
+            # Cloudinary settings
+            'cloudinary_log_folder': self.log_folder_path,
+            'cloudinary_cloud_name': self.cloudName_text.text().strip(),
+            'cloudinary_api_key': self.apiKey_text.text().strip(),
+            'cloudinary_api_secret': self.apiSecret_text.text().strip(),
+            'cloudinary_max_size': self.maxSizeLineEdit.text().strip()
         }
         
         try:
@@ -261,6 +350,9 @@ class SettingsDialog(QDialog):
                         self.buildings_file_path = ""
                         self.buildings_path.setText('Click "Browse" to select Buildings_and_Streets.ods')
                         self.buildings_checkbox.setChecked(False)
+                
+                # Load Cloudinary settings
+                self.load_cloudinary_settings(settings)
                         
                 # Update ALL SET checkbox
                 self.update_all_set_checkbox()
@@ -273,12 +365,46 @@ class SettingsDialog(QDialog):
             # Set initial placeholder text on error
             self.set_initial_placeholders()
             
+    def load_cloudinary_settings(self, settings):
+        """Load Cloudinary settings from the settings dictionary"""
+        # Load log folder path
+        if settings.get('cloudinary_log_folder'):
+            self.log_folder_path = settings['cloudinary_log_folder']
+            if os.path.exists(self.log_folder_path):
+                self.logFile_path.setText(self.log_folder_path)
+            else:
+                # Folder no longer exists, clear the setting
+                self.log_folder_path = ""
+                self.logFile_path.setText("Click 'Log Folder..' to select folder")
+        else:
+            self.logFile_path.setText("Click 'Log Folder..' to select folder")
+            
+        # Load Cloudinary API settings
+        self.cloudName_text.setText(settings.get('cloudinary_cloud_name', ''))
+        self.apiKey_text.setText(settings.get('cloudinary_api_key', ''))
+        self.apiSecret_text.setText(settings.get('cloudinary_api_secret', ''))
+        self.maxSizeLineEdit.setText(settings.get('cloudinary_max_size', ''))
+        
+        # Store values in instance variables
+        self.cloudinary_cloud_name = settings.get('cloudinary_cloud_name', '')
+        self.cloudinary_api_key = settings.get('cloudinary_api_key', '')
+        self.cloudinary_api_secret = settings.get('cloudinary_api_secret', '')
+        self.cloudinary_max_size = settings.get('cloudinary_max_size', '')
+            
     def set_initial_placeholders(self):
         """Set initial placeholder text for file paths when no settings exist"""
+        # HappyTag file placeholders
         self.B2B_final_path.setText('Click "Browse" to select B2B_final_path.ods')
         self.nonTLE_path.setText('Click "Browse" to select NON_TLE_tenants_list.ods')
         self.cloudinaryTags_path.setText('Click "Browse" to select Cloudinary_tags.ods')
         self.buildings_path.setText('Click "Browse" to select Buildings_and_Streets.ods')
+        
+        # Cloudinary placeholders
+        self.logFile_path.setText("Click 'Log Folder..' to select folder")
+        self.cloudName_text.setText("")
+        self.apiKey_text.setText("")
+        self.apiSecret_text.setText("")
+        self.maxSizeLineEdit.setText("")
         
         # All checkboxes unchecked initially
         self.B2B_final_checkbox.setChecked(False)
@@ -298,4 +424,38 @@ class SettingsDialog(QDialog):
                 return settings
         except Exception as e:
             print(f"Could not load settings: {str(e)}")
-        return {'b2b_final_path': '', 'non_tle_path': '', 'cloudinary_tags_path': '', 'buildings_path': ''}
+        return {
+            # HappyTag settings
+            'b2b_final_path': '', 
+            'non_tle_path': '', 
+            'cloudinary_tags_path': '', 
+            'buildings_path': '',
+            # Cloudinary settings
+            'cloudinary_log_folder': '',
+            'cloudinary_cloud_name': '',
+            'cloudinary_api_key': '',
+            'cloudinary_api_secret': '',
+            'cloudinary_max_size': ''
+        }
+
+    @staticmethod
+    def get_cloudinary_settings():
+        """Static method to get only Cloudinary settings"""
+        settings = SettingsDialog.get_saved_settings()
+        return {
+            'log_folder': settings.get('cloudinary_log_folder', ''),
+            'cloud_name': settings.get('cloudinary_cloud_name', ''),
+            'api_key': settings.get('cloudinary_api_key', ''),
+            'api_secret': settings.get('cloudinary_api_secret', ''),
+            'max_size': settings.get('cloudinary_max_size', '')
+        }
+        
+    @staticmethod
+    def is_cloudinary_configured():
+        """Check if Cloudinary is properly configured"""
+        cloudinary_settings = SettingsDialog.get_cloudinary_settings()
+        return (
+            cloudinary_settings['cloud_name'] and
+            cloudinary_settings['api_key'] and
+            cloudinary_settings['api_secret']
+        )
