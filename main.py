@@ -63,29 +63,52 @@ try:
     
     def detect_exiftool_path():
         """Detect the appropriate ExifTool executable based on the current system"""
-        base_path = resource_path('packages')
-        
         system = platform.system().lower()
         architecture = platform.machine().lower()
         is_64bit = struct.calcsize("P") * 8 == 64
         
+        # Check if running from PyInstaller bundle
+        is_bundled = getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
+        
+        if is_bundled:
+            print(f"[DEBUG] Running from PyInstaller bundle, base path: {sys._MEIPASS}")
+            base_path = sys._MEIPASS
+        else:
+            print(f"[DEBUG] Running in development mode")
+            base_path = os.path.abspath(".")
+        
         if system == 'windows':
             # Windows: choose between 32-bit and 64-bit versions
-            if is_64bit:
-                exiftool_path = os.path.join(base_path, 'exiftool_win64', 'exiftool-13.34_64', 'exiftool(-k).exe')
-                print(f"Detected 64-bit Windows, looking for: {exiftool_path}")
+            if is_bundled:
+                # In PyInstaller bundle, ExifTool is in packages directory
+                if is_64bit:
+                    exiftool_path = os.path.join(base_path, 'packages', 'exiftool_win64', 'exiftool-13.34_64', 'exiftool(-k).exe')
+                else:
+                    exiftool_path = os.path.join(base_path, 'packages', 'exiftool_win32', 'exiftool-13.34_32', 'exiftool(-k).exe')
             else:
-                exiftool_path = os.path.join(base_path, 'exiftool_win32', 'exiftool-13.34_32', 'exiftool(-k).exe')
-                print(f"Detected 32-bit Windows, looking for: {exiftool_path}")
+                # In development mode, use local packages directory
+                if is_64bit:
+                    exiftool_path = os.path.join(base_path, 'packages', 'exiftool_win64', 'exiftool-13.34_64', 'exiftool(-k).exe')
+                else:
+                    exiftool_path = os.path.join(base_path, 'packages', 'exiftool_win32', 'exiftool-13.34_32', 'exiftool(-k).exe')
+            print(f"Detected Windows, looking for: {exiftool_path}")
         
         elif system == 'darwin':  # macOS
             # For Mac, we'll use the Perl version from Image-ExifTool
-            exiftool_path = os.path.join(base_path, 'Image-ExifTool-13.34', 'exiftool')
+            if is_bundled:
+                # In PyInstaller bundle, ExifTool is bundled at the root level
+                exiftool_path = os.path.join(base_path, 'packages', 'Image-ExifTool-13.34', 'exiftool')
+            else:
+                # In development mode, use local packages directory
+                exiftool_path = os.path.join(base_path, 'packages', 'Image-ExifTool-13.34', 'exiftool')
             print(f"Detected macOS, looking for: {exiftool_path}")
         
         elif system == 'linux':
             # For Linux, try the Perl version or system installation
-            exiftool_path = os.path.join(base_path, 'Image-ExifTool-13.34', 'exiftool')
+            if is_bundled:
+                exiftool_path = os.path.join(base_path, 'packages', 'Image-ExifTool-13.34', 'exiftool')
+            else:
+                exiftool_path = os.path.join(base_path, 'packages', 'Image-ExifTool-13.34', 'exiftool')
             print(f"Detected Linux, looking for: {exiftool_path}")
         
         else:
@@ -93,9 +116,10 @@ try:
             return None
         
         if os.path.exists(exiftool_path):
+            print(f"[DEBUG] ExifTool found at: {exiftool_path}")
             return exiftool_path
         else:
-            print(f"ExifTool executable not found at: {exiftool_path}")
+            print(f"[DEBUG] ExifTool executable not found at: {exiftool_path}")
             return None
     
     # Try to find local ExifTool installation

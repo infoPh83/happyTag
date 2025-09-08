@@ -18,6 +18,8 @@ a = Analysis(
         ('utilities/', 'utilities/'),
         # ExifTool Perl library files (data, not executable)
         ('packages/Image-ExifTool-13.34/lib/', 'packages/Image-ExifTool-13.34/lib/'),
+        # ExifTool Python module
+        ('.venv/lib/python3.13/site-packages/exiftool/', 'exiftool/'),
     ],
     hiddenimports=[
         'PyQt5.QtCore',
@@ -28,6 +30,8 @@ a = Analysis(
         'subprocess',
         'pickle',
         'pathlib',
+        'exiftool',
+        'PyExifTool',
     ],
     hookspath=[],
     hooksconfig={},

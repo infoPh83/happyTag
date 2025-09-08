@@ -8,14 +8,16 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[
-        # ExifTool executable for Windows (requires execute permissions)
+        # ExifTool executables for Windows (both 32-bit and 64-bit)
         ('packages/exiftool_win64/exiftool-13.34_64/exiftool(-k).exe', 'packages/exiftool_win64/exiftool-13.34_64'),
+        ('packages/exiftool_win32/exiftool-13.34_32/exiftool(-k).exe', 'packages/exiftool_win32/exiftool-13.34_32'),
     ],
     datas=[
         ('ui', 'ui'),
         ('utilities', 'utilities'),
-        # ExifTool support files (data, not executable)
-        ('packages/exiftool_win64/exiftool-13.34_64/exiftool_files', 'packages/exiftool_win64/exiftool-13.34_64/exiftool_files')
+        # ExifTool support files for both architectures
+        ('packages/exiftool_win64/exiftool-13.34_64/exiftool_files', 'packages/exiftool_win64/exiftool-13.34_64/exiftool_files'),
+        ('packages/exiftool_win32/exiftool-13.34_32/exiftool_files', 'packages/exiftool_win32/exiftool-13.34_32/exiftool_files'),
     ],
     hiddenimports=[],
     hookspath=[],
