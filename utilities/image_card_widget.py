@@ -48,10 +48,6 @@ class ImageCardWidget(QWidget):
         self.image_label = None
         self.text_edit = None
         self.container_frame = None
-        self.filename_label = None  # New filename overlay label
-        
-        # Filename label styling constants
-        self.filename_margin = 4   # Margin from edges (increased for better spacing)
         
         # Configuration
         self.image_margin = 5
@@ -107,24 +103,6 @@ class ImageCardWidget(QWidget):
         self.image_label.setMinimumSize(0, 0)
         self.image_label.setMaximumSize(16777215, 16777215)
         container_layout.addWidget(self.image_label)
-        
-        # Create filename overlay label
-        self.filename_label = QLabel(self.image_label)
-        self.filename_label.setStyleSheet("""
-            QLabel {
-                background-color: rgba(0, 0, 0, 127);  /* 50% transparency */
-                color: white;
-                padding: 3px 6px;
-                border-radius: 3px;
-                font-size: 9px;
-                font-weight: bold;
-            }
-        """)
-        self.filename_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        self.filename_label.setWordWrap(True)  # Enable word wrapping for multi-line support
-        # Limit filename label to maximum 25% of image height to avoid covering too much
-        self.filename_max_height_ratio = 0.25  
-        self.filename_label.hide()  # Hide until image is loaded and positioned
         
         # Text edit for tags/metadata
         self.text_edit = QTextEdit()
@@ -190,9 +168,6 @@ class ImageCardWidget(QWidget):
             self.image_label.setFixedSize(scaled_pixmap.size())
             print(f"[DEBUG] Set image label size to: {scaled_pixmap.width()}x{scaled_pixmap.height()}")
             
-            # Update filename label after image is loaded
-            self._update_filename_label()
-            
             # After image is loaded, calculate and set minimum height to prevent overlapping
             QTimer.singleShot(50, lambda: self._safe_minimum_height_calculation())
             
@@ -226,77 +201,6 @@ class ImageCardWidget(QWidget):
                 font-size: 10px;
             }
         """)
-        
-        # Hide filename label for error images
-        if self.filename_label:
-            self.filename_label.hide()
-    
-    def _update_filename_label(self):
-        """Update the filename label with proper positioning and reverse truncation"""
-        if not self.filename_label or not self.image_label:
-            return
-            
-        # Get just the filename with extension (not the full path)
-        filename = os.path.basename(self.file_path)
-        
-        # Get the current image label size
-        image_width = self.image_label.width()
-        available_width = image_width - (2 * self.filename_margin)
-        
-        # Ensure we have a reasonable minimum width
-        label_width = max(available_width, 60)
-        
-        # Set the exact width for the filename label (use full available width)
-        self.filename_label.setFixedWidth(label_width)
-        
-        # Calculate font metrics for truncation
-        font_metrics = self.filename_label.fontMetrics()
-        
-        # Check if filename fits within available width using the actual label width
-        text_width = font_metrics.horizontalAdvance(filename)
-        
-        # Set the text (with truncation if needed)
-        if text_width > label_width - 12:  # Account for padding (6px * 2)
-            # Use REVERSE truncation (ElideLeft) to show the end of filename including extension
-            effective_width = label_width - 12  # Subtract padding
-            truncated_filename = font_metrics.elidedText(filename, Qt.ElideLeft, effective_width)
-            self.filename_label.setText(truncated_filename)
-            if DEBUG_LAYOUT:
-                print(f"[DEBUG] Applied reverse truncation: '{truncated_filename}' (width: {effective_width})")
-        else:
-            # Filename fits, use as-is
-            self.filename_label.setText(filename)
-            if DEBUG_LAYOUT:
-                print(f"[DEBUG] Full filename fits: '{filename}'")
-        
-        # Position the label at top-left of the image
-        self.filename_label.move(self.filename_margin, self.filename_margin)
-        
-        # Let the label determine its natural height based on content and word wrapping
-        # but constrain the height to not cover too much of the image
-        max_height = min(
-            self.image_label.height() - (2 * self.filename_margin),
-            int(self.image_label.height() * self.filename_max_height_ratio)
-        )
-        
-        # Set the height constraint and let Qt handle the text layout
-        self.filename_label.setMaximumHeight(max_height)
-        self.filename_label.adjustSize()  # Let it size vertically based on content
-        
-        # Now fix the width again (adjustSize might have changed it)
-        self.filename_label.setFixedWidth(label_width)
-        
-        # Final height adjustment if needed
-        if self.filename_label.height() > max_height:
-            self.filename_label.setFixedHeight(max_height)
-        
-        # Show the label now that it's positioned
-        self.filename_label.show()
-        
-        if DEBUG_LAYOUT:
-            print(f"[DEBUG] Filename label for {filename}: positioned at ({self.filename_margin}, {self.filename_margin}), "
-                  f"size {self.filename_label.width()}x{self.filename_label.height()}, "
-                  f"available_width={available_width}, label_width={label_width}, text_width={text_width}, max_height={max_height}")
     
     def _setup_connections(self):
         """Setup signal connections"""
@@ -484,6 +388,18 @@ class ImageCardWidget(QWidget):
         """Get current selection state"""
         return self.is_selected
     
+    def set_cloudinary_status(self, is_on_cloudinary):
+        """Set Cloudinary sync status and update visual style"""
+        if self.is_on_cloudinary == is_on_cloudinary:
+            return
+            
+        self.is_on_cloudinary = is_on_cloudinary
+        self._update_visual_style()
+        
+    def get_cloudinary_status(self):
+        """Get current Cloudinary sync status"""
+        return self.is_on_cloudinary
+    
     def _update_visual_style(self):
         """Update visual style based on selection state and Cloudinary sync status"""
         # Determine background color and border based on both states
@@ -523,6 +439,10 @@ class ImageCardWidget(QWidget):
             }}
         """)
     
+    def _update_selection_style(self):
+        """Legacy method - redirects to _update_visual_style for backward compatibility"""
+        self._update_visual_style()
+    
     def set_max_width(self, width):
         """Update the target width for image scaling"""
         if width != self.max_width:
@@ -541,29 +461,16 @@ class ImageCardWidget(QWidget):
         """Get just the filename"""
         return Path(self.file_path).name
     
-    def set_cloudinary_status(self, is_on_cloudinary):
-        """Set Cloudinary sync status and update visual style"""
-        if self.is_on_cloudinary == is_on_cloudinary:
-            return
-            
-        self.is_on_cloudinary = is_on_cloudinary
-        self._update_visual_style()
-        
-    def get_cloudinary_status(self):
-        """Get current Cloudinary sync status"""
-        return self.is_on_cloudinary
-    
     def refresh_image(self):
         """Reload the image from disk"""
         self._load_image()
     
     def resizeEvent(self, event):
-        """Handle widget resize - update filename label positioning"""
+        """Handle widget resize - disabled to prevent stretching issues"""
         super().resizeEvent(event)
-        # Update filename label when widget size changes
-        if hasattr(self, 'filename_label') and self.filename_label:
-            # Use a timer to avoid multiple rapid updates during resize
-            QTimer.singleShot(50, self._update_filename_label)
+        # Disabled automatic image reloading on resize to prevent stretching
+        # Images will be resized when the grid layout changes instead
+        pass
     
     # Event handlers
     

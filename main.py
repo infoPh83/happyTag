@@ -1830,56 +1830,8 @@ class MainWindow(QMainWindow):
             # Start complete integrated processing (new approach)
             self.start_integrated_processing(files, "files")
 
-    def start_integrated_processing(self, files, source_type):
-        """
-        Start the new integrated processing that combines all operations:
-        - Cloudinary operations (if connected)
-        - Preview creation  
-        - Tag extraction
-        All in a single pass through the images
-        """
-        try:
-            # Filter to only supported image files
-            image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.xmp', '.tiff', '.tif', '.webp'}
-            valid_files = []
-            
-            for file_path in files:
-                if os.path.isfile(file_path):
-                    _, ext = os.path.splitext(file_path.lower())
-                    if ext in image_extensions:
-                        valid_files.append(file_path)
-                    else:
-                        # Track unsupported files
-                        if not hasattr(self, 'unsupported_files'):
-                            self.unsupported_files = []
-                        self.unsupported_files.append(file_path)
-            
-            print(f"[DEBUG] Starting integrated processing for {len(valid_files)} valid images (source: {source_type})")
-            
-            if valid_files:
-                # Start the integrated processing
-                self.process_images_integrated(valid_files)
-            else:
-                print("No valid image files found")
-                self.hide_progress()
-                if hasattr(self, 'unsupported_files') and self.unsupported_files:
-                    QTimer.singleShot(500, self.show_unsupported_files)
-                    
-        except Exception as e:
-            print(f"Error starting integrated processing: {e}")
-            # Fallback to old method
-            self.fallback_to_original_loading(files)
-
     def start_image_assessment(self, files, source_type):
-        """
-        LEGACY METHOD - redirects to new integrated processing
-        Start the assessment phase for the given files
-        """
-        print(f"[DEBUG] Redirecting to integrated processing (legacy assessment called)")
-        self.start_integrated_processing(files, source_type)
-        return
-        
-        # OLD CODE BELOW - kept for reference
+        """Start the assessment phase for the given files"""
         try:
             # Show progress bar with assessment message
             assessment_message = f"Assessing {len(files)} images..."
@@ -1985,6 +1937,124 @@ class MainWindow(QMainWindow):
                 self.start_integrated_processing(image_files, "folder")
             else:
                 print("No image files found in the selected folder")
+
+    def start_integrated_processing(self, image_files, source):
+        """Start integrated processing combining Cloudinary assessment with image loading"""
+        print(f"[DEBUG] Starting integrated processing for {len(image_files)} valid images (source: {source})")
+        
+        # Determine if Cloudinary processing should be enabled
+        print(f"[DEBUG] Cloudinary connection check:")
+        print(f"  - self.cloudinary_connected: {getattr(self, 'cloudinary_connected', 'NOT SET')}")
+        print(f"  - has cloudinary_updater attr: {hasattr(self, 'cloudinary_updater')}")
+        print(f"  - cloudinary_updater value: {getattr(self, 'cloudinary_updater', 'NOT SET')}")
+        
+        cloudinary_enabled = self.cloudinary_connected and hasattr(self, 'cloudinary_updater') and self.cloudinary_updater
+        
+        if cloudinary_enabled:
+            print(f"[DEBUG] ✅ Cloudinary enabled - will process with cloud operations")
+        else:
+            print(f"[DEBUG] ❌ Cloudinary disabled - processing locally only")
+        
+        # Show progress
+        self.show_progress(len(image_files), "Processing images...")
+        
+        # Process each image
+        processed_data = []
+        for i, file_path in enumerate(image_files):
+            try:
+                print(f"[DEBUG] Processing image {i+1}/{len(image_files)}: {os.path.basename(file_path)}")
+                
+                # Update progress
+                self.update_progress(i + 1)
+                QApplication.processEvents()
+                
+                # Cloudinary assessment if enabled  
+                if cloudinary_enabled and self.cloudinary_updater:
+                    try:
+                        # Create settings dialog instance for configuration access
+                        from utilities.settings_dialog import SettingsDialog
+                        settings_dialog = SettingsDialog(self)
+                        
+                        # Process single image with full Cloudinary assessment
+                        success, result_data, optimized_file = self.cloudinary_updater.process_single_image_complete(
+                            file_path, settings_dialog
+                        )
+                        
+                        if success:
+                            if result_data.get('already_synced'):
+                                print(f"[DEBUG] {os.path.basename(file_path)} - Already synced with Cloudinary")
+                            elif result_data.get('uploaded'):
+                                print(f"[DEBUG] {os.path.basename(file_path)} - Processed and uploaded to Cloudinary")
+                            else:
+                                print(f"[DEBUG] {os.path.basename(file_path)} - Assessment complete, added to database")
+                        else:
+                            print(f"[DEBUG] {os.path.basename(file_path)} - Assessment failed: {result_data.get('error', 'Unknown error')}")
+                            
+                    except Exception as e:
+                        print(f"[DEBUG] Cloudinary assessment failed for {os.path.basename(file_path)}: {e}")
+                
+                # Create preview and extract metadata
+                try:
+                    preview = self.create_preview(file_path)
+                    if preview:
+                        year, keywords = self.get_image_metadata(file_path)
+                        
+                        # Store original keywords for change detection
+                        self.original_keywords[file_path] = keywords.copy()
+                        
+                        # Prepare image data
+                        image_data = {
+                            'file_path': file_path,
+                            'preview': preview,
+                            'year': year,
+                            'keywords': keywords
+                        }
+                        processed_data.append(image_data)
+                        
+                        print(f"[DEBUG] {os.path.basename(file_path)} - Complete processing finished")
+                    
+                except Exception as e:
+                    print(f"[WARNING] Metadata extraction failed for {os.path.basename(file_path)}: {e}")
+                    # Still add the image even if metadata fails
+                    try:
+                        preview = self.create_preview(file_path)
+                        if preview:
+                            image_data = {
+                                'file_path': file_path,
+                                'preview': preview,
+                                'year': None,
+                                'keywords': []
+                            }
+                            processed_data.append(image_data)
+                    except Exception as preview_e:
+                        print(f"[ERROR] Failed to process {os.path.basename(file_path)}: {preview_e}")
+                        
+            except Exception as e:
+                print(f"[ERROR] Complete failure processing {os.path.basename(file_path)}: {e}")
+        
+        self.hide_progress()
+        
+        print(f"[DEBUG] Integrated processing complete: {len(processed_data)}/{len(image_files)} images processed")
+        
+        # Store processed images
+        self.image_files = [data['file_path'] for data in processed_data]
+        self.image_previews = {data['file_path']: data['preview'] for data in processed_data}
+        self.image_metadata = {data['file_path']: {'year': data['year'], 'keywords': data['keywords']} 
+                             for data in processed_data}
+        
+        # Update layout with processed data
+        if processed_data:
+            self.update_layout()
+            
+            # Update Cloudinary status for loaded images (this will set the visual indicators)
+            # Re-check the same condition as before since cloudinary_enabled is out of scope
+            if self.cloudinary_connected and hasattr(self, 'cloudinary_updater') and self.cloudinary_updater:
+                print("[DEBUG] Updating Cloudinary status for loaded image widgets...")
+                self.update_cloudinary_status_for_loaded_images()
+            else:
+                print("[DEBUG] Skipping Cloudinary status update - Cloudinary not enabled")
+        else:
+            print("No images were successfully processed")
 
     def show_tag_manager(self):
         """Create and show the tag manager dialog"""
@@ -2123,13 +2193,13 @@ class MainWindow(QMainWindow):
                     if not file_path_obj.exists():
                         continue
                     
-                    # Get or calculate resized size (simplified check)
-                    # For a proper check, we'd need the exact resized size used by Cloudinary
-                    # For now, use original file size as approximation
+                    # Use a simple approach: check if file appears to be synced
+                    # For now, use a basic check - this can be enhanced later
                     original_size = file_path_obj.stat().st_size
                     
-                    # Check if file is synced using CloudinaryUpdater method
-                    is_synced = self.cloudinary_updater._is_file_synced_single(file_path_obj, original_size)
+                    # Simple heuristic: check if file is in the cloudinary files list
+                    filename = file_path_obj.name
+                    is_synced = any(filename in str(cf) for cf in cloudinary_files) if cloudinary_files else False
                     
                     # Update widget Cloudinary status
                     widget.set_cloudinary_status(is_synced)
@@ -2190,133 +2260,20 @@ class MainWindow(QMainWindow):
             print(f"[DEBUG] Basic assessment complete: {len(valid_files)} valid files")
         
         if valid_files:
-            # Use the new integrated processing approach
-            self.process_images_integrated(valid_files)
+            # Update progress message for loading phase
+            loading_message = f"Loading {len(valid_files)} assessed images..."
+            self.update_progress_label(loading_message)
+            
+            # Process assessed files with normal preview creation
+            self.process_assessed_images(valid_files)
         else:
             # No files to process, finish up
             self.hide_progress()
             if hasattr(self, 'unsupported_files') and self.unsupported_files:
                 QTimer.singleShot(500, self.show_unsupported_files)
     
-    def process_images_integrated(self, image_files):
-        """
-        Integrated image processing - combines Cloudinary operations with preview creation
-        and tag extraction in a single pass through the images.
-        Cloudinary operations only occur if connected.
-        """
-        total_files = len(image_files)
-        processed_count = 0
-        successfully_loaded_files = []
-        
-        # Show single progress bar for complete processing
-        self.show_progress(total_files, f"Processing {total_files} images...")
-        
-        # Initialize Cloudinary if connected
-        cloudinary_enabled = self.cloudinary_connected and self.cloudinary_updater is not None
-        if cloudinary_enabled:
-            print(f"[DEBUG] Cloudinary enabled - will process with cloud operations")
-        else:
-            print(f"[DEBUG] Cloudinary disabled - processing locally only")
-        
-        # Process each image completely before moving to the next
-        for file_path in image_files:
-            try:
-                processed_count += 1
-                print(f"[DEBUG] Processing image {processed_count}/{total_files}: {os.path.basename(file_path)}")
-                
-                # Update progress
-                self.update_progress(processed_count)
-                self.update_progress_label(f"Processing {os.path.basename(file_path)} ({processed_count}/{total_files})")
-                
-                # Step 1: Cloudinary processing (only if connected)
-                optimized_file_path = None
-                cloudinary_result = None
-                
-                if cloudinary_enabled:
-                    try:
-                        # Use the single image processing method from cloudinary_updater
-                        from utilities.settings_dialog import SettingsDialog
-                        settings_dialog = SettingsDialog(self)
-                        
-                        success, cloudinary_result, optimized_file_path = self.cloudinary_updater.process_single_image_assessment(
-                            file_path, settings_dialog
-                        )
-                        
-                        if success and cloudinary_result:
-                            if cloudinary_result.get('already_synced'):
-                                print(f"[DEBUG] {os.path.basename(file_path)} - Already synced with Cloudinary")
-                            elif cloudinary_result.get('assessment_complete'):
-                                print(f"[DEBUG] {os.path.basename(file_path)} - Assessment complete, added to database")
-                            elif cloudinary_result.get('processed'):
-                                print(f"[DEBUG] {os.path.basename(file_path)} - Processed (resized) for assessment")
-                            elif cloudinary_result.get('in_database'):
-                                print(f"[DEBUG] {os.path.basename(file_path)} - Found in Cloudinary database")
-                        else:
-                            print(f"[DEBUG] {os.path.basename(file_path)} - Cloudinary assessment skipped")
-                            
-                    except Exception as e:
-                        print(f"[WARNING] Cloudinary processing failed for {os.path.basename(file_path)}: {e}")
-                        # Continue with local processing even if Cloudinary fails
-                
-                # Step 2: Create preview (use optimized file if available, otherwise original)
-                preview_source = optimized_file_path if optimized_file_path and os.path.exists(optimized_file_path) else file_path
-                preview = self.create_preview(preview_source)
-                
-                if preview:
-                    # Store preview under original file path for UI consistency
-                    self.image_previews[file_path] = preview
-                    successfully_loaded_files.append(file_path)
-                    
-                    # Step 3: Extract and store metadata and tags
-                    try:
-                        metadata = self.extract_metadata(file_path)  # Always use original file for metadata
-                        if metadata:
-                            self.image_metadata[file_path] = metadata
-                            print(f"[DEBUG] {os.path.basename(file_path)} - Metadata extracted")
-                        else:
-                            print(f"[DEBUG] {os.path.basename(file_path)} - No metadata found")
-                    except Exception as e:
-                        print(f"[WARNING] Metadata extraction failed for {os.path.basename(file_path)}: {e}")
-                        
-                    print(f"[DEBUG] {os.path.basename(file_path)} - Complete processing finished")
-                else:
-                    print(f"[WARNING] {os.path.basename(file_path)} - Preview creation failed")
-                
-                # Process events to keep UI responsive
-                QApplication.processEvents()
-                
-            except Exception as e:
-                print(f"[ERROR] Failed to process {os.path.basename(file_path)}: {e}")
-                continue
-        
-        # Finalize processing
-        print(f"[DEBUG] Integrated processing complete: {len(successfully_loaded_files)}/{total_files} images processed")
-        
-        # Set image_files to only the successfully loaded files
-        self.image_files = successfully_loaded_files
-        
-        # Update layout with processed images
-        self.update_layout()
-        self.hide_progress()
-        
-        # Show any metadata errors encountered
-        if hasattr(self, 'metadata_errors') and self.metadata_errors:
-            QTimer.singleShot(500, self.show_metadata_errors)
-            
-        # Show any unsupported files encountered  
-        if hasattr(self, 'unsupported_files') and self.unsupported_files:
-            QTimer.singleShot(1000, self.show_unsupported_files)
-    
     def process_assessed_images(self, assessed_files):
-        """
-        LEGACY METHOD - kept for compatibility
-        Process the assessed images to create previews and load them into the UI
-        """
-        # Redirect to new integrated processing
-        self.process_images_integrated(assessed_files)
-        return
-        
-        # OLD CODE BELOW - kept for reference but not used
+        """Process the assessed images to create previews and load them into the UI"""
         batch_size = 10
         processed_count = 0
         successfully_loaded_files = []

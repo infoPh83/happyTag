@@ -10,9 +10,6 @@ from PyQt5.QtGui import QMouseEvent
 from .image_card_widget import ImageCardWidget
 from .tag_widgets import FlowLayout
 
-# Debug control flag
-DEBUG_FLOW = False  # Set to True for flow layout debugging
-
 # Debug control - set to False to reduce console output
 DEBUG_FLOW = False  # Set to True for flow layout debugging
 
