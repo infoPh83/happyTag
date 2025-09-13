@@ -474,110 +474,6 @@ class CloudinaryUpdater(QObject):
         upload_data = [uploaded_count, len(error_files) + resize_error_count]
         self.upload_complete_signal.emit(upload_data)
 
-    def process_single_image_complete(self, file_path, settings_dialog=None):
-        """
-        Process a single image completely - combining assessment, resizing, and Cloudinary operations
-        This merges the assessment and upload phases for a single image
-        Returns: (success: bool, result_data: dict, optimized_file_path: str or None)
-        """
-        try:
-            file_path_obj = Path(file_path)
-            
-            # Validate the file
-            if not file_path_obj.exists() or not file_path_obj.is_file():
-                return False, {'error': 'File does not exist'}, None
-            
-            if file_path_obj.suffix.lower() not in VALID_EXTENSIONS:
-                return False, {'error': 'Unsupported file format'}, None
-            
-            # Initialize if needed
-            if not hasattr(self, 'database') or not self.database:
-                self._load_database_and_cloudinary_data(settings_dialog)
-            
-            # Get file details
-            original_size = file_path_obj.stat().st_size
-            filetype = file_path_obj.suffix.lower()
-            db_key = (original_size, filetype)
-            
-            result_data = {
-                'original_file': str(file_path),
-                'original_size': original_size,
-                'filetype': filetype,
-                'processed': False,
-                'uploaded': False,
-                'already_synced': False,
-                'resized_size': None,
-                'cloudinary_url': None,
-                'error': None
-            }
-            
-            # Check if already in database (already synced)
-            if hasattr(self, 'database') and self.database and db_key in self.database:
-                result_data['already_synced'] = True
-                result_data['cloudinary_url'] = self.database[db_key].get('url', '')
-                return True, result_data, None
-            
-            # Check if needs resizing (use maxFileSize if available, otherwise 10MB default)
-            max_size = getattr(self, 'maxFileSize', 10 * 1024 * 1024)  # 10MB default
-            optimized_file = None
-            if original_size > max_size:
-                try:
-                    # Create temp directory for resized image
-                    import tempfile
-                    temp_dir = Path(tempfile.gettempdir()) / f"cloudinary_resize_{os.getpid()}"
-                    temp_dir.mkdir(exist_ok=True)
-                    resized_file = temp_dir / file_path_obj.name
-                    
-                    # Resize the image
-                    with Image.open(file_path) as img:
-                        # Calculate new dimensions maintaining aspect ratio
-                        img.thumbnail((MAX_DIMENSION, MAX_DIMENSION), Image.Resampling.LANCZOS)
-                        
-                        # Save resized image
-                        if filetype.lower() == '.jpg' or filetype.lower() == '.jpeg':
-                            img.save(resized_file, 'JPEG', quality=85, optimize=True)
-                        elif filetype.lower() == '.png':
-                            img.save(resized_file, 'PNG', optimize=True)
-                        else:
-                            img.save(resized_file, optimize=True)
-                    
-                    optimized_file = str(resized_file)
-                    result_data['resized_size'] = resized_file.stat().st_size
-                    result_data['processed'] = True
-                    
-                except Exception as e:
-                    result_data['error'] = f'Resize failed: {str(e)}'
-                    return False, result_data, None
-            
-            # For now, just return success without actual upload (to avoid API calls during testing)
-            # In production, uncomment the upload code below
-            result_data['uploaded'] = True
-            result_data['cloudinary_url'] = f"https://example.cloudinary.com/{file_path_obj.name}"
-            
-            # Initialize database if needed
-            if not hasattr(self, 'database'):
-                self.database = {}
-            
-            # Add to database
-            self.database[db_key] = {
-                'url': result_data['cloudinary_url'],
-                'public_id': file_path_obj.stem,
-                'upload_date': datetime.now().isoformat()
-            }
-            
-            # Clean up temp file if created
-            if optimized_file:
-                try:
-                    Path(optimized_file).unlink()
-                    Path(optimized_file).parent.rmdir()
-                except:
-                    pass
-            
-            return True, result_data, optimized_file
-                
-        except Exception as e:
-            return False, {'error': f'Processing failed: {str(e)}'}, None
-    
     def _load_database_and_cloudinary_data(self, settings_dialog=None):
         """Load database and initialize Cloudinary connection if needed"""
         try:
@@ -659,17 +555,29 @@ def get_cloudinary_status(cloudinary_updater_instance):
         print(f"Transformations Credits: {transformationsCredits}")
         print(f"Total Used Credits: {usedCredits}")
         print(f"Remaining Credits: {remainingCredits}")
+        
+        print(f"\n[DEBUG] Percentage calculations:")
+        print(f"  CREDITS_MAX: {CREDITS_MAX}")
+        
+        # Calculate the actual percentages
+        storage_percentage = (storageCredits / CREDITS_MAX) * 100
+        transformations_percentage = (transformationsCredits / CREDITS_MAX) * 100
+        bandwidth_percentage = (bandwidthCredits / CREDITS_MAX) * 100
+        
+        print(f"  Storage %: {storage_percentage:.2f}%")
+        print(f"  Transformations %: {transformations_percentage:.2f}%")
+        print(f"  Bandwidth %: {bandwidth_percentage:.2f}%")
 
         # Return status data in expected format
-        return [
+        return_data = [
             True,  # Success flag
             transformationsCount,  # Transformations usage
             storageCount,  # Storage usage (formatted)
             bandwidthCount,  # Bandwidth usage (formatted) 
             num_files,  # Number of files
-            transformationsCredits,  # Transformation credits %
-            storageCredits,  # Storage credits %
-            bandwidthCredits,  # Bandwidth credits %
+            transformations_percentage,  # Transformation credits % - FIXED: Now actually percentage!
+            storage_percentage,  # Storage credits % - FIXED: Now actually percentage!
+            bandwidth_percentage,  # Bandwidth credits % - FIXED: Now actually percentage!
             storageCredits,  # Storage credits value
             transformationsCredits,  # Transformations credits value
             bandwidthCredits,  # Bandwidth credits value
@@ -677,6 +585,12 @@ def get_cloudinary_status(cloudinary_updater_instance):
             average_file_size,  # Average file size
             remainingStorage  # Remaining storage
         ]
+        
+        print(f"\n[DEBUG] Return data array:")
+        for i, item in enumerate(return_data):
+            print(f"  [{i}]: {item} (type: {type(item)})")
+        
+        return return_data
         
     except Exception as e:
         print(f"Error in get_cloudinary_status: {e}")
@@ -696,3 +610,72 @@ def convert_to_gb(size):
     """Convert bytes to GB"""
     return size / (1024 * 1024 * 1024)
 
+
+# Missing function definitions needed for compilation
+def load_csv_database(csv_path):
+    """Load the CSV database into a dictionary and validate its structure."""
+    database = {}
+    if csv_path.exists():
+        with open(csv_path, mode='r', newline='') as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                try:
+                    key = (int(row['original_size']), row['filetype'])
+                    database[key] = {
+                        'file_name': row['file_name'],
+                        'original_size': int(row['original_size']),
+                        'resized_size': int(row['resized_size']) if row['resized_size'] else None,
+                        'filetype': row['filetype']
+                    }
+                except KeyError as e:
+                    print(f"Missing field in CSV row: {e}. Row: {row}")
+                except ValueError as e:
+                    print(f"Invalid value in CSV row: {e}. Row: {row}")
+    return database
+
+def update_csv_database(csv_path, database):
+    """Update the CSV database with new entries."""
+    print(f"Updating database with {len(database)} entries")
+    with open(csv_path, mode='w', newline='') as file:
+        fieldnames = ['file_name', 'original_size', 'resized_size', 'filetype']
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        for data in database.values():
+            writer.writerow(data)
+
+def get_local_temp_dir():
+    """Returns a writable temporary subdirectory."""
+    temp_dir = Path(tempfile.gettempdir()) / "my_temp_folder"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    return temp_dir
+
+def list_all_files():
+    """List all files from Cloudinary."""
+    all_files = []
+    next_cursor = None
+    while True:
+        resources = cloudinary.api.resources(
+            type="upload", max_results=100, next_cursor=next_cursor
+        )
+        all_files.extend(resources['resources'])
+        next_cursor = resources.get('next_cursor')
+        if not next_cursor:
+            break
+    return all_files
+
+def assessment_phase(self, local_directory, database, cloudinary_files, resized_dir, sync_files_mode):
+    """Placeholder assessment phase function - unused in new workflow."""
+    return [], [], 0, 0
+
+def upload_phase(self, files_to_upload, files_to_resize, temp_dir_path, local_directory, database):
+    """Placeholder upload phase function - unused in new workflow."""
+    return 0, [], []
+
+def get_cloudinary_credits(self):
+    """Get Cloudinary credit information."""
+    try:
+        result = usage()
+        return result
+    except Exception as e:
+        print(f"Failed to get Cloudinary credits: {e}")
+        return None

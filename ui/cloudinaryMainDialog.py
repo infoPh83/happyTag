@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Form implementation generated from reading ui file 'cloudinaryMainDialog.ui'
+# Form implementation generated from reading ui file 'd:\Python playfolder\happyTag\ui\cloudinaryMainDialog.ui'
 #
 # Created by: PyQt5 UI code generator 5.15.11
 #
@@ -25,14 +25,14 @@ class Ui_CloudinaryMainDialog(object):
         self.settingsButton = QtWidgets.QPushButton(CloudinaryMainDialog)
         self.settingsButton.setText("")
         icon = QtGui.QIcon()
-        icon.addPixmap(QtGui.QPixmap("settings_icon.png"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
-        icon.addPixmap(QtGui.QPixmap("settings_icon.png"), QtGui.QIcon.Normal, QtGui.QIcon.On)
-        icon.addPixmap(QtGui.QPixmap("settings_icon.png"), QtGui.QIcon.Disabled, QtGui.QIcon.Off)
-        icon.addPixmap(QtGui.QPixmap("settings_icon.png"), QtGui.QIcon.Disabled, QtGui.QIcon.On)
-        icon.addPixmap(QtGui.QPixmap("settings_icon.png"), QtGui.QIcon.Active, QtGui.QIcon.Off)
-        icon.addPixmap(QtGui.QPixmap("settings_icon.png"), QtGui.QIcon.Active, QtGui.QIcon.On)
-        icon.addPixmap(QtGui.QPixmap("settings_icon.png"), QtGui.QIcon.Selected, QtGui.QIcon.Off)
-        icon.addPixmap(QtGui.QPixmap("settings_icon.png"), QtGui.QIcon.Selected, QtGui.QIcon.On)
+        icon.addPixmap(QtGui.QPixmap("d:\\Python playfolder\\happyTag\\ui\\settings_icon.png"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        icon.addPixmap(QtGui.QPixmap("d:\\Python playfolder\\happyTag\\ui\\settings_icon.png"), QtGui.QIcon.Normal, QtGui.QIcon.On)
+        icon.addPixmap(QtGui.QPixmap("d:\\Python playfolder\\happyTag\\ui\\settings_icon.png"), QtGui.QIcon.Disabled, QtGui.QIcon.Off)
+        icon.addPixmap(QtGui.QPixmap("d:\\Python playfolder\\happyTag\\ui\\settings_icon.png"), QtGui.QIcon.Disabled, QtGui.QIcon.On)
+        icon.addPixmap(QtGui.QPixmap("d:\\Python playfolder\\happyTag\\ui\\settings_icon.png"), QtGui.QIcon.Active, QtGui.QIcon.Off)
+        icon.addPixmap(QtGui.QPixmap("d:\\Python playfolder\\happyTag\\ui\\settings_icon.png"), QtGui.QIcon.Active, QtGui.QIcon.On)
+        icon.addPixmap(QtGui.QPixmap("d:\\Python playfolder\\happyTag\\ui\\settings_icon.png"), QtGui.QIcon.Selected, QtGui.QIcon.Off)
+        icon.addPixmap(QtGui.QPixmap("d:\\Python playfolder\\happyTag\\ui\\settings_icon.png"), QtGui.QIcon.Selected, QtGui.QIcon.On)
         self.settingsButton.setIcon(icon)
         self.settingsButton.setObjectName("settingsButton")
         self.horizontalLayout.addWidget(self.settingsButton)
@@ -304,4 +304,14 @@ class Ui_CloudinaryMainDialog(object):
         self.lab_nowMaxSize.setText(_translate("CloudinaryMainDialog", "lab_nowMaxSize"))
         self.lab_nowAverageSize.setText(_translate("CloudinaryMainDialog", "lab_nowAverageSize"))
         self.lab_nowImageCountAvailable.setText(_translate("CloudinaryMainDialog", "lab_nowImageCountAvailable"))
-from cloudinaryCreditsBar import CloudinaryCreditsBar
+from ui.cloudinaryCreditsBar import CloudinaryCreditsBar
+
+
+if __name__ == "__main__":
+    import sys
+    app = QtWidgets.QApplication(sys.argv)
+    CloudinaryMainDialog = QtWidgets.QDialog()
+    ui = Ui_CloudinaryMainDialog()
+    ui.setupUi(CloudinaryMainDialog)
+    CloudinaryMainDialog.show()
+    sys.exit(app.exec_())

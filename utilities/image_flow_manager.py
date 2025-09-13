@@ -56,8 +56,8 @@ class ImageFlowManager(QWidget):
         self.flow_widget = QWidget()
         self.flow_layout = FlowLayout(self.flow_widget, margin=self.flow_margin, spacing=self.flow_spacing)
         
-        # Ensure the flow widget resizes properly
-        self.flow_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
+        # Ensure the flow widget resizes properly but doesn't expand unnecessarily
+        self.flow_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         
         if self.use_internal_scroll:
             # Create internal scroll area for standalone use
@@ -76,8 +76,8 @@ class ImageFlowManager(QWidget):
         
     def set_widget_width(self, width):
         """Set the width for all image widgets"""
-        self.widget_width = max(100, min(400, width))  # Constrain between 100-400px
-        print(f"[DEBUG] Setting widget width to {self.widget_width}px")
+        self.widget_width = max(100, width)  # Remove upper limit to support larger sizes
+        print(f"[DEBUG] Setting widget width to {self.widget_width}px (no upper limit)")
         
         # Update all existing widgets
         for widget in self.image_widgets.values():
@@ -118,6 +118,12 @@ class ImageFlowManager(QWidget):
         """Remove an image from the flow layout"""
         if file_path in self.image_widgets:
             widget = self.image_widgets[file_path]
+            # Cancel any pending timers before removing widget
+            if hasattr(widget, '_cancel_pending_timers'):
+                widget._cancel_pending_timers()
+            # Also call cleanup if available
+            if hasattr(widget, 'cleanup'):
+                widget.cleanup()
             self.flow_layout.removeWidget(widget)
             widget.setParent(None)
             del self.image_widgets[file_path]
@@ -137,9 +143,13 @@ class ImageFlowManager(QWidget):
         # Clear selection
         self.selected_files.clear()
         
-        # Remove all widgets
+        # Remove all widgets (remove_image will handle timer cancellation)
         for file_path in list(self.image_widgets.keys()):
             self.remove_image(file_path)
+        
+        # Force immediate garbage collection to ensure widgets are destroyed
+        import gc
+        gc.collect()
         
         # Emit selection change
         self.selection_changed.emit([])
@@ -159,7 +169,24 @@ class ImageFlowManager(QWidget):
         for widget in self.image_widgets.values():
             widget.set_max_width(self.widget_width)
         
+        # Debug information for scrolling issue
+        flow_size = self.flow_widget.size()
+        flow_hint = self.flow_widget.sizeHint()
+        flow_min = self.flow_widget.minimumSizeHint()
         print(f"[DEBUG] Flow layout updated - {len(self.image_widgets)} widgets")
+        print(f"[DEBUG] Flow widget size: {flow_size.width()}x{flow_size.height()}")
+        print(f"[DEBUG] Flow widget sizeHint: {flow_hint.width()}x{flow_hint.height()}")
+        print(f"[DEBUG] Flow widget minimumSizeHint: {flow_min.width()}x{flow_min.height()}")
+        
+        if hasattr(self, 'scroll_area') and self.scroll_area and self.scroll_area.viewport():
+            viewport_size = self.scroll_area.viewport().size()
+            print(f"[DEBUG] Scroll area viewport: {viewport_size.width()}x{viewport_size.height()}")
+        elif self.parent() and hasattr(self.parent(), 'size'):
+            parent_size = self.parent().size()
+            print(f"[DEBUG] Parent size: {parent_size.width()}x{parent_size.height()}")
+        
+        # Force correct document widths after layout update (for resize operations)
+        # QTimer.singleShot(100, self.force_all_document_widths)  # Test if still needed with QPlainTextEdit
     
     # Signal handlers
     def _on_selection_changed(self, file_path, is_selected):
@@ -217,20 +244,46 @@ class ImageFlowManager(QWidget):
         # Clear existing images
         self.clear_all()
         
+        # Add a small delay to ensure all widget cleanup is complete
+        QTimer.singleShot(50, lambda: self._load_images_after_cleanup(image_data_list))
+        
+    def _load_images_after_cleanup(self, image_data_list):
+        """Load images after cleanup delay"""
+        print(f"[DEBUG] ImageFlowManager: Starting delayed image load of {len(image_data_list)} images")
+        
+        # Temporarily disable layout updates to prevent premature size calculations
+        self.setUpdatesEnabled(False)
+        
         # Add each image - flow layout handles positioning automatically
         for image_data in image_data_list:
             file_path = image_data['file_path']
             tags = image_data.get('tags', '')
             metadata = image_data.get('metadata', {})
             preview_pixmap = image_data.get('preview', None)
-            
+
             # Add the image with preview pixmap
             self.add_image(file_path, tags=tags, metadata=metadata, preview_pixmap=preview_pixmap)
             
-        print(f"[DEBUG] ImageFlowManager: Successfully loaded {len(self.image_widgets)} images")
-        
-        # Update layout after loading all images (very lightweight)
+        # Re-enable updates and force a layout update
+        self.setUpdatesEnabled(True)
+        self.update()
+            
+        print(f"[DEBUG] ImageFlowManager: Successfully loaded {len(self.image_widgets)} images")        # Update layout after loading all images (very lightweight)
         self.update_layout()
+        
+        # QPlainTextEdit should handle width correctly without forcing
+        # Remove post-layout forcing to test if it's still needed
+        # self.force_all_document_widths()
+    
+    def force_all_document_widths(self):
+        """Force correct document widths for all widgets after layout is complete"""
+        print(f"[DEBUG] ImageFlowManager: Forcing document widths for {len(self.image_widgets)} widgets...")
+        
+        for file_path, widget in self.image_widgets.items():
+            if hasattr(widget, 'force_document_width_post_layout'):
+                widget.force_document_width_post_layout()
+        
+        print(f"[DEBUG] ImageFlowManager: Document width forcing complete")
     
     def eventFilter(self, obj, event):
         """Handle mouse events for rubber band selection and empty area clicks"""

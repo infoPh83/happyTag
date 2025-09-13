@@ -839,13 +839,25 @@ class MyApp(QDialog, Ui_CloudinaryMainDialog):
     def beginning(self, dataList):
         """Update the UI with Cloudinary status."""
 
-        # for field in dataList:
-        #     print(f"type: {type(field)}, value: {field}")
+        print(f"[DEBUG] mainCloudinary.beginning() called with dataList:")
+        for i, field in enumerate(dataList):
+            print(f"  dataList[{i}]: {field} (type: {type(field)})")
+        
         if dataList[0]:         # true if cloudinary status retrieved
+            print(f"[DEBUG] Cloudinary status retrieved successfully")
             self.lab_nowAllowance.setText(dataList[2])
             self.lab_nowUsedCredits.setText(dataList[3])
             self.lab_nowRemainingCredits.setText(dataList[4])
+            
+            print(f"[DEBUG] About to call creditsBar.setPercentages with:")
+            print(f"  Storage (dataList[5]): {dataList[5]}")
+            print(f"  Transformations (dataList[6]): {dataList[6]}")
+            print(f"  Bandwidth (dataList[7]): {dataList[7]}")
+            
             self.creditsBar.setPercentages(dataList[5], dataList[6], dataList[7])
+            
+            print(f"[DEBUG] creditsBar.setPercentages completed")
+            
             self.lab_nowCreditsStorage.setText(f"{dataList[8]:.2f} storage") #float
             self.lab_nowTransformationsCredits.setText(f"{dataList[9]:.2f} transformations") #float
             self.lab_nowCreditsBandwidth.setText(f"{dataList[10]:.2f} bandwidth") #float

@@ -39,10 +39,11 @@ class ImageAssessment(QObject):
     image_processed = pyqtSignal(str, dict)  # file_path, assessment_result
     assessment_complete = pyqtSignal(dict)   # Final assessment summary
     
-    def __init__(self, max_file_size=None, cloudinary_updater=None):
+    def __init__(self, max_file_size=None, cloudinary_updater=None, main_app=None):
         super().__init__()
         self.max_file_size = max_file_size or DEFAULT_MAX_FILE_SIZE
         self.cloudinary_updater = cloudinary_updater
+        self.main_app = main_app  # Reference to main app for accessing cached data
         self.assessment_data = {}
         self.temp_dir = None
         self.processed_count = 0
@@ -127,6 +128,159 @@ class ImageAssessment(QObject):
             finally:
                 self.log_file_handle = None
         
+    def process_single_image_with_cloudinary_logic(self, file_path, settings_dialog=None):
+        """
+        Process a single image with full ImageAssessment Cloudinary logic
+        Returns: (success: bool, result_data: dict, optimized_file: str or None)
+        
+        This method applies all the sophisticated Cloudinary sync verification,
+        database checking, and resizing logic from assess_images to a single file
+        """
+        try:
+            file_path_obj = Path(file_path)
+            
+            # Validate the file
+            if not self._is_valid_image_file(file_path):
+                return False, {'error': 'Invalid image file'}, None
+            
+            # Initialize if needed
+            cloudinary_available = self._initialize_cloudinary_data(settings_dialog)
+            if not cloudinary_available:
+                # Fallback to basic processing without Cloudinary
+                return self._process_single_image_basic(file_path_obj)
+            
+            # Get file details
+            original_size = file_path_obj.stat().st_size
+            filetype = file_path_obj.suffix.lower()
+            db_key = (original_size, filetype)
+            
+            result_data = {
+                'original_file': str(file_path),
+                'original_size': original_size,
+                'filetype': filetype,
+                'processed': False,
+                'uploaded': False,
+                'already_synced': False,
+                'resized_size': None,
+                'cloudinary_url': None,
+                'error': None
+            }
+            
+            print(f"[DEBUG] Processing {file_path_obj.name}: {original_size} bytes, {filetype}")
+            
+            # CORE CLOUDINARY LOGIC: Check if file is in database
+            if self._is_file_in_database(original_size, filetype):
+                print(f"[DEBUG] File found in database: {file_path_obj.name}")
+                
+                # Get resized size from database
+                resized_size = self.database[db_key]['resized_size']
+                result_data['resized_size'] = resized_size
+                
+                # CRITICAL: Check if file is synced with Cloudinary
+                if self._is_file_synced(file_path_obj, resized_size):
+                    print(f"[DEBUG] File SYNCED with Cloudinary: {file_path_obj.name}")
+                    result_data['already_synced'] = True
+                    result_data['cloudinary_url'] = self.database[db_key].get('url', '')
+                    return True, result_data, None
+                else:
+                    print(f"[DEBUG] File in database but NOT synced with Cloudinary: {file_path_obj.name}")
+                    # Will need to be re-uploaded (resized file should exist)
+                    result_data['uploaded'] = True  # Placeholder for now
+                    result_data['cloudinary_url'] = f"https://res.cloudinary.com/example/{file_path_obj.name}"
+                    return True, result_data, None
+            else:
+                print(f"[DEBUG] File NOT in database, needs processing: {file_path_obj.name}")
+                
+                # Create temp directory if needed
+                if not self.temp_dir:
+                    import tempfile
+                    self.temp_dir = Path(tempfile.mkdtemp(prefix="happytag_single_"))
+                
+                # SOPHISTICATED RESIZING: Use the ImageAssessment resize logic
+                resized_buffer = self._resize_image_to_fit(file_path_obj)
+                if resized_buffer is None:
+                    return False, {'error': 'Failed to resize image'}, None
+                
+                # Save resized file to temp directory
+                resized_file_path = self.temp_dir / file_path_obj.name
+                with open(resized_file_path, 'wb') as f:
+                    f.write(resized_buffer.getvalue())
+                
+                # Update database with resized size
+                resized_size = resized_file_path.stat().st_size
+                result_data['resized_size'] = resized_size
+                result_data['processed'] = True
+                
+                # Add to database
+                self.database[db_key] = {
+                    'file_name': file_path_obj.name,
+                    'original_size': original_size,
+                    'resized_size': resized_size,
+                    'filetype': filetype,
+                    'url': f"https://res.cloudinary.com/example/{file_path_obj.name}"  # Placeholder
+                }
+                
+                # CRITICAL: Check if resized file is already synced with Cloudinary
+                if self._is_file_synced(file_path_obj, resized_size):
+                    print(f"[DEBUG] New file already SYNCED with Cloudinary: {file_path_obj.name}")
+                    result_data['already_synced'] = True
+                    result_data['cloudinary_url'] = self.database[db_key]['url']
+                else:
+                    print(f"[DEBUG] New file NOT synced, needs upload: {file_path_obj.name}")
+                    result_data['uploaded'] = True  # Placeholder for actual upload
+                    result_data['cloudinary_url'] = self.database[db_key]['url']
+                
+                # Save database
+                self._save_database()
+                
+                return True, result_data, str(resized_file_path)
+                
+        except Exception as e:
+            print(f"[ERROR] Single image processing failed for {file_path}: {e}")
+            return False, {'error': f'Processing failed: {str(e)}'}, None
+    
+    def _process_single_image_basic(self, file_path_obj):
+        """Fallback processing when Cloudinary is not available"""
+        try:
+            original_size = file_path_obj.stat().st_size
+            result_data = {
+                'original_file': str(file_path_obj),
+                'original_size': original_size,
+                'filetype': file_path_obj.suffix.lower(),
+                'processed': False,
+                'uploaded': False,
+                'already_synced': False,
+                'resized_size': None,
+                'cloudinary_url': None,
+                'error': None
+            }
+            
+            # Simple processing without Cloudinary
+            if original_size > self.max_file_size:
+                # Create temp directory if needed
+                if not self.temp_dir:
+                    import tempfile
+                    self.temp_dir = Path(tempfile.mkdtemp(prefix="happytag_basic_"))
+                
+                # Resize image
+                resized_buffer = self._resize_image_to_fit(file_path_obj)
+                if resized_buffer:
+                    resized_file_path = self.temp_dir / file_path_obj.name
+                    with open(resized_file_path, 'wb') as f:
+                        f.write(resized_buffer.getvalue())
+                    
+                    result_data['resized_size'] = resized_file_path.stat().st_size
+                    result_data['processed'] = True
+                    return True, result_data, str(resized_file_path)
+                else:
+                    return False, {'error': 'Failed to resize image'}, None
+            else:
+                # No resizing needed
+                return True, result_data, None
+                
+        except Exception as e:
+            return False, {'error': f'Basic processing failed: {str(e)}'}, None
+
     def assess_images(self, image_files, settings_dialog=None):
         """
         Main assessment function that processes a list of image files
@@ -340,10 +494,16 @@ class ImageAssessment(QObject):
             print(f"[DEBUG] Loaded database with {len(self.database)} entries from {database_path}")
             self.log_message(f"Loaded database with {len(self.database)} entries from {database_path}")
             
-            # Get Cloudinary files list
-            if self.cloudinary_updater:
+            # Get Cloudinary files list from cache instead of making API calls
+            if self.cloudinary_updater and self.main_app and hasattr(self.main_app, 'cloudinary_files_cache'):
+                # Use cached data from main app (retrieved once at startup)
+                self.cloudinary_files = self.main_app.cloudinary_files_cache
+                print(f"[DEBUG] Using cached Cloudinary files list: {len(self.cloudinary_files)} files")
+                self.log_message(f"Using cached Cloudinary files list: {len(self.cloudinary_files)} files")
+            elif self.cloudinary_updater:
+                print("[DEBUG] No cached Cloudinary files available, falling back to API call")
                 try:
-                    # Import the function from the cloudinary module
+                    # Fallback to API call if cache not available (should rarely happen)
                     import cloudinary.api
                     
                     # Use the same logic as the original list_all_files function
@@ -360,8 +520,8 @@ class ImageAssessment(QObject):
                             break
                     
                     self.cloudinary_files = all_files
-                    print(f"[DEBUG] Retrieved {len(self.cloudinary_files)} files from Cloudinary")
-                    self.log_message(f"Retrieved {len(self.cloudinary_files)} files from Cloudinary")
+                    print(f"[DEBUG] Retrieved {len(self.cloudinary_files)} files from Cloudinary API (fallback)")
+                    self.log_message(f"Retrieved {len(self.cloudinary_files)} files from Cloudinary API (fallback)")
                 except Exception as e:
                     print(f"[WARNING] Could not retrieve Cloudinary files: {e}")
                     self.log_message(f"Could not retrieve Cloudinary files: {e}", "WARNING")

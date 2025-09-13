@@ -1,6 +1,6 @@
-from PyQt5.QtWidgets import QWidget, QPushButton, QSizePolicy
+from PyQt5.QtWidgets import QWidget, QPushButton, QSizePolicy, QLayout, QWidgetItem
 from PyQt5.QtGui import QPalette, QColor
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QSize, QRect, QPoint
 
 class TagButton(QPushButton):
     def __init__(self, text, color, parent=None):
@@ -69,6 +69,7 @@ class FlowLayout(QLayout):
         self._item_list.append(item)
 
     def addWidget(self, widget):
+        # Add widget through the parent class which will call addItem
         super().addWidget(widget)
 
     def count(self):
@@ -92,6 +93,7 @@ class FlowLayout(QLayout):
 
     def heightForWidth(self, width):
         height = self._doLayout(QRect(0, 0, width, 0), True)
+        # print(f"[DEBUG] FlowLayout.heightForWidth({width}) -> {height}px")
         return height
 
     def setGeometry(self, rect):
@@ -99,14 +101,29 @@ class FlowLayout(QLayout):
         self._doLayout(rect, False)
 
     def sizeHint(self):
-        return self.minimumSize()
+        # Return the actual calculated size based on current container width
+        parent_widget = self.parentWidget()
+        # print(f"[DEBUG-FLOW-SIZEHINT] parent_widget: {parent_widget}, has width attr: {hasattr(parent_widget, 'width') if parent_widget else False}")
+        if parent_widget and hasattr(parent_widget, 'width'):
+            parent_width = parent_widget.width()
+            # print(f"[DEBUG-FLOW-SIZEHINT] parent_width: {parent_width}, item_count: {len(self._item_list)}")
+            if parent_width > 0 and len(self._item_list) > 0:
+                calculated_height = self.heightForWidth(parent_width)
+                hint = QSize(parent_width, calculated_height)
+                # print(f"[DEBUG-FLOW-SIZEHINT] Calculated hint: {hint.width()}x{hint.height()}")
+                return hint
+        
+        # Fallback to minimum size
+        fallback = self.minimumSize()
+        # print(f"[DEBUG-FLOW-SIZEHINT] Fallback to minimum: {fallback.width()}x{fallback.height()}")
+        return fallback
 
     def minimumSize(self):
         size = QSize()
         for item in self._item_list:
             size = size.expandedTo(item.minimumSize())
         margin = self.contentsMargins()
-        size += QSize(2 * margin.top(), 2 * margin.bottom())
+        size += QSize(2 * margin.left(), 2 * margin.top())
         return size
 
     def _doLayout(self, rect, testOnly):
@@ -115,37 +132,55 @@ class FlowLayout(QLayout):
         y = rect.y() + margin.top()
         lineHeight = 0
         spacing = self.spacing()
-
-        for item in self._item_list:
-            widget = item.widget()
-            spaceX = spacing
-            spaceY = spacing
-
-            nextX = x + item.sizeHint().width() + spaceX
-            if nextX - spaceX > rect.right() and lineHeight > 0:
-                x = rect.x() + margin.left()
-                y = y + lineHeight + spaceY
-                nextX = x + item.sizeHint().width() + spaceX
-                lineHeight = 0
-
-            if not testOnly:
-                item.setGeometry(QRect(QPoint(x, y), item.sizeHint()))
-
-            x = nextX
-            lineHeight = max(lineHeight, item.sizeHint().height())
-
-        return y + lineHeight - rect.y() + margin.bottom()
         
-        for widget in widgets:
-            widget_width = widget.sizeHint().width()
-            widget_height = widget.sizeHint().height()
+        # First pass: calculate line heights and collect items per line
+        lines = []
+        current_line = []
+        current_x = x
+        current_line_height = 0
+        
+        for item in self._item_list:
+            item_width = item.sizeHint().width()
+            item_height = item.sizeHint().height()
             
-            if x + widget_width > self.width():
-                # Move to next line
-                x = 0
-                y += line_height + spacing
-                line_height = 0
+            nextX = current_x + item_width + spacing
+            if nextX - spacing > rect.right() and current_line:
+                # Finish current line and start new one
+                lines.append((current_line, current_line_height))
+                current_line = [item]
+                current_x = x + item_width + spacing
+                current_line_height = item_height
+            else:
+                # Add to current line
+                current_line.append(item)
+                current_x = nextX
+                current_line_height = max(current_line_height, item_height)
+        
+        if current_line:
+            lines.append((current_line, current_line_height))
+        
+        # Second pass: position items with bottom alignment
+        current_y = y
+        for line_items, line_height in lines:
+            current_x = x
+            for item in line_items:
+                if not testOnly:
+                    item_height = item.sizeHint().height()
+                    # Position item at bottom of line (bottom alignment)
+                    item_y = current_y + line_height - item_height
+                    item.setGeometry(QRect(QPoint(current_x, item_y), item.sizeHint()))
                 
-            widget.setGeometry(x, y, widget_width, widget_height)
-            x += widget_width + spacing
-            line_height = max(line_height, widget_height)
+                current_x += item.sizeHint().width() + spacing
+            
+            current_y += line_height + spacing
+        
+        # Calculate final height excluding the last spacing
+        if lines:
+            final_height = current_y - y - spacing  # Remove the extra spacing after last line
+        else:
+            final_height = 0
+        
+        total_height = final_height + margin.bottom()
+        
+        return total_height
+

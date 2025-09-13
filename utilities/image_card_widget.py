@@ -7,10 +7,10 @@ Encapsulates all image card functionality in a reusable component
 import os
 from pathlib import Path
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                            QTextEdit, QFrame, QSizePolicy, QMenu, QAction,
-                            QAbstractScrollArea)
-from PyQt5.QtCore import Qt, pyqtSignal, QSize, QTimer
-from PyQt5.QtGui import QPixmap, QFont, QFontMetrics, QPalette, QContextMenuEvent
+                            QTextEdit, QPlainTextEdit, QFrame, QSizePolicy, QMenu, QAction,
+                            QAbstractScrollArea, QApplication)
+from PyQt5.QtCore import Qt, pyqtSignal, QSize, QTimer, QEvent
+from PyQt5.QtGui import QPixmap, QFont, QFontMetrics, QPalette, QContextMenuEvent, QTextOption, QTextDocument
 
 # Debug control - set to False to reduce console output
 DEBUG_LAYOUT = False  # Set to True for layout debugging
@@ -32,9 +32,6 @@ class ImageCardWidget(QWidget):
     
     def __init__(self, file_path, max_width=300, preview_pixmap=None, parent=None):
         super().__init__(parent)
-        
-        print(f"[DEBUG] Creating ImageCardWidget for {os.path.basename(file_path)}" if DEBUG_LAYOUT else "", end="")
-        
         # Core data
         self.file_path = file_path
         self.max_width = max_width
@@ -46,6 +43,7 @@ class ImageCardWidget(QWidget):
         
         # UI components
         self.image_label = None
+        self.filename_label = None  # Add filename label
         self.text_edit = None
         self.container_frame = None
         
@@ -55,14 +53,95 @@ class ImageCardWidget(QWidget):
         self.text_max_height = 300  # Keep max height for text to prevent excessive height
         self.selection_border_width = 3
         
+        # Ctrl operation suppression flag - prevents width enforcement during/after Ctrl operations
+        self._ctrl_operation_in_progress = False
+        self._ctrl_suppression_timer = None
+        
+        # Programmatic update suppression flag - prevents width enforcement during programmatic text changes
+        self._programmatic_update_in_progress = False
+        
+        # Timer tracking for cleanup
+        self.pending_timers = []  # Track active QTimer objects
+        
         # Initialize the widget
         self._setup_ui()
         self._load_image()
         self._setup_connections()
         
-        print(f"[DEBUG] ImageCardWidget created for {os.path.basename(file_path)}, calling set_tags with empty list to ensure proper initialization")
         # Always call set_tags to ensure text height is properly initialized
         self.set_tags([])
+    
+    def _create_safe_timer(self, delay_ms, callback):
+        """Create a timer that can be safely cancelled and tracks itself"""
+        timer = QTimer()
+        timer.setSingleShot(True)
+        
+        # Create a safe wrapper that checks widget validity before executing
+        def safe_callback():
+            try:
+                # Check if widget still exists and is valid
+                if hasattr(self, 'file_path') and hasattr(self, 'image_label'):
+                    # Additional check for parent hierarchy
+                    if self.parent() is not None:
+                        callback()
+                    else:
+                        print(f"[DEBUG] Timer callback skipped - widget orphaned: {os.path.basename(self.file_path) if hasattr(self, 'file_path') else 'unknown'}")
+                else:
+                    print(f"[DEBUG] Timer callback skipped - widget destroyed")
+            except RuntimeError:
+                print(f"[DEBUG] Timer callback skipped - widget deleted")
+            finally:
+                self._remove_timer(timer)
+        
+        timer.timeout.connect(safe_callback)
+        self.pending_timers.append(timer)
+        timer.start(delay_ms)
+        return timer
+    
+    def _remove_timer(self, timer):
+        """Remove timer from tracking list"""
+        if timer in self.pending_timers:
+            self.pending_timers.remove(timer)
+    
+    def _cancel_pending_timers(self):
+        """Cancel all pending timers to prevent orphaned widget access"""
+        for timer in self.pending_timers[:]:  # Create a copy of the list
+            if timer.isActive():
+                timer.stop()
+            self.pending_timers.remove(timer)
+        
+        # Also cancel ctrl suppression timer if it exists
+        if hasattr(self, '_ctrl_suppression_timer') and self._ctrl_suppression_timer:
+            if self._ctrl_suppression_timer.isActive():
+                self._ctrl_suppression_timer.stop()
+            self._ctrl_suppression_timer = None
+        
+    def _start_ctrl_suppression(self):
+        """Start temporary suppression of width enforcement during Ctrl operations"""
+        if DEBUG_LAYOUT:
+            print(f"[DEBUG-CTRL] Starting Ctrl suppression for {self.file_path}")
+        
+        self._ctrl_operation_in_progress = True
+        
+        # Cancel any existing timer
+        if self._ctrl_suppression_timer:
+            self._ctrl_suppression_timer.stop()
+            
+        # Set up new timer to clear suppression after 200ms
+        self._ctrl_suppression_timer = QTimer()
+        self._ctrl_suppression_timer.setSingleShot(True)
+        self._ctrl_suppression_timer.timeout.connect(self._end_ctrl_suppression)
+        self._ctrl_suppression_timer.start(200)  # 200ms should be enough for paste operation
+        
+    def _end_ctrl_suppression(self):
+        """End temporary suppression of width enforcement"""
+        if DEBUG_LAYOUT:
+            print(f"[DEBUG-CTRL] Ending Ctrl suppression for {self.file_path}")
+        
+        self._ctrl_operation_in_progress = False
+        if self._ctrl_suppression_timer:
+            self._ctrl_suppression_timer.stop()
+            self._ctrl_suppression_timer = None
         
     def _setup_ui(self):
         """Initialize the user interface components"""
@@ -104,24 +183,55 @@ class ImageCardWidget(QWidget):
         self.image_label.setMaximumSize(16777215, 16777215)
         container_layout.addWidget(self.image_label)
         
-        # Text edit for tags/metadata
-        self.text_edit = QTextEdit()
+        # Filename label - overlay on top of image
+        self.filename_label = QLabel()
+        self.filename_label.setText(os.path.basename(self.file_path))
+        self.filename_label.setAlignment(Qt.AlignCenter)
+        self.filename_label.setStyleSheet("""
+            QLabel { 
+                background-color: rgba(0, 0, 0, 0.7);
+                color: white;
+                padding: 2px 6px;
+                border-radius: 3px;
+                font-size: 9px;
+                font-weight: bold;
+                margin: 0px;
+            }
+        """)
+        self.filename_label.setWordWrap(True)
+        self.filename_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+        # Make filename label a child of the image label for overlay positioning
+        self.filename_label.setParent(self.image_label)
+        # Position will be set after image is loaded in _load_image method
+        
+        # Text edit for tags/metadata - using QPlainTextEdit for simpler, more predictable behavior
+        self.text_edit = QPlainTextEdit()
         # Remove maximum height constraint for full dynamic sizing
         self.text_edit.setMinimumHeight(self.text_min_height)
         # Never show scroll bars - text should auto-resize within limits
         from PyQt5.QtCore import Qt as QtCore
         self.text_edit.setVerticalScrollBarPolicy(QtCore.ScrollBarAlwaysOff)
         self.text_edit.setHorizontalScrollBarPolicy(QtCore.ScrollBarAlwaysOff)
+        # Set content margins to ensure consistent internal layout
+        self.text_edit.setContentsMargins(0, 0, 0, 0)
+        # Set document margins to ensure consistent text layout
+        document = self.text_edit.document()
+        document.setDocumentMargin(1)  # Minimal margin for text layout
+        # Enable word wrapping - QPlainTextEdit has simpler, more predictable wrapping
+        self.text_edit.setWordWrapMode(QTextOption.WordWrap)
+        # Use WidgetWidth mode - QPlainTextEdit handles this much better than QTextEdit
+        self.text_edit.setLineWrapMode(QPlainTextEdit.WidgetWidth)
         self.text_edit.setStyleSheet("""
-            QTextEdit {
-                border: 1px solid #cccccc;
+            QPlainTextEdit {
+                border: 2px solid #cccccc;
                 border-radius: 3px;
-                padding: 4px;
+                padding: 2px;
                 font-size: 10px;
                 line-height: 1.2;
             }
-            QTextEdit:focus {
+            QPlainTextEdit:focus {
                 border: 2px solid #0078d4;
+                padding: 4px;
             }
         """)
         container_layout.addWidget(self.text_edit)
@@ -135,6 +245,33 @@ class ImageCardWidget(QWidget):
         # Container frame should also resist compression
         self.container_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         
+        # Set the document width after all widgets are initialized
+        def _delayed_update_text_width(this):
+            # Use 'this' to avoid late binding issues in lambda
+            if hasattr(this, 'text_edit') and this.text_edit is not None:
+                this._update_text_width(this.max_width - (2 * this.image_margin))
+                # Force document width to be set correctly for initial layout
+                # This bypasses the focus/modifier checks in _enforce_document_width_immediate
+                self._create_safe_timer(15, lambda: this._force_initial_document_width())
+        self._create_safe_timer(0, lambda: _delayed_update_text_width(self))
+
+    def _update_text_width(self, width):
+        """Update both the text widget width and document width together"""
+        if not hasattr(self, 'text_edit') or self.text_edit is None:
+            return
+        # Use a smaller reduction for document width - only account for actual borders/padding
+        # The text widget already handles most spacing internally
+        text_content_width = width - 6  # Reduced from 12 to 6 for less aggressive text wrapping
+        try:
+            self.text_edit.setFixedWidth(width)
+            doc = self.text_edit.document()
+            if doc:
+                doc.setTextWidth(text_content_width)
+            if DEBUG_HEIGHT:
+                print(f"[DEBUG-WIDTH] Updated text widget width to {width}px, document width to {text_content_width}px")
+        except Exception as e:
+            print(f"[DEBUG-WIDTH] Exception in _update_text_width: {e}")
+    
     def _load_image(self):
         """Load and scale the image for display"""
         try:
@@ -159,23 +296,62 @@ class ImageCardWidget(QWidget):
             
             print(f"[DEBUG] Scaling image {os.path.basename(self.file_path)}: max_width={self.max_width}, available_width={available_width}")
             scaled_pixmap = self._scale_pixmap(pixmap, available_width)
-            if DEBUG_LAYOUT:
-                print(f"[DEBUG] Scaled pixmap size: {scaled_pixmap.width()}x{scaled_pixmap.height()}")
             
             # Set the pixmap and force the label to match the pixmap size exactly
             self.image_label.setPixmap(scaled_pixmap)
             # Force the image label to be exactly the size of the scaled pixmap
             self.image_label.setFixedSize(scaled_pixmap.size())
-            print(f"[DEBUG] Set image label size to: {scaled_pixmap.width()}x{scaled_pixmap.height()}")
+            
+            # Update text edit width to exactly match the image width for consistent layout
+            image_width = scaled_pixmap.width()
+            self.text_edit.setFixedWidth(image_width)
+            self.text_edit.setMaximumWidth(image_width)
+            self.text_edit.setMinimumWidth(image_width)
+            
+            # Also update the document width to match the widget width for consistent text wrapping
+            document = self.text_edit.document()
+            # Account for border (2px * 2) and padding (4px * 2) = 12px total
+            text_content_width = image_width - 12
+            document.setTextWidth(text_content_width)
+            print(f"[DEBUG] Set text widget width to {image_width}px, content width to {text_content_width}px")
+            
+            # Position filename label at top of image as overlay
+            self._position_filename_label()
             
             # After image is loaded, calculate and set minimum height to prevent overlapping
-            QTimer.singleShot(50, lambda: self._safe_minimum_height_calculation())
+            self._create_safe_timer(50, lambda: self._safe_minimum_height_calculation())
             
             # The image label will size to match the pixmap automatically
             
         except Exception as e:
             print(f"[ERROR] Failed to load image {self.file_path}: {e}")
             self._set_error_image(f"Load error: {str(e)}")
+    
+    def _position_filename_label(self):
+        """Position the filename label as an overlay at the top of the image"""
+        if self.filename_label and self.image_label:
+            # Get the image label size
+            image_size = self.image_label.size()
+            
+            # Size the filename label to fit the text
+            self.filename_label.adjustSize()
+            label_size = self.filename_label.size()
+            
+            # Position at top-left with small margin
+            x = 5  # Small margin from left edge
+            y = 5  # Small margin from top edge
+            
+            # Ensure filename doesn't extend beyond image width
+            max_width = image_size.width() - 10  # Leave margins on both sides
+            if label_size.width() > max_width:
+                self.filename_label.setFixedWidth(max_width)
+                self.filename_label.adjustSize()
+                label_size = self.filename_label.size()
+            
+            # Position the label
+            self.filename_label.move(x, y)
+            self.filename_label.raise_()  # Ensure it's on top
+            self.filename_label.show()
     
     def _scale_pixmap(self, pixmap, max_width):
         """Scale pixmap to exactly fill the widget width while maintaining aspect ratio"""
@@ -205,17 +381,260 @@ class ImageCardWidget(QWidget):
     def _setup_connections(self):
         """Setup signal connections"""
         self.text_edit.textChanged.connect(self._on_text_changed)
+        # Install event filter to handle focus events
+        self.text_edit.installEventFilter(self)
+        
+        # Connect to document content changes for immediate width enforcement
+        document = self.text_edit.document()
+        if document:
+            # Connect to content changes to enforce width during typing
+            document.contentsChanged.connect(self._on_document_content_changed)
+        
+    def eventFilter(self, obj, event):
+        """Handle events for child widgets"""
+        if obj == self.text_edit:
+            # Handle focus events to ensure width consistency  
+            if event.type() in (QEvent.Type.FocusIn, QEvent.Type.FocusOut):
+                if event.type() == QEvent.Type.FocusOut:
+                    # Only enforce width when focus is lost to avoid interfering with typing
+                    self._create_safe_timer(10, self._enforce_text_width)
+            # Handle key events to prevent wrapping during typing
+            elif event.type() == QEvent.Type.KeyPress:
+                # Only enforce width for keys that actually modify content
+                # Exclude modifier keys (Ctrl, Alt, Shift) to prevent premature wrapping
+                key = event.key()
+                from PyQt5.QtCore import Qt
+                
+                # List of modifier keys and function keys that don't modify content
+                non_content_keys = {
+                    Qt.Key.Key_Control, Qt.Key.Key_Alt, Qt.Key.Key_Shift, Qt.Key.Key_Meta,
+                    Qt.Key.Key_CapsLock, Qt.Key.Key_NumLock, Qt.Key.Key_ScrollLock,
+                    Qt.Key.Key_F1, Qt.Key.Key_F2, Qt.Key.Key_F3, Qt.Key.Key_F4,
+                    Qt.Key.Key_F5, Qt.Key.Key_F6, Qt.Key.Key_F7, Qt.Key.Key_F8,
+                    Qt.Key.Key_F9, Qt.Key.Key_F10, Qt.Key.Key_F11, Qt.Key.Key_F12,
+                    Qt.Key.Key_Escape, Qt.Key.Key_Tab, Qt.Key.Key_Up, Qt.Key.Key_Down,
+                    Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Home, Qt.Key.Key_End,
+                    Qt.Key.Key_PageUp, Qt.Key.Key_PageDown, Qt.Key.Key_Insert
+                }
+                
+                # Only enforce width for content-modifying keys
+                if key not in non_content_keys:
+                    # Schedule immediate width enforcement after key processing
+                    self._create_safe_timer(0, self._enforce_document_width_immediate)
+        return super().eventFilter(obj, event)
+    
+    def _enforce_text_width(self):
+        """Ensure text widget maintains its fixed width"""
+        if hasattr(self, 'text_edit') and self.text_edit and hasattr(self, 'image_label') and self.image_label:
+            if self.image_label.pixmap():
+                image_width = self.image_label.pixmap().size().width()
+                current_text_width = self.text_edit.width()
+                print(f"[DEBUG-ENFORCE] _enforce_text_width called - Image: {image_width}px, Current TextEdit: {current_text_width}px")
+                
+                self.text_edit.setFixedWidth(image_width)
+                self.text_edit.setMaximumWidth(image_width) 
+                self.text_edit.setMinimumWidth(image_width)
+                
+                # Update both document width for QPlainTextEdit (simpler approach)
+                if not self.text_edit.hasFocus():
+                    document = self.text_edit.document()
+                    if document:
+                        text_content_width = image_width - 12  # Account for border + padding
+                        current_doc_width = document.textWidth()
+                        print(f"[DEBUG-ENFORCE] BEFORE: Document width = {current_doc_width}px, Image width = {image_width}px, Calculated content width = {text_content_width}px")
+                        
+                        # QPlainTextEdit should handle width much more predictably
+                        document.setTextWidth(text_content_width)
+                        
+                        # Verify the width was actually set
+                        post_set_width = document.textWidth()
+                        print(f"[DEBUG-ENFORCE] AFTER: Document width = {post_set_width}px (expected {text_content_width}px)")
+                        if post_set_width != text_content_width:
+                            print(f"[DEBUG-ENFORCE] WARNING: Document width not set correctly! Expected {text_content_width}px but got {post_set_width}px")
+                else:
+                    print(f"[DEBUG-ENFORCE] Skipping document width update (has focus)")
+    
+    def _enforce_document_width_immediate(self):
+        """Ensure correct document width during typing"""
+        if hasattr(self, 'text_edit') and self.text_edit and hasattr(self, 'image_label') and self.image_label:
+            if self.image_label.pixmap():
+                # Check if a programmatic update is in progress
+                if self._programmatic_update_in_progress:
+                    print(f"[DEBUG-WIDTH] Skipping immediate width enforcement during programmatic update")
+                    return
+                    
+                # Check if a Ctrl operation is in progress
+                if self._ctrl_operation_in_progress:
+                    print(f"[DEBUG-WIDTH] Skipping immediate width enforcement during Ctrl operation suppression")
+                    return
+                    
+                # Check if Ctrl key is currently pressed - start suppression if detected
+                from PyQt5.QtWidgets import QApplication
+                from PyQt5.QtCore import Qt
+                modifiers = QApplication.keyboardModifiers()
+                
+                if modifiers & Qt.ControlModifier:
+                    print(f"[DEBUG-WIDTH] Ctrl detected, starting suppression period")
+                    self._start_ctrl_suppression()
+                    return
+                
+                image_width = self.image_label.pixmap().size().width()
+                current_text_width = self.text_edit.width()
+                
+                print(f"[DEBUG-WIDTH] Image: {image_width}px, TextEdit: {current_text_width}px, HasFocus: {self.text_edit.hasFocus()}")
+                
+                # Keep the widget width correct
+                self.text_edit.setFixedWidth(image_width)
+                self.text_edit.setMaximumWidth(image_width) 
+                self.text_edit.setMinimumWidth(image_width)
+                
+                # For live typing, set proper document width (not unlimited)
+                if self.text_edit.hasFocus():
+                    document = self.text_edit.document()
+                    if document:
+                        correct_doc_width = image_width - 12  # Account for border + padding
+                        current_doc_width = document.textWidth()
+                        print(f"[DEBUG-WIDTH] Document width was: {current_doc_width}px, setting to correct: {correct_doc_width}px")
+                        
+                        # Use proper width for wrapping, not unlimited
+                        document.setTextWidth(correct_doc_width)
+                        # Force immediate document layout update
+                        document.adjustSize()
+    
+    def _force_initial_document_width(self):
+        """Force correct document width during widget initialization, bypassing focus checks"""
+        if hasattr(self, 'text_edit') and self.text_edit and hasattr(self, 'image_label') and self.image_label:
+            if self.image_label.pixmap():
+                image_width = self.image_label.pixmap().size().width()
+                document = self.text_edit.document()
+                if document:
+                    # Use the same width calculation as the typing logic
+                    correct_doc_width = image_width - 12  # Account for border + padding  
+                    current_doc_width = document.textWidth()
+                    # print(f"[DEBUG-WIDTH] INIT: Document width was: {current_doc_width}px, setting to correct: {correct_doc_width}px")
+                    
+                    # Set proper width for wrapping during initialization
+                    document.setTextWidth(correct_doc_width)
+                    # Force immediate document layout update
+                    document.adjustSize()
+                    # print(f"[DEBUG-WIDTH] INIT: Document width after setting: {document.textWidth()}px")
+    
+    def force_document_width_post_layout(self):
+        """Force correct document width after layout is complete - simplified for QPlainTextEdit"""
+        if hasattr(self, 'text_edit') and self.text_edit and hasattr(self, 'image_label') and self.image_label:
+            if self.image_label.pixmap():
+                image_width = self.image_label.pixmap().size().width()
+                document = self.text_edit.document()
+                if document:
+                    text_content_width = image_width - 12  # Account for border + padding
+                    current_doc_width = document.textWidth()
+                    print(f"[DEBUG-WIDTH] POST-LAYOUT: Document width was: {current_doc_width}px, setting to: {text_content_width}px")
+                    
+                    # QPlainTextEdit should handle this more predictably than QTextEdit
+                    document.setTextWidth(text_content_width)
+                    
+                    final_width = document.textWidth()
+                    print(f"[DEBUG-WIDTH] POST-LAYOUT: Final document width: {final_width}px")
+    
+    def _on_document_content_changed(self):
+        """Handle document content changes to maintain proper width during typing"""
+        if hasattr(self, 'text_edit') and self.text_edit and self.text_edit.hasFocus():
+            # Check if a programmatic update is in progress
+            if self._programmatic_update_in_progress:
+                print(f"[DEBUG-CONTENT] Skipping width enforcement during programmatic update")
+                return
+                
+            # Check if a Ctrl operation is in progress
+            if self._ctrl_operation_in_progress:
+                print(f"[DEBUG-CONTENT] Skipping width enforcement during Ctrl operation suppression")
+                return
+                
+            # Check if Ctrl key is currently pressed - start suppression if detected
+            from PyQt5.QtWidgets import QApplication
+            from PyQt5.QtCore import Qt
+            modifiers = QApplication.keyboardModifiers()
+            
+            # If Ctrl is pressed, start suppression period to prevent interference
+            if modifiers & Qt.ControlModifier:
+                print(f"[DEBUG-CONTENT] Ctrl detected, starting suppression period")
+                self._start_ctrl_suppression()
+                return
+            
+            # Normal content change handling
+            document = self.text_edit.document()
+            if document and hasattr(self, 'image_label') and self.image_label and self.image_label.pixmap():
+                image_width = self.image_label.pixmap().size().width()
+                correct_doc_width = image_width - 12  # Account for border + padding
+                current_width = document.textWidth()
+                
+                print(f"[DEBUG-CONTENT] Document content changed, current width: {current_width}px, setting to correct width: {correct_doc_width}px")
+                
+                # Set to proper width for wrapping (not unlimited)
+                document.setTextWidth(correct_doc_width)
+                
+                # Ensure the widget width is correct during typing
+                if self.text_edit.width() != image_width:
+                    print(f"[DEBUG-CONTENT] Correcting widget width to {image_width}px during typing")
+                    self.text_edit.setFixedWidth(image_width)
+                    
+                # CRITICAL: Prevent Qt from changing the document width again
+                self._create_safe_timer(0, lambda: self._maintain_document_width_during_typing(correct_doc_width))
+    
+    def _maintain_document_width_during_typing(self, target_width):
+        """Maintain consistent document width during typing session"""
+        if hasattr(self, 'text_edit') and self.text_edit and self.text_edit.hasFocus():
+            # Check if a programmatic update is in progress
+            if self._programmatic_update_in_progress:
+                print(f"[DEBUG-MAINTAIN] Skipping width maintenance during programmatic update")
+                return
+                
+            # Check if a Ctrl operation is in progress
+            if self._ctrl_operation_in_progress:
+                print(f"[DEBUG-MAINTAIN] Skipping width maintenance during Ctrl operation suppression")
+                return
+                
+            # Check if Ctrl key is currently pressed - start suppression if detected
+            from PyQt5.QtWidgets import QApplication
+            from PyQt5.QtCore import Qt
+            modifiers = QApplication.keyboardModifiers()
+            
+            if modifiers & Qt.ControlModifier:
+                print(f"[DEBUG-MAINTAIN] Ctrl detected, starting suppression period")
+                self._start_ctrl_suppression()
+                return
+            
+            document = self.text_edit.document()
+            if document:
+                current_width = document.textWidth()
+                if abs(current_width - target_width) > 1:  # Allow small floating point differences
+                    print(f"[DEBUG-MAINTAIN] Document width drifted to {current_width}px, correcting to {target_width}px")
+                    document.setTextWidth(target_width)
         
     def _on_text_changed(self):
         """Handle text changes in the text edit"""
         new_text = self.text_edit.toPlainText()
         self.text_changed.emit(self.file_path, new_text)
         
+        # Check if a programmatic update is in progress
+        if self._programmatic_update_in_progress:
+            print(f"[DEBUG] Skipping height adjustment during programmatic update (_on_text_changed)")
+            return
+            
         # Auto-adjust text height based on content
         self._adjust_text_height()
     
     def _adjust_text_height(self):
         """Automatically adjust text edit height based on content using document layout"""
+        # Check if a Ctrl operation is in progress
+        if self._ctrl_operation_in_progress:
+            # print(f"[DEBUG-HEIGHT] Skipping height adjustment during Ctrl operation suppression")
+            return
+            
+        # Check if a programmatic update is in progress
+        if self._programmatic_update_in_progress:
+            # print(f"[DEBUG-HEIGHT] Skipping height adjustment during programmatic update suppression")
+            return
+        
         # Get actual text content
         text_content = self.text_edit.toPlainText().strip()
         
@@ -231,61 +650,124 @@ class ImageCardWidget(QWidget):
             self.text_edit.setMinimumHeight(dynamic_min_height)
             self.text_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             
-            print(f"[DEBUG] Text height set to minimum ({dynamic_min_height}px) for empty content")
-            QTimer.singleShot(100, lambda: self._check_actual_height("empty content"))
+            # print(f"[DEBUG] Text height set to minimum ({dynamic_min_height}px) for empty content")
+            self._create_safe_timer(100, lambda: self._check_actual_height("empty content"))
             return
         
         # Use document-based height calculation for accurate text wrapping
-        current_width = self.text_edit.width()
-        if current_width <= 0:
-            # If widget hasn't been fully laid out yet, use max_width as fallback
-            current_width = self.max_width - 30  # Account for margins
+        # Use target width instead of current image width for consistent calculations during resize
+        target_width = None
+        if hasattr(self, 'max_width') and self.max_width:
+            # Use the target width that the widget should be sized to
+            target_width = self.max_width
+            # Use consistent width reduction (same as _update_text_width)
+            available_width = target_width - 6  # Reduced from 12 to 6 for consistency
+            text_widget_width = target_width  # For debug output consistency
+            image_width = target_width  # For debug output
+        elif hasattr(self, 'image_label') and self.image_label and self.image_label.pixmap():
+            # Fallback to current image width if max_width not available
+            image_width = self.image_label.pixmap().size().width()
+            available_width = image_width - 6  # Reduced from 12 to 6 for consistency
+            text_widget_width = image_width  # For debug output consistency
+        else:
+            # Final fallback to text widget width if neither available
+            text_widget_width = self.text_edit.width()
+            available_width = text_widget_width - 6  # Reduced from 12 to 6 for consistency
+            image_width = text_widget_width  # For debug output
         
-        available_width = current_width - 10  # Account for text edit margins
+        # print(f"[DEBUG-HEIGHT] Height adjustment - Target width: {target_width or 'N/A'}px, Available width: {available_width}px")
         
         # Get the document and ensure it has the correct width for wrapping
         document = self.text_edit.document()
         if document:
-            # Set the document width to force proper wrapping calculation
+            current_doc_width = document.textWidth()
+            # print(f"[DEBUG-HEIGHT] BEFORE height adjustment: Document width = {current_doc_width}px")
+            
+            # Always set the document width to ensure consistent text layout
             document.setTextWidth(available_width)
+            
+            # Verify the width was set correctly
+            post_set_width = document.textWidth()
+            # print(f"[DEBUG-HEIGHT] AFTER setting document width: Expected {available_width}px, Got {post_set_width}px")
             
             # Force document to recalculate size with proper width
             document.adjustSize()
             
-            # Get the actual document size after wrapping
-            doc_size = document.size()
-            doc_height = int(doc_size.height())
+            # PRECISE QPlainTextEdit height calculation - measure actual text wrapping
+            # Create a temporary document with the exact same settings to measure real height
             
-            # Calculate actual line count by measuring text layout
-            block_count = document.blockCount()
-            
-            # Use font metrics to estimate actual wrapped lines
+            # Get basic font metrics
             line_height = font_metrics.height()
-            estimated_lines = max(1, doc_height // line_height) if line_height > 0 else 1
+            block_count = document.blockCount()  # For debug info
             
-            # Calculate final height with margins and padding
-            margins = self.text_edit.contentsMargins()
-            padding = 8
+            text_content = self.text_edit.toPlainText()
+            if not text_content.strip():
+                doc_height = line_height  # Single line for empty content
+                actual_lines = 1
+            else:
+                # Method: Ask QPlainTextEdit directly for its actual line count
+                # First ensure the widget has been laid out properly
+                self.text_edit.updateGeometry()
+                QApplication.processEvents()  # Let Qt finish layout
+                
+                # Get the actual document from the QPlainTextEdit
+                doc = self.text_edit.document()
+                
+                # Method 1: Try to get actual line count from the rendered document
+                actual_lines = 0
+                block = doc.firstBlock()
+                while block.isValid():
+                    # For each text block, count how many visual lines it takes
+                    layout = block.layout()
+                    if layout:
+                        actual_lines += layout.lineCount()
+                    else:
+                        actual_lines += 1  # Fallback if no layout
+                    block = block.next()
+                
+                # Fallback if we couldn't get layout info
+                if actual_lines == 0:
+                    actual_lines = max(1, doc.blockCount())
+                
+                # Calculate height based on actual rendered lines
+                doc_height = actual_lines * line_height
+
+                # print(f"[DEBUG-HEIGHT] QPlainTextEdit actual line count: actual_lines={actual_lines}, line_height={line_height}px, calculated_height={doc_height}px")
+
+            # Get the actual document size for comparison
+            doc_size = document.size()
+            actual_doc_height = int(doc_size.height())
+            # print(f"[DEBUG-HEIGHT] Document reports height={actual_doc_height}px, our precise measurement={doc_height}px")
+            
+            # Calculate final height with minimal additional padding
+            # QTextDocument measurement already includes document margins
+            margins = self.text_edit.contentsMargins()  # Should be 0,0,0,0
+            padding = 4  # Small bottom padding for breathing room
             new_height = doc_height + margins.top() + margins.bottom() + padding
             
             # Apply bounds - ensure minimum height and respect maximum
             optimal_height = max(dynamic_min_height, min(self.text_max_height, new_height))
+            
+            # print(f"[DEBUG-HEIGHT] Height calculation: doc_height={doc_height}, new_height={new_height}, dynamic_min_height={dynamic_min_height}, optimal_height={optimal_height}")
+            # print(f"[DEBUG-HEIGHT] BEFORE setFixedHeight - current height: {self.text_edit.height()}px")
             
             self.text_edit.setFixedHeight(optimal_height)
             self.text_edit.setMaximumHeight(optimal_height)
             self.text_edit.setMinimumHeight(optimal_height)
             self.text_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             
+            # print(f"[DEBUG-HEIGHT] AFTER setFixedHeight - new height: {self.text_edit.height()}px")
+            
             if DEBUG_HEIGHT:
                 print(f"[DEBUG] Document-based height calculation for {os.path.basename(self.file_path)}:")
-                print(f"[DEBUG]   width: {current_width} | available_width: {available_width}")
-                print(f"[DEBUG]   content_chars: {len(text_content)} | doc_height: {doc_height} | estimated_lines: {estimated_lines} | final_height: {optimal_height}")
+                print(f"[DEBUG]   text_width: {text_widget_width} | available_width: {available_width}")
+                print(f"[DEBUG]   content_chars: {len(text_content)} | doc_height: {doc_height} | actual_lines: {actual_lines} | final_height: {optimal_height}")
                 print(f"[DEBUG]   block_count: {block_count} | line_height: {line_height}")
             
-            QTimer.singleShot(100, lambda: self._safe_check_actual_height(f"{len(text_content)} chars ({estimated_lines} lines)"))
+            self._create_safe_timer(100, lambda: self._safe_check_actual_height(f"{len(text_content)} chars ({actual_lines} lines)"))
             
             # Also update the minimum height to prevent overlapping
-            QTimer.singleShot(150, lambda: self._safe_minimum_height_calculation())
+            self._create_safe_timer(150, lambda: self._safe_minimum_height_calculation())
         else:
             # Fallback if document is not available - use old method
             print(f"[DEBUG] Document not available, using fallback height calculation")
@@ -334,17 +816,12 @@ class ImageCardWidget(QWidget):
         # Handle various empty tag scenarios
         if not tags or (isinstance(tags, list) and len(tags) == 0):
             tags_text = ""
-            print(f"[DEBUG] Setting EMPTY tags for {os.path.basename(self.file_path)}: no tags provided")
         elif isinstance(tags, list):
             # Filter out empty/whitespace-only tags
             valid_tags = [tag.strip() for tag in tags if tag and str(tag).strip()]
             tags_text = ', '.join(valid_tags) if valid_tags else ""
-            if not tags_text:
-                print(f"[DEBUG] Setting EMPTY tags for {os.path.basename(self.file_path)}: all tags were empty/whitespace")
         else:
             tags_text = str(tags).strip() if tags else ""
-            if not tags_text:
-                print(f"[DEBUG] Setting EMPTY tags for {os.path.basename(self.file_path)}: tag was empty/whitespace")
             
         self.tags = tags if isinstance(tags, list) else ([tags] if tags else [])
         
@@ -352,13 +829,24 @@ class ImageCardWidget(QWidget):
         if tags_text:
             print(f"[DEBUG] Setting tags for {os.path.basename(self.file_path)}: '{tags_text}' (length: {len(tags_text)})")
         
+        # Set programmatic update flag to suppress width enforcement
+        self._programmatic_update_in_progress = True
+        
         # Block signals to prevent recursive updates
         self.text_edit.blockSignals(True)
         self.text_edit.setPlainText(tags_text)
         self.text_edit.blockSignals(False)
         
-        # Adjust height after setting text
-        QTimer.singleShot(0, self._adjust_text_height)
+        # Adjust height after setting text, then clear programmatic flag
+        self._create_safe_timer(0, self._adjust_text_height_and_clear_flag)
+    
+    def _adjust_text_height_and_clear_flag(self):
+        """Clear the programmatic update flag and then adjust text height"""
+        # Clear the programmatic update flag first
+        self._programmatic_update_in_progress = False
+        
+        # Now adjust the height (flag is cleared so it will work)
+        self._adjust_text_height()
     
     def get_tags(self):
         """Get current tags as a list"""
@@ -466,11 +954,13 @@ class ImageCardWidget(QWidget):
         self._load_image()
     
     def resizeEvent(self, event):
-        """Handle widget resize - disabled to prevent stretching issues"""
+        """Handle widget resize - update text width and height"""
         super().resizeEvent(event)
-        # Disabled automatic image reloading on resize to prevent stretching
-        # Images will be resized when the grid layout changes instead
-        pass
+        # Update text widget and document width to new available width
+        new_width = self.width() - (2 * self.image_margin)
+        self._update_text_width(new_width)
+        # Now adjust height based on new width
+        self._adjust_text_height()
     
     # Event handlers
     
@@ -583,9 +1073,13 @@ class ImageCardWidget(QWidget):
             total_height = (image_size.height() + 
                           self.text_edit.height() + 
                           (2 * self.image_margin) + 10)  # spacing + margins
-            return QSize(self.max_width, total_height)
+            hint = QSize(self.max_width, total_height)
+            # print(f"[DEBUG-SIZEHINT] {os.path.basename(self.file_path)}: max_width={self.max_width}, total_height={total_height}, hint={hint.width()}x{hint.height()}")
+            return hint
         else:
-            return QSize(self.max_width, 200)  # default size
+            hint = QSize(self.max_width, 200)  # default size
+            # print(f"[DEBUG-SIZEHINT] {os.path.basename(self.file_path)}: NO PIXMAP - max_width={self.max_width}, hint={hint.width()}x{hint.height()}")
+            return hint
     
     def minimumSizeHint(self):
         """Provide minimum size hint"""
@@ -596,6 +1090,9 @@ class ImageCardWidget(QWidget):
     def cleanup(self):
         """Clean up resources and disconnect signals to prevent timer callbacks"""
         try:
+            # Cancel all pending timers first
+            self._cancel_pending_timers()
+            
             if hasattr(self, 'text_edit') and self.text_edit:
                 self.text_edit.textChanged.disconnect()
                 self.text_edit = None

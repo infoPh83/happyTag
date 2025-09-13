@@ -26,5 +26,10 @@
         "**/__pycache__/**": true,
         "**/dist/**": true,
         "**/build/**": true
+    },
+    "github.copilot.advanced": {
+        "debug.overrideChatEngine": "gpt-4",
+        "debug.useNodeFetcher": true
     }
+
 }

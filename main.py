@@ -275,13 +275,16 @@ class MainWindow(QMainWindow):
         # Backward compatibility - keep reference to image_widgets for existing code
         self.image_widgets = []  # Will be updated by flow manager
         
-        # Initialize widget width slider (100-400px, default to 200px)
-        # Maps slider values to pixel widths
-        self.horizontalSlider.setMinimum(100)  # 100px minimum width
-        self.horizontalSlider.setMaximum(400)  # 400px maximum width
-        self.horizontalSlider.setValue(200)    # 200px default width
+        # Initialize widget width slider with 5 discrete size steps
+        # Maps slider positions (1-5) to specific pixel widths for modular sizing
+        self.size_steps = {1: 280, 2: 360, 3: 460, 4: 560, 5: 700}  # 5 distinct size options
+        self.horizontalSlider.setMinimum(1)     # Step 1 (smallest)
+        self.horizontalSlider.setMaximum(5)     # Step 5 (largest) 
+        self.horizontalSlider.setValue(3)       # Step 3 (medium, 200px default)
+        self.horizontalSlider.setTickPosition(self.horizontalSlider.TicksBelow)
+        self.horizontalSlider.setTickInterval(1)  # Show tick marks for each step
         
-        self.MAX_PREVIEW_SIZE = 800
+        self.MAX_PREVIEW_SIZE = 1200  # Increased from 800 to support larger widget sizes
         self.selected_images = set()
         
         # Create progress bar overlay (initially hidden)
@@ -290,12 +293,13 @@ class MainWindow(QMainWindow):
         
         # Cloudinary connection status
         self.cloudinary_connected = False
+        self.credits_bar_initialized = False  # Flag to track if credits bar has been set up
         
         # Initialize Cloudinary integration
         self.initialize_cloudinary()
         
         # Initialize Image Assessment System (after Cloudinary setup)
-        self.image_assessment = ImageAssessment(cloudinary_updater=self.cloudinary_updater)
+        self.image_assessment = ImageAssessment(cloudinary_updater=self.cloudinary_updater, main_app=self)
         self.setup_image_assessment_connections()
         
         # Track metadata errors for reporting
@@ -892,7 +896,10 @@ class MainWindow(QMainWindow):
 
     def save_all_keywords(self):
         """Save keywords from all image text fields to their respective files"""
-        if not self.image_widgets:
+        # Get current widgets from flow manager
+        current_widgets = list(self.image_flow_manager.image_widgets.values()) if hasattr(self, 'image_flow_manager') else []
+        
+        if not current_widgets:
             QMessageBox.information(self, "Save Keywords", "No images loaded to save keywords to.")
             return
         
@@ -902,9 +909,9 @@ class MainWindow(QMainWindow):
         
         # Show progress bar with saving message
         saving_message = f"Saving tags..."
-        self.show_progress(len(self.image_widgets), saving_message)
+        self.show_progress(len(current_widgets), saving_message)
         
-        for i, widget in enumerate(self.image_widgets):
+        for i, widget in enumerate(current_widgets):
             if hasattr(widget, 'file_path'):
                 file_path = widget.file_path
                 keywords_text = self.get_widget_text(widget)
@@ -1150,7 +1157,8 @@ class MainWindow(QMainWindow):
         
         # Clear tags from selected images
         cleared_count = 0
-        for widget in self.image_widgets:
+        current_widgets = list(self.image_flow_manager.image_widgets.values()) if hasattr(self, 'image_flow_manager') else []
+        for widget in current_widgets:
             if hasattr(widget, 'file_path') and widget.file_path in self.selected_images:
                 # Clear the text field using helper function
                 self.set_widget_text(widget, "")
@@ -1259,9 +1267,9 @@ class MainWindow(QMainWindow):
                 self.unsupported_files.append((file_path, reason))
             return None
 
-    # Deprecated method removed - see ImageCardWidget for new implementation
-        """Create a widget containing an image and its input field"""
-        print(f"Creating image widget with max_width: {max_width}")
+    def update_layout(self, value=None):
+        """Update the layout using the new ImageFlowManager"""
+        print("\nStarting update_layout with ImageFlowManager...")
         
         # Calculate scaled size
         ratio = preview.width() / preview.height()
@@ -1366,7 +1374,8 @@ class MainWindow(QMainWindow):
                 return
                 
             print(f"[DEBUG] sync_tags | last_word: '{last_word}' | source_field: {getattr(source_field, 'file_path', None)}")
-            for widget in self.image_widgets:
+            current_widgets = list(self.image_flow_manager.image_widgets.values()) if hasattr(self, 'image_flow_manager') else []
+            for widget in current_widgets:
                 if (hasattr(widget, 'file_path') and 
                     widget.file_path in self.selected_images and 
                     widget.input_field != source_field):
@@ -1765,32 +1774,110 @@ class MainWindow(QMainWindow):
             print("No image files to display")
             return
         
-        # Get widget width from slider
-        widget_width = self.horizontalSlider.value()
-        print(f"Setting widget width to {widget_width}px")
+        # Get widget width from discrete slider steps
+        slider_step = self.horizontalSlider.value()
+        widget_width = self.size_steps[slider_step]
+        print(f"Slider step {slider_step} -> Setting widget width to {widget_width}px")
         
-        # Update the flow manager's widget width
-        self.image_flow_manager.set_widget_width(widget_width)
+        # PRESERVE CURRENT TEXT CONTENT before any layout changes
+        current_text_content = {}
+        if hasattr(self, 'image_flow_manager') and self.image_flow_manager.image_widgets:
+            print("[DEBUG] Preserving current text content before layout update...")
+            for file_path, widget in self.image_flow_manager.image_widgets.items():
+                if hasattr(widget, 'get_tags'):
+                    current_content = widget.get_tags()
+                    current_text_content[file_path] = ', '.join(current_content) if isinstance(current_content, list) else str(current_content)
+                    print(f"[DEBUG] Preserved text for {os.path.basename(file_path)}: '{current_text_content[file_path]}'")
         
-        # Prepare image data for the flow manager
-        image_data = []
-        for file_path in self.image_files:
-            if file_path in self.image_previews:
-                # Get existing metadata/tags if available
-                metadata = self.image_metadata.get(file_path, {})
-                existing_tags = metadata.get('keywords', f"{metadata.get('year', '')}, ")
-                
-                image_data.append({
-                    'file_path': file_path,
-                    'preview': self.image_previews[file_path],
-                    'metadata': metadata,
-                    'tags': existing_tags
-                })
-            else:
-                print(f"Warning: No preview available for {file_path}, skipping...")
+        # Check if this is just a resize (same images, different width) or new image set
+        current_loaded_files = set(self.image_flow_manager.image_widgets.keys()) if hasattr(self, 'image_flow_manager') else set()
+        new_image_files = set(self.image_files)
+        is_resize = bool(current_text_content) and current_loaded_files == new_image_files
         
-        # Load images into the flow manager - much simpler than grid!
-        self.image_flow_manager.load_images(image_data)
+        if is_resize:
+            print("[DEBUG] This is a resize - updating widget widths without recreating widgets")
+            # Just update widget widths for existing widgets
+            self.image_flow_manager.set_widget_width(widget_width)
+            
+            # Restore preserved text content and trigger height adjustment
+            for file_path, preserved_text in current_text_content.items():
+                if file_path in self.image_flow_manager.image_widgets:
+                    widget = self.image_flow_manager.image_widgets[file_path]
+                    widget.set_tags(preserved_text)
+                    print(f"[DEBUG] Restored text for {os.path.basename(file_path)}: '{preserved_text}'")
+            
+            # Explicitly trigger height adjustment after all content is restored
+            # Use a timer to ensure programmatic flags have cleared
+            def trigger_height_adjustment():
+                print("[DEBUG] Triggering height adjustment after text restoration...")
+                for widget in self.image_flow_manager.image_widgets.values():
+                    if hasattr(widget, '_adjust_text_height'):
+                        # Temporarily bypass suppression for this specific height adjustment
+                        original_flag = getattr(widget, '_programmatic_update_in_progress', False)
+                        widget._programmatic_update_in_progress = False
+                        widget._adjust_text_height()
+                        widget._programmatic_update_in_progress = original_flag
+            
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(200, trigger_height_adjustment)  # Short delay, bypass suppression manually
+            
+            # Update the layout
+            self.image_flow_manager.update_layout()
+            
+        else:
+            print("[DEBUG] This is initial load - creating widgets from metadata")
+            # Update the flow manager's widget width
+            self.image_flow_manager.set_widget_width(widget_width)
+            
+            # Prepare image data for the flow manager
+            image_data = []
+            for file_path in self.image_files:
+                if file_path in self.image_previews:
+                    # Get existing metadata/tags if available
+                    metadata = self.image_metadata.get(file_path, {})
+                    
+                    # Build tags from year and keywords
+                    year = metadata.get('year', '')
+                    keywords = metadata.get('keywords', [])
+                    
+                    # Combine year and keywords into a single tag string with duplicate checking
+                    all_tags = []
+                    seen = set()
+                    
+                    # Add year first if it exists and isn't already in keywords
+                    if year:
+                        year_str = str(year)
+                        all_tags.append(year_str)
+                        seen.add(year_str)
+                    
+                    # Add keywords, checking for duplicates
+                    if keywords:
+                        if isinstance(keywords, list):
+                            for keyword in keywords:
+                                keyword_str = str(keyword).strip()
+                                if keyword_str and keyword_str not in seen:
+                                    all_tags.append(keyword_str)
+                                    seen.add(keyword_str)
+                        else:
+                            keyword_str = str(keywords).strip()
+                            if keyword_str and keyword_str not in seen:
+                                all_tags.append(keyword_str)
+                                seen.add(keyword_str)
+                    
+                    existing_tags = ', '.join(all_tags) if all_tags else ''
+                    print(f"[DEBUG] Tags for {os.path.basename(file_path)}: year='{year}', keywords={keywords}, final_tags='{existing_tags}'")
+                    
+                    image_data.append({
+                        'file_path': file_path,
+                        'preview': self.image_previews[file_path],
+                        'metadata': metadata,
+                        'tags': existing_tags
+                    })
+                else:
+                    print(f"Warning: No preview available for {file_path}, skipping...")
+            
+            # Load images into the flow manager - much simpler than grid!
+            self.image_flow_manager.load_images(image_data)
         
         # Update backward compatibility references
         self.image_widgets = list(self.image_flow_manager.image_widgets.values())
@@ -1799,7 +1886,8 @@ class MainWindow(QMainWindow):
         if self.cloudinary_connected:
             self.update_cloudinary_status_for_loaded_images()
         
-        print(f"Layout update completed - {len(image_data)} images loaded with {widget_width}px width")
+        operation_type = "resized" if is_resize else "loaded"
+        print(f"Layout update completed - {len(self.image_widgets)} images {operation_type} with {widget_width}px width")
         print(f"ImageFlowManager now manages {len(self.image_widgets)} widgets")
 
     def open_files(self):
@@ -1829,68 +1917,6 @@ class MainWindow(QMainWindow):
             
             # Start complete integrated processing (new approach)
             self.start_integrated_processing(files, "files")
-
-    def start_image_assessment(self, files, source_type):
-        """Start the assessment phase for the given files"""
-        try:
-            # Show progress bar with assessment message
-            assessment_message = f"Assessing {len(files)} images..."
-            self.show_progress(len(files), assessment_message)
-            
-            # Create settings dialog instance to pass settings
-            from utilities.settings_dialog import SettingsDialog
-            settings_dialog = SettingsDialog(self)
-            
-            # Start the assessment with settings dialog for configuration access
-            self.image_assessment.assess_images(files, settings_dialog)
-            
-        except Exception as e:
-            print(f"Error starting assessment: {e}")
-            # Fallback to original loading method
-            self.fallback_to_original_loading(files)
-    
-    def fallback_to_original_loading(self, files):
-        """Fallback to the original loading method if assessment fails"""
-        print("Falling back to original loading method...")
-        # Show progress bar with specific loading message
-        loading_message = f"Loading {len(files)} images..."
-        self.show_progress(len(files), loading_message)
-        
-        batch_size = 10
-        processed_count = 0
-        successfully_loaded_files = []  # Track files that successfully create previews
-        
-        for i in range(0, len(files), batch_size):
-            batch = files[i:i + batch_size]
-            for file_path in batch:
-                print(f"Creating preview for: {file_path} ({processed_count+1}/{len(files)})")
-                preview = self.create_preview(file_path)
-                if preview is None:
-                    print(f"Warning: Could not create preview for {file_path}")
-                else:
-                    # Only add files that successfully created previews
-                    successfully_loaded_files.append(file_path)
-                
-                processed_count += 1
-                self.update_progress(processed_count)
-            
-            if i + batch_size >= len(files):
-                print("Processing final batch, updating layout...")
-                # Set image_files to only the successfully loaded files
-                self.image_files = successfully_loaded_files
-                print(f"Successfully loaded {len(successfully_loaded_files)} out of {len(files)} files")
-                
-                self.update_layout()
-                self.hide_progress()  # Hide progress bar when done
-                # Show any metadata errors encountered
-                if self.metadata_errors:
-                    QTimer.singleShot(500, self.show_metadata_errors)  # Delay to let UI settle
-                # Show any unsupported files encountered
-                if self.unsupported_files:
-                    QTimer.singleShot(1000, self.show_unsupported_files)  # Delay more to avoid overlapping dialogs
-            else:
-                import gc
-                gc.collect()
 
     def open_folder(self):
         """Open a folder dialog and import all image files from the selected folder"""
@@ -1962,7 +1988,8 @@ class MainWindow(QMainWindow):
         processed_data = []
         for i, file_path in enumerate(image_files):
             try:
-                print(f"[DEBUG] Processing image {i+1}/{len(image_files)}: {os.path.basename(file_path)}")
+                
+                print(f"\n[DEBUG] Loading image {i+1}/{len(image_files)}: {os.path.basename(file_path)}")
                 
                 # Update progress
                 self.update_progress(i + 1)
@@ -1975,8 +2002,8 @@ class MainWindow(QMainWindow):
                         from utilities.settings_dialog import SettingsDialog
                         settings_dialog = SettingsDialog(self)
                         
-                        # Process single image with full Cloudinary assessment
-                        success, result_data, optimized_file = self.cloudinary_updater.process_single_image_complete(
+                        # Process single image with full ImageAssessment Cloudinary logic
+                        success, result_data, optimized_file = self.image_assessment.process_single_image_with_cloudinary_logic(
                             file_path, settings_dialog
                         )
                         
@@ -2078,6 +2105,7 @@ class MainWindow(QMainWindow):
         # Initialize as disconnected
         self.cloudinary_connected = False
         self.cloudinary_updater = None
+        self.cloudinary_files_cache = []  # Global cache for Cloudinary files
         
         try:
             # Get Cloudinary settings from our unified settings system
@@ -2175,12 +2203,11 @@ class MainWindow(QMainWindow):
         print(f"[DEBUG] Checking Cloudinary sync status for {len(self.image_flow_manager.image_widgets)} loaded images...")
         
         try:
-            # Get the cloudinary files list for comparison
-            cloudinary_files = getattr(self.cloudinary_updater, 'cloudinary_files', [])
+            # Use our cached cloudinary files list instead of accessing cloudinary_updater
+            cloudinary_files = getattr(self, 'cloudinary_files_cache', [])
             
             if not cloudinary_files:
-                print("[DEBUG] No Cloudinary files list available - requesting update...")
-                # Could trigger a cloud status request here if needed
+                print("[DEBUG] No cached Cloudinary files available - skipping status update...")
                 return
             
             synced_count = 0
@@ -2223,123 +2250,9 @@ class MainWindow(QMainWindow):
             # Connect signals for progress updates during assessment
             self.image_assessment.assessment_progress.connect(self.update_progress)
             self.image_assessment.assessment_status.connect(self.update_progress_label)
-            self.image_assessment.image_processed.connect(self.on_image_assessed)
-            self.image_assessment.assessment_complete.connect(self.on_assessment_complete)
+            # Note: Removed connections to unused methods (on_image_assessed, on_assessment_complete)
             print("[DEBUG] Image assessment system connected")
     
-    def on_image_assessed(self, file_path, assessment_result):
-        """Handle individual image assessment completion"""
-        # Update any UI elements or tracking for individual image assessment
-        pass
-    
-    def on_assessment_complete(self, assessment_summary):
-        """Handle completion of image assessment phase"""
-        print(f"[DEBUG] Assessment complete: {assessment_summary}")
-        
-        # Check if Cloudinary was enabled in assessment
-        cloudinary_enabled = assessment_summary.get('cloudinary_enabled', False)
-        
-        if cloudinary_enabled:
-            # Extract Cloudinary-specific information
-            total_files = assessment_summary.get('total_files', 0)
-            already_synced = assessment_summary.get('already_synced', 0)
-            files_to_upload = assessment_summary.get('files_to_upload', 0)
-            files_to_resize = assessment_summary.get('files_to_resize', 0)
-            
-            print(f"[DEBUG] Cloudinary assessment results:")
-            print(f"  Total files: {total_files}")
-            print(f"  Already synced: {already_synced}")
-            print(f"  Files to upload: {files_to_upload}")
-            print(f"  Files to resize: {files_to_resize}")
-            
-            # Continue with normal loading for all valid files
-            valid_files = assessment_summary.get('valid_files', [])
-        else:
-            # Basic assessment without Cloudinary
-            valid_files = assessment_summary.get('valid_files', [])
-            print(f"[DEBUG] Basic assessment complete: {len(valid_files)} valid files")
-        
-        if valid_files:
-            # Update progress message for loading phase
-            loading_message = f"Loading {len(valid_files)} assessed images..."
-            self.update_progress_label(loading_message)
-            
-            # Process assessed files with normal preview creation
-            self.process_assessed_images(valid_files)
-        else:
-            # No files to process, finish up
-            self.hide_progress()
-            if hasattr(self, 'unsupported_files') and self.unsupported_files:
-                QTimer.singleShot(500, self.show_unsupported_files)
-    
-    def process_assessed_images(self, assessed_files):
-        """Process the assessed images to create previews and load them into the UI"""
-        batch_size = 10
-        processed_count = 0
-        successfully_loaded_files = []
-        
-        # Reset progress for loading phase
-        self.show_progress(len(assessed_files), f"Loading {len(assessed_files)} images...")
-        
-        for i in range(0, len(assessed_files), batch_size):
-            batch = assessed_files[i:i + batch_size]
-            for file_path in batch:
-                print(f"Creating preview for assessed file: {file_path} ({processed_count+1}/{len(assessed_files)})")
-                
-                # Check if we have optimized version from assessment
-                assessment_data = self.image_assessment.get_assessment_data(file_path)
-                if assessment_data and 'optimized_file' in assessment_data:
-                    # Use the optimized version for preview if available
-                    optimized_file = assessment_data['optimized_file']
-                    if os.path.exists(optimized_file):
-                        print(f"Using optimized version: {optimized_file}")
-                        preview = self.create_preview(optimized_file)
-                        if preview:
-                            # Store under original file path for UI consistency
-                            self.image_previews[file_path] = preview
-                            successfully_loaded_files.append(file_path)
-                        else:
-                            # Fallback to original file
-                            preview = self.create_preview(file_path)
-                            if preview:
-                                successfully_loaded_files.append(file_path)
-                    else:
-                        # Optimized file doesn't exist, use original
-                        preview = self.create_preview(file_path)
-                        if preview:
-                            successfully_loaded_files.append(file_path)
-                else:
-                    # No optimization data, use original file
-                    preview = self.create_preview(file_path)
-                    if preview:
-                        successfully_loaded_files.append(file_path)
-                
-                processed_count += 1
-                self.update_progress(processed_count)
-            
-            if i + batch_size >= len(assessed_files):
-                print("Processing final batch, updating layout...")
-                # Set image_files to only the successfully loaded files
-                self.image_files = successfully_loaded_files
-                print(f"Successfully loaded {len(successfully_loaded_files)} out of {len(assessed_files)} files")
-                
-                self.update_layout()
-                self.hide_progress()  # Hide progress bar when done
-                
-                # Show any metadata errors encountered
-                if self.metadata_errors:
-                    QTimer.singleShot(500, self.show_metadata_errors)  # Delay to let UI settle
-                # Show any unsupported files encountered
-                if self.unsupported_files:
-                    QTimer.singleShot(1000, self.show_unsupported_files)  # Delay more to avoid overlapping dialogs
-                    
-                # Clean up assessment temporary files
-                if hasattr(self.image_assessment, 'cleanup'):
-                    QTimer.singleShot(2000, self.image_assessment.cleanup)  # Clean up after dialogs
-            else:
-                import gc
-                gc.collect()
-        
     def update_progress_label(self, message):
         """Update the progress label with a custom message"""
         if hasattr(self, 'progress_label') and self.progress_label:
@@ -2352,6 +2265,9 @@ class MainWindow(QMainWindow):
             if data[0] == True:  # Status retrieval successful
                 print("[DEBUG] ✅ Cloudinary connection successful!")
                 self._update_cloudinary_ui_status(True, "Connected")
+                
+                # Retrieve Cloudinary files list once at initialization
+                self._retrieve_cloudinary_files_cache()
                 
                 if len(data) > 10:
                     storage_credits = data[8] if len(data) > 8 else "Unknown"
@@ -2373,13 +2289,50 @@ class MainWindow(QMainWindow):
             print("[DEBUG] ❌ No data received from Cloudinary")
             self._update_cloudinary_ui_status(False, "No response")
     
+    def _retrieve_cloudinary_files_cache(self):
+        """Retrieve and cache Cloudinary files list once during initialization"""
+        print("[DEBUG] Retrieving Cloudinary files list for global cache...")
+        try:
+            import cloudinary.api
+            
+            # Use the same logic as the original list_all_files function
+            all_files = []
+            next_cursor = None
+            
+            while True:
+                resources = cloudinary.api.resources(
+                    type="upload", max_results=100, next_cursor=next_cursor
+                )
+                all_files.extend(resources['resources'])
+                next_cursor = resources.get('next_cursor')
+                if not next_cursor:
+                    break
+            
+            self.cloudinary_files_cache = all_files
+            print(f"[DEBUG] ✅ Cached {len(self.cloudinary_files_cache)} files from Cloudinary for global use")
+            
+        except Exception as e:
+            print(f"[WARNING] Could not retrieve Cloudinary files for cache: {e}")
+            self.cloudinary_files_cache = []
+    
     def update_credits_bar(self, storage_percent, transformations_percent, bandwidth_percent):
         """Update the CloudinaryCreditsBar with usage data"""
+        print(f"[DEBUG] main.py update_credits_bar() called with:")
+        print(f"  Storage: {storage_percent} (type: {type(storage_percent)})")
+        print(f"  Transformations: {transformations_percent} (type: {type(transformations_percent)})")
+        print(f"  Bandwidth: {bandwidth_percent} (type: {type(bandwidth_percent)})")
+        
         # Only update if Cloudinary is connected
         if not self.cloudinary_connected:
             print("[DEBUG] Cloudinary not connected - skipping credits bar update")
             return
             
+        # Check if this is a duplicate update (same values as last time)
+        current_values = (storage_percent, transformations_percent, bandwidth_percent)
+        if hasattr(self, '_last_credits_values') and self._last_credits_values == current_values:
+            print("[DEBUG] Credits bar values unchanged - skipping unnecessary update")
+            return
+        
         try:
             # Check if the credits bar widget exists (whatever name it has in the UI)
             credits_bar = None
@@ -2397,21 +2350,27 @@ class MainWindow(QMainWindow):
                 TRANSFORMATIONS_COLOUR = "#32a4ba"  # Blue  
                 BANDWIDTH_COLOUR = "#dbde3e"    # Yellow
                 
-                # Set colors
-                credits_bar.setColors(STORAGE_COLOUR, TRANSFORMATIONS_COLOUR, BANDWIDTH_COLOUR)
+                # Only set colors if this is the first time or they're not set
+                if not self.credits_bar_initialized:
+                    print(f"[DEBUG] First-time credits bar initialization")
+                    credits_bar.setColors(STORAGE_COLOUR, TRANSFORMATIONS_COLOUR, BANDWIDTH_COLOUR)
+                    self.credits_bar_initialized = True
                 
                 # Use the percentages directly (they're already calculated correctly in the Cloudinary data)
                 storage_perc = float(storage_percent) if isinstance(storage_percent, (int, float)) else 0
                 transformations_perc = float(transformations_percent) if isinstance(transformations_percent, (int, float)) else 0
                 bandwidth_perc = float(bandwidth_percent) if isinstance(bandwidth_percent, (int, float)) else 0
                 
-                # Set the percentages
+                print(f"[DEBUG] Converted percentages - Storage: {storage_perc}, Transformations: {transformations_perc}, Bandwidth: {bandwidth_perc}")
+                
+                # Set the percentages (this will handle caching internally)
+                print(f"[DEBUG] Calling setPercentages on credits bar")
                 credits_bar.setPercentages(storage_perc, transformations_perc, bandwidth_perc)
                 
-                print(f"[DEBUG] 📊 Credits bar updated - Storage: {storage_perc:.2f}%, Transformations: {transformations_perc:.2f}%, Bandwidth: {bandwidth_perc:.2f}%")
+                # Store values to prevent duplicate updates
+                self._last_credits_values = current_values
                 
-                # Force a repaint
-                credits_bar.update()
+                print(f"[DEBUG] 📊 Credits bar updated - Storage: {storage_perc:.2f}%, Transformations: {transformations_perc:.2f}%, Bandwidth: {bandwidth_perc:.2f}%")
                 
             else:
                 print("[DEBUG] ⚠️ Credits bar widget not found in main window")
@@ -2436,6 +2395,10 @@ class MainWindow(QMainWindow):
         # If user clicked OK and settings were saved, re-initialize Cloudinary
         if result == QDialog.Accepted:
             print("[DEBUG] Settings saved, re-initializing Cloudinary...")
+            # Reset credits bar flag to allow new data to be shown
+            self.credits_bar_initialized = False
+            if hasattr(self, '_last_credits_values'):
+                delattr(self, '_last_credits_values')
             self.initialize_cloudinary()
             
     def on_tag_clicked(self, tag_text):

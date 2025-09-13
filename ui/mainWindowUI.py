@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Form implementation generated from reading ui file 'ui/mainWindow.ui'
+# Form implementation generated from reading ui file 'd:\Python playfolder\happyTag\ui\mainWindow.ui'
 #
 # Created by: PyQt5 UI code generator 5.15.11
 #
@@ -119,4 +119,14 @@ class Ui_MainWindow(object):
         self.actionOpen_Folder.setShortcut(_translate("MainWindow", "Ctrl+D"))
         self.actionSave.setText(_translate("MainWindow", "Save"))
         self.actionSave.setShortcut(_translate("MainWindow", "Ctrl+S"))
-from cloudinaryCreditsBar import CloudinaryCreditsBar
+from ui.cloudinaryCreditsBar import CloudinaryCreditsBar
+
+
+if __name__ == "__main__":
+    import sys
+    app = QtWidgets.QApplication(sys.argv)
+    MainWindow = QtWidgets.QMainWindow()
+    ui = Ui_MainWindow()
+    ui.setupUi(MainWindow)
+    MainWindow.show()
+    sys.exit(app.exec_())
