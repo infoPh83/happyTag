@@ -9,9 +9,15 @@ from PyQt5.QtCore import Qt, pyqtSignal, QSize, QTimer, QRect
 from PyQt5.QtGui import QMouseEvent
 from .image_card_widget import ImageCardWidget
 from .tag_widgets import FlowLayout
+import gc
+from .debug_utils import debug_layout, debug_memory, debug_errors, debug
 
 # Debug control - set to False to reduce console output
 DEBUG_FLOW = False  # Set to True for flow layout debugging
+
+# Performance limits to prevent crashes
+MAX_WIDGETS_SAFE = 100  # Maximum widgets before using special handling
+BATCH_SIZE_DEFAULT = 25  # Default batch size for large image sets
 
 class ImageFlowManager(QWidget):
     """
@@ -77,20 +83,20 @@ class ImageFlowManager(QWidget):
     def set_widget_width(self, width):
         """Set the width for all image widgets"""
         self.widget_width = max(100, width)  # Remove upper limit to support larger sizes
-        print(f"[DEBUG] Setting widget width to {self.widget_width}px (no upper limit)")
+        debug_layout(f"Setting widget width to {self.widget_width}px (no upper limit)")
         
         # Update all existing widgets
         for widget in self.image_widgets.values():
             widget.set_max_width(self.widget_width)
             
-    def add_image(self, file_path, tags=None, metadata=None, preview_pixmap=None):
+    def add_image(self, file_path, tags=None, metadata=None, preview_pixmap=None, cloudinary_synced=False):
         """Add an image to the flow layout"""
         if file_path in self.image_widgets:
             print(f"[WARNING] Image already exists in flow: {file_path}")
             return
         
-        # Create image widget with current width
-        widget = ImageCardWidget(file_path, max_width=self.widget_width, preview_pixmap=preview_pixmap)
+        # Create image widget with current width and sync status
+        widget = ImageCardWidget(file_path, max_width=self.widget_width, preview_pixmap=preview_pixmap, cloudinary_synced=cloudinary_synced)
         
         # Set initial data
         if tags:
@@ -112,7 +118,7 @@ class ImageFlowManager(QWidget):
         self.flow_layout.addWidget(widget)
         
         if DEBUG_FLOW:
-            print(f"[DEBUG] Added image to flow: {file_path}")
+            debug("layout", f"Added image to flow: {file_path}")
     
     def remove_image(self, file_path):
         """Remove an image from the flow layout"""
@@ -133,12 +139,12 @@ class ImageFlowManager(QWidget):
             self.selection_changed.emit(list(self.selected_files))
             
             if DEBUG_FLOW:
-                print(f"[DEBUG] Removed image from flow: {file_path}")
+                debug("layout", f"Removed image from flow: {file_path}")
     
     def clear_all(self):
         """Remove all images from the flow layout"""
         if DEBUG_FLOW:
-            print("[DEBUG] Clearing all images from flow")
+            debug_layout("[DEBUG] Clearing all images from flow")
         
         # Clear selection
         self.selected_files.clear()
@@ -155,11 +161,11 @@ class ImageFlowManager(QWidget):
         self.selection_changed.emit([])
         
         if DEBUG_FLOW:
-            print(f"[DEBUG] Flow cleared - {len(self.image_widgets)} widgets remaining")
+            debug("layout", f"Flow cleared - {len(self.image_widgets)} widgets remaining")
     
     def update_layout(self):
         """Update the flow layout - much simpler than grid layout"""
-        print("[DEBUG] Updating flow layout...")
+        debug_layout("Updating flow layout...")
         
         # Flow layout handles everything automatically - just trigger a repaint
         self.flow_widget.updateGeometry()
@@ -173,17 +179,17 @@ class ImageFlowManager(QWidget):
         flow_size = self.flow_widget.size()
         flow_hint = self.flow_widget.sizeHint()
         flow_min = self.flow_widget.minimumSizeHint()
-        print(f"[DEBUG] Flow layout updated - {len(self.image_widgets)} widgets")
-        print(f"[DEBUG] Flow widget size: {flow_size.width()}x{flow_size.height()}")
-        print(f"[DEBUG] Flow widget sizeHint: {flow_hint.width()}x{flow_hint.height()}")
-        print(f"[DEBUG] Flow widget minimumSizeHint: {flow_min.width()}x{flow_min.height()}")
+        debug_layout(f"Flow layout updated - {len(self.image_widgets)} widgets")
+        debug_layout(f"Flow widget size: {flow_size.width()}x{flow_size.height()}")
+        debug_layout(f"Flow widget sizeHint: {flow_hint.width()}x{flow_hint.height()}")
+        debug_layout(f"Flow widget minimumSizeHint: {flow_min.width()}x{flow_min.height()}")
         
         if hasattr(self, 'scroll_area') and self.scroll_area and self.scroll_area.viewport():
             viewport_size = self.scroll_area.viewport().size()
-            print(f"[DEBUG] Scroll area viewport: {viewport_size.width()}x{viewport_size.height()}")
+            debug_layout(f"Scroll area viewport: {viewport_size.width()}x{viewport_size.height()}")
         elif self.parent() and hasattr(self.parent(), 'size'):
             parent_size = self.parent().size()
-            print(f"[DEBUG] Parent size: {parent_size.width()}x{parent_size.height()}")
+            debug_layout(f"Parent size: {parent_size.width()}x{parent_size.height()}")
         
         # Force correct document widths after layout update (for resize operations)
         # QTimer.singleShot(100, self.force_all_document_widths)  # Test if still needed with QPlainTextEdit
@@ -238,18 +244,73 @@ class ImageFlowManager(QWidget):
     
     # Bulk loading method
     def load_images(self, image_data_list):
-        """Load multiple images at once - much more efficient than grid approach"""
-        print(f"[DEBUG] ImageFlowManager: Loading {len(image_data_list)} images")
+        """Load multiple images at once - with batching for large sets"""
+        total_count = len(image_data_list)
+        debug("file_ops", f"ImageFlowManager: Loading {total_count} images")
         
         # Clear existing images
         self.clear_all()
         
-        # Add a small delay to ensure all widget cleanup is complete
-        QTimer.singleShot(50, lambda: self._load_images_after_cleanup(image_data_list))
+        # For large image sets, use batching to prevent memory issues
+        if total_count > MAX_WIDGETS_SAFE:
+            debug("file_ops", f"Large image set detected ({total_count} images), using batched loading (max safe: {MAX_WIDGETS_SAFE})")
+            # Add a small delay to ensure all widget cleanup is complete, then start batching
+            QTimer.singleShot(50, lambda: self._load_images_in_batches(image_data_list))
+        else:
+            debug("file_ops", f"Normal image set ({total_count} images), using standard loading")
+            # Add a small delay to ensure all widget cleanup is complete
+            QTimer.singleShot(50, lambda: self._load_images_after_cleanup(image_data_list))
+        
+    def _load_images_in_batches(self, image_data_list, batch_size=None, current_batch=0):
+        """Load images in smaller batches to prevent memory overload"""
+        if batch_size is None:
+            batch_size = BATCH_SIZE_DEFAULT
+            
+        total_count = len(image_data_list)
+        start_idx = current_batch * batch_size
+        end_idx = min(start_idx + batch_size, total_count)
+        
+        if start_idx >= total_count:
+            debug("file_ops", f"Batched loading complete: {total_count} images loaded")
+            self.setUpdatesEnabled(True)
+            self.update()
+            self.update_layout()
+            debug_memory(f"Total widgets in memory: {len(self.image_widgets)}")
+            return
+        
+        try:
+            batch_data = image_data_list[start_idx:end_idx]
+            debug("file_ops", f"Loading batch {current_batch + 1}: images {start_idx + 1}-{end_idx} of {total_count}")
+            
+            # Temporarily disable layout updates during batch loading
+            if current_batch == 0:
+                self.setUpdatesEnabled(False)
+            
+            # Add images in this batch
+            for image_data in batch_data:
+                file_path = image_data['file_path']
+                tags = image_data.get('tags', '')
+                metadata = image_data.get('metadata', {})
+                preview_pixmap = image_data.get('preview', None)
+                cloudinary_synced = metadata.get('cloudinary_synced', False)  # Extract sync status from metadata
+
+                # Add the image with preview pixmap and sync status
+                self.add_image(file_path, tags=tags, metadata=metadata, preview_pixmap=preview_pixmap, cloudinary_synced=cloudinary_synced)
+            
+            # Force garbage collection after each batch to free memory
+            gc.collect()
+            
+            # Process next batch after a short delay to allow Qt to process events
+            QTimer.singleShot(150, lambda: self._load_images_in_batches(image_data_list, batch_size, current_batch + 1))
+            
+        except Exception as e:
+            debug_errors(f"Failed to load batch {current_batch + 1}: {e}")
+            # Try to recover by continuing with the next batch
+            QTimer.singleShot(300, lambda: self._load_images_in_batches(image_data_list, batch_size, current_batch + 1))
         
     def _load_images_after_cleanup(self, image_data_list):
         """Load images after cleanup delay"""
-        print(f"[DEBUG] ImageFlowManager: Starting delayed image load of {len(image_data_list)} images")
+        debug("file_ops", f"ImageFlowManager: Starting delayed image load of {len(image_data_list)} images")
         
         # Temporarily disable layout updates to prevent premature size calculations
         self.setUpdatesEnabled(False)
@@ -260,15 +321,16 @@ class ImageFlowManager(QWidget):
             tags = image_data.get('tags', '')
             metadata = image_data.get('metadata', {})
             preview_pixmap = image_data.get('preview', None)
+            cloudinary_synced = metadata.get('cloudinary_synced', False)  # Extract sync status from metadata
 
-            # Add the image with preview pixmap
-            self.add_image(file_path, tags=tags, metadata=metadata, preview_pixmap=preview_pixmap)
+            # Add the image with preview pixmap and sync status
+            self.add_image(file_path, tags=tags, metadata=metadata, preview_pixmap=preview_pixmap, cloudinary_synced=cloudinary_synced)
             
         # Re-enable updates and force a layout update
         self.setUpdatesEnabled(True)
         self.update()
             
-        print(f"[DEBUG] ImageFlowManager: Successfully loaded {len(self.image_widgets)} images")        # Update layout after loading all images (very lightweight)
+        debug("file_ops", f"ImageFlowManager: Successfully loaded {len(self.image_widgets)} images")        # Update layout after loading all images (very lightweight)
         self.update_layout()
         
         # QPlainTextEdit should handle width correctly without forcing
@@ -277,13 +339,13 @@ class ImageFlowManager(QWidget):
     
     def force_all_document_widths(self):
         """Force correct document widths for all widgets after layout is complete"""
-        print(f"[DEBUG] ImageFlowManager: Forcing document widths for {len(self.image_widgets)} widgets...")
+        debug("layout", f"ImageFlowManager: Forcing document widths for {len(self.image_widgets)} widgets...")
         
         for file_path, widget in self.image_widgets.items():
             if hasattr(widget, 'force_document_width_post_layout'):
                 widget.force_document_width_post_layout()
         
-        print(f"[DEBUG] ImageFlowManager: Document width forcing complete")
+        debug("layout", "ImageFlowManager: Document width forcing complete")
     
     def eventFilter(self, obj, event):
         """Handle mouse events for rubber band selection and empty area clicks"""
@@ -364,4 +426,4 @@ class ImageFlowManager(QWidget):
                         widget.set_selected(True)
                         newly_selected.append(file_path)
         
-        print(f"[DEBUG] Rubber band selection: {len(newly_selected)} images selected")
+        debug("ui_events", f"Rubber band selection: {len(newly_selected)} images selected")

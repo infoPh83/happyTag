@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                             QAbstractScrollArea, QApplication)
 from PyQt5.QtCore import Qt, pyqtSignal, QSize, QTimer, QEvent
 from PyQt5.QtGui import QPixmap, QFont, QFontMetrics, QPalette, QContextMenuEvent, QTextOption, QTextDocument
+from .debug_utils import debug_layout, debug_image_display, debug_memory, debug_errors, debug
 
 # Debug control - set to False to reduce console output
 DEBUG_LAYOUT = False  # Set to True for layout debugging
@@ -30,14 +31,14 @@ class ImageCardWidget(QWidget):
     double_clicked = pyqtSignal(str)           # file_path
     clear_other_selections = pyqtSignal(str)   # file_path of item to keep selected
     
-    def __init__(self, file_path, max_width=300, preview_pixmap=None, parent=None):
+    def __init__(self, file_path, max_width=300, preview_pixmap=None, cloudinary_synced=False, parent=None):
         super().__init__(parent)
         # Core data
         self.file_path = file_path
         self.max_width = max_width
         self.preview_pixmap = preview_pixmap  # Store preview pixmap if provided
         self.is_selected = False
-        self.is_on_cloudinary = False  # Cloudinary sync status
+        self.is_on_cloudinary = cloudinary_synced  # Set Cloudinary sync status from constructor
         self.metadata = {}
         self.tags = []
         
@@ -68,6 +69,9 @@ class ImageCardWidget(QWidget):
         self._load_image()
         self._setup_connections()
         
+        # Apply initial visual styling based on sync status
+        self._update_visual_style()
+        
         # Always call set_tags to ensure text height is properly initialized
         self.set_tags([])
     
@@ -85,11 +89,11 @@ class ImageCardWidget(QWidget):
                     if self.parent() is not None:
                         callback()
                     else:
-                        print(f"[DEBUG] Timer callback skipped - widget orphaned: {os.path.basename(self.file_path) if hasattr(self, 'file_path') else 'unknown'}")
+                        debug("memory", f"Timer callback skipped - widget orphaned: {os.path.basename(self.file_path) if hasattr(self, 'file_path') else 'unknown'}")
                 else:
-                    print(f"[DEBUG] Timer callback skipped - widget destroyed")
+                    debug("memory", "Timer callback skipped - widget destroyed")
             except RuntimeError:
-                print(f"[DEBUG] Timer callback skipped - widget deleted")
+                debug("memory", "Timer callback skipped - widget deleted")
             finally:
                 self._remove_timer(timer)
         
@@ -277,10 +281,10 @@ class ImageCardWidget(QWidget):
         try:
             # Use preview pixmap if available, otherwise load from file
             if self.preview_pixmap:
-                print(f"[DEBUG] Using preview pixmap for {os.path.basename(self.file_path)}")
+                debug_image_display(f"Using preview pixmap for {os.path.basename(self.file_path)}")
                 pixmap = self.preview_pixmap
             else:
-                print(f"[DEBUG] Loading from file: {os.path.basename(self.file_path)}")
+                debug_image_display(f"Loading from file: {os.path.basename(self.file_path)}")
                 if not os.path.exists(self.file_path):
                     self._set_error_image("File not found")
                     return
@@ -294,7 +298,7 @@ class ImageCardWidget(QWidget):
             # Use the passed max_width directly - don't try to get widget width during initialization
             available_width = self.max_width - (2 * self.image_margin)
             
-            print(f"[DEBUG] Scaling image {os.path.basename(self.file_path)}: max_width={self.max_width}, available_width={available_width}")
+            debug_image_display(f"Scaling image {os.path.basename(self.file_path)}: max_width={self.max_width}, available_width={available_width}")
             scaled_pixmap = self._scale_pixmap(pixmap, available_width)
             
             # Set the pixmap and force the label to match the pixmap size exactly
@@ -313,7 +317,7 @@ class ImageCardWidget(QWidget):
             # Account for border (2px * 2) and padding (4px * 2) = 12px total
             text_content_width = image_width - 12
             document.setTextWidth(text_content_width)
-            print(f"[DEBUG] Set text widget width to {image_width}px, content width to {text_content_width}px")
+            debug_layout(f"Set text widget width to {image_width}px, content width to {text_content_width}px")
             
             # Position filename label at top of image as overlay
             self._position_filename_label()
@@ -617,7 +621,7 @@ class ImageCardWidget(QWidget):
         
         # Check if a programmatic update is in progress
         if self._programmatic_update_in_progress:
-            print(f"[DEBUG] Skipping height adjustment during programmatic update (_on_text_changed)")
+            debug("layout", "Skipping height adjustment during programmatic update (_on_text_changed)")
             return
             
         # Auto-adjust text height based on content
@@ -759,10 +763,10 @@ class ImageCardWidget(QWidget):
             # print(f"[DEBUG-HEIGHT] AFTER setFixedHeight - new height: {self.text_edit.height()}px")
             
             if DEBUG_HEIGHT:
-                print(f"[DEBUG] Document-based height calculation for {os.path.basename(self.file_path)}:")
-                print(f"[DEBUG]   text_width: {text_widget_width} | available_width: {available_width}")
-                print(f"[DEBUG]   content_chars: {len(text_content)} | doc_height: {doc_height} | actual_lines: {actual_lines} | final_height: {optimal_height}")
-                print(f"[DEBUG]   block_count: {block_count} | line_height: {line_height}")
+                debug("layout", f"Document-based height calculation for {os.path.basename(self.file_path)}:")
+                debug("layout", f"  text_width: {text_widget_width} | available_width: {available_width}")
+                debug("layout", f"  content_chars: {len(text_content)} | doc_height: {doc_height} | actual_lines: {actual_lines} | final_height: {optimal_height}")
+                debug("layout", f"  block_count: {block_count} | line_height: {line_height}")
             
             self._create_safe_timer(100, lambda: self._safe_check_actual_height(f"{len(text_content)} chars ({actual_lines} lines)"))
             
@@ -770,7 +774,7 @@ class ImageCardWidget(QWidget):
             self._create_safe_timer(150, lambda: self._safe_minimum_height_calculation())
         else:
             # Fallback if document is not available - use old method
-            print(f"[DEBUG] Document not available, using fallback height calculation")
+            debug("layout", "Document not available, using fallback height calculation")
             self.text_edit.setFixedHeight(dynamic_min_height)
             self.text_edit.setMaximumHeight(dynamic_min_height)
             self.text_edit.setMinimumHeight(dynamic_min_height)
@@ -785,11 +789,11 @@ class ImageCardWidget(QWidget):
                 if self.text_edit.parent() is not None or not self.text_edit.isHidden():
                     self._check_actual_height(description)
                 else:
-                    print(f"[DEBUG] Widget orphaned before height check for {description}")
+                    debug("memory", f"Widget orphaned before height check for {description}")
             else:
-                print(f"[DEBUG] Widget destroyed before height check for {description}")
+                debug("memory", f"Widget destroyed before height check for {description}")
         except Exception as e:
-            print(f"[DEBUG] Error in safe height check for {description}: {e}")
+            debug_errors(f"Error in safe height check for {description}: {e}")
 
     def _check_actual_height(self, description):
         """Check and report the actual rendered height of the text edit"""
@@ -801,13 +805,13 @@ class ImageCardWidget(QWidget):
                 minimum_size = self.text_edit.minimumHeight()
                 # Debug output reduced - only log significant issues
                 if actual_height < minimum_size * 0.8:  # Only log if significantly different
-                    print(f"[DEBUG] Height issue for {description}: actual={actual_height}px, expected={minimum_size}px")
+                    debug("layout", f"Height issue for {description}: actual={actual_height}px, expected={minimum_size}px")
         except RuntimeError:
             # Widget has been deleted, ignore the callback
             pass  # Reduced debug output
         except Exception as e:
-            print(f"[DEBUG] Error during height check for {description}: {e}")
-            print(f"[DEBUG]   - Minimum height: {minimum_size}px")
+            debug_errors(f"Error during height check for {description}: {e}")
+            debug_errors(f"  - Minimum height: {minimum_size}px")
     
     # Public interface methods
     
@@ -827,7 +831,7 @@ class ImageCardWidget(QWidget):
         
         # Debug what we're actually setting
         if tags_text:
-            print(f"[DEBUG] Setting tags for {os.path.basename(self.file_path)}: '{tags_text}' (length: {len(tags_text)})")
+            debug("tags", f"Setting tags for {os.path.basename(self.file_path)}: '{tags_text}' (length: {len(tags_text)})")
         
         # Set programmatic update flag to suppress width enforcement
         self._programmatic_update_in_progress = True
@@ -926,6 +930,11 @@ class ImageCardWidget(QWidget):
                 background-color: {hover_color};
             }}
         """)
+        
+        # Force widget to repaint with new styling
+        if self.container_frame:
+            self.container_frame.update()
+        self.update()
     
     def _update_selection_style(self):
         """Legacy method - redirects to _update_visual_style for backward compatibility"""
@@ -1000,30 +1009,30 @@ class ImageCardWidget(QWidget):
                 if (hasattr(self, 'parent') and (self.parent() is not None or not self.isHidden())):
                     self._calculate_and_set_minimum_height()
                 else:
-                    print(f"[DEBUG] Widget orphaned before minimum height calculation")
+                    debug("memory", "Widget orphaned before minimum height calculation")
             else:
-                print(f"[DEBUG] Widget destroyed before minimum height calculation")
+                debug("memory", "Widget destroyed before minimum height calculation")
         except Exception as e:
-            print(f"[DEBUG] Error in safe minimum height calculation: {e}")
+            debug_errors(f"Error in safe minimum height calculation: {e}")
 
     def _calculate_and_set_minimum_height(self):
         """Calculate and set the minimum height to prevent overlapping"""
         try:
             # Safety check: ensure the widget still exists and hasn't been deleted
             if not hasattr(self, 'image_label') or self.image_label is None:
-                print(f"[DEBUG] Widget destroyed before minimum height calculation")
+                debug("memory", "Widget destroyed before minimum height calculation")
                 return
                 
             # Additional safety check for widget validity
             if not hasattr(self, 'file_path'):
-                print(f"[DEBUG] Widget missing file_path, skipping height calculation")
+                debug("memory", "Widget missing file_path, skipping height calculation")
                 return
                 
             # Check if image_label has been deleted
             try:
                 pixmap_check = self.image_label.pixmap()  # This will throw RuntimeError if deleted
             except RuntimeError:
-                print(f"[DEBUG] Image label deleted before height calculation for {os.path.basename(self.file_path) if hasattr(self, 'file_path') else 'unknown'}")
+                debug("memory", f"Image label deleted before height calculation for {os.path.basename(self.file_path) if hasattr(self, 'file_path') else 'unknown'}")
                 return
             
             if self.image_label and hasattr(self.image_label, 'pixmap') and pixmap_check:
@@ -1041,7 +1050,7 @@ class ImageCardWidget(QWidget):
                     
                     # Only log significant height changes for debugging
                     if DEBUG_HEIGHT and hasattr(self, '_last_min_height') and abs(total_min_height - self._last_min_height) > 20:
-                        print(f"[DEBUG] Height change for {os.path.basename(self.file_path)}: {self._last_min_height}px → {total_min_height}px")
+                        debug("layout", f"Height change for {os.path.basename(self.file_path)}: {self._last_min_height}px → {total_min_height}px")
                     self._last_min_height = total_min_height
                     
                     # Set the minimum height to prevent compression
@@ -1050,10 +1059,10 @@ class ImageCardWidget(QWidget):
                         try:
                             self.container_frame.setMinimumHeight(total_min_height - 10)  # Account for main margins
                         except RuntimeError:
-                            print(f"[DEBUG] Container frame deleted during height calculation")
+                            debug("memory", "Container frame deleted during height calculation")
                             
                 except RuntimeError as e:
-                    print(f"[DEBUG] Widget deleted during height calculation: {e}")
+                    debug("memory", f"Widget deleted during height calculation: {e}")
                     
             else:
                 # Fallback minimum height
@@ -1061,10 +1070,10 @@ class ImageCardWidget(QWidget):
                 try:
                     self.setMinimumHeight(default_height)
                 except RuntimeError:
-                    print(f"[DEBUG] Widget deleted before setting default height")
+                    debug("memory", "Widget deleted before setting default height")
                     
         except Exception as e:
-            print(f"[DEBUG] Error in minimum height calculation: {e}")
+            debug_errors(f"Error in minimum height calculation: {e}")
 
     def sizeHint(self):
         """Provide size hint for layout"""
@@ -1096,9 +1105,9 @@ class ImageCardWidget(QWidget):
             if hasattr(self, 'text_edit') and self.text_edit:
                 self.text_edit.textChanged.disconnect()
                 self.text_edit = None
-            print(f"[DEBUG] Cleaned up ImageCardWidget for {os.path.basename(self.file_path) if hasattr(self, 'file_path') else 'unknown'}")
+            debug("memory", f"Cleaned up ImageCardWidget for {os.path.basename(self.file_path) if hasattr(self, 'file_path') else 'unknown'}")
         except Exception as e:
-            print(f"[DEBUG] Error during cleanup: {e}")
+            debug_errors(f"Error during cleanup: {e}")
     
     def __del__(self):
         """Destructor to ensure cleanup when widget is destroyed"""

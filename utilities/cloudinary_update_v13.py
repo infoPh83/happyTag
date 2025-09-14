@@ -613,19 +613,36 @@ def convert_to_gb(size):
 
 # Missing function definitions needed for compilation
 def load_csv_database(csv_path):
-    """Load the CSV database into a dictionary and validate its structure."""
+    """
+    Load the CSV database into a dictionary and validate its structure.
+    Handles both legacy single keys and new incremental keys for duplicate (size+filetype).
+    """
     database = {}
     if csv_path.exists():
         with open(csv_path, mode='r', newline='') as file:
             reader = csv.DictReader(file)
+            key_counters = {}  # Track how many times we've seen each (size+filetype)
+            
             for row in reader:
                 try:
-                    key = (int(row['original_size']), row['filetype'])
-                    database[key] = {
+                    base_key = (int(row['original_size']), row['filetype'])
+                    
+                    # Handle duplicate keys by using incremental identifiers
+                    if base_key in key_counters:
+                        key_counters[base_key] += 1
+                        db_key = (base_key, key_counters[base_key])
+                    else:
+                        key_counters[base_key] = 0
+                        db_key = base_key  # First occurrence uses simple key
+                    
+                    database[db_key] = {
                         'file_name': row['file_name'],
                         'original_size': int(row['original_size']),
                         'resized_size': int(row['resized_size']) if row['resized_size'] else None,
-                        'filetype': row['filetype']
+                        'filetype': row['filetype'],
+                        'public_id': row.get('public_id', ''),  # Add public_id field with fallback
+                        'url': row.get('url', ''),  # Add url field with fallback
+                        'upload_date': row.get('upload_date', '')  # Add upload_date field with fallback
                     }
                 except KeyError as e:
                     print(f"Missing field in CSV row: {e}. Row: {row}")
@@ -637,10 +654,13 @@ def update_csv_database(csv_path, database):
     """Update the CSV database with new entries."""
     print(f"Updating database with {len(database)} entries")
     with open(csv_path, mode='w', newline='') as file:
-        fieldnames = ['file_name', 'original_size', 'resized_size', 'filetype']
+        fieldnames = ['file_name', 'original_size', 'resized_size', 'filetype', 'public_id', 'url', 'upload_date']
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
-        for data in database.values():
+        
+        # Sort database entries by resized_size for consistent ordering
+        sorted_entries = sorted(database.values(), key=lambda x: x.get('resized_size', 0))
+        for data in sorted_entries:
             writer.writerow(data)
 
 def get_local_temp_dir():

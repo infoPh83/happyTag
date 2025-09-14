@@ -558,10 +558,10 @@ class CloudinaryUpdater(QObject):
             if not hasattr(self, 'database'):
                 self.database = {}
             
-            # Add to database
+            # Add to database with auto-generated public_id
             self.database[db_key] = {
                 'url': result_data['cloudinary_url'],
-                'public_id': file_path_obj.stem,
+                'public_id': 'auto-generated',  # Will be updated with actual upload
                 'upload_date': datetime.now().isoformat()
             }
             
@@ -1097,12 +1097,12 @@ def upload_to_cloudinary(file_path, folder):
         response = cloudinary.uploader.upload(
             str(file_path),
             folder=folder,
-            public_id=re.sub(r"[^\w]", "_", file_path.stem),
             resource_type='image',
             tags=["hello", "tag n.2", "I'm a cloudinary tag"]
         )
-        debug_log(f"Upload successful: {file_path.name} -> {response['public_id']}")
-        return response.get('public_id')
+        auto_generated_public_id = response.get('public_id', '')
+        debug_log(f"Upload successful: {file_path.name} -> auto-generated public_id: {auto_generated_public_id}")
+        return response  # Return full response instead of just public_id
     except Exception as e:
         raise Exception (e)
     #    logging.error(f"Failed to upload {file_path.name}: {e}")
@@ -1371,9 +1371,21 @@ def upload_phase(self, files_to_upload, files_to_resize, temp_dir_path, local_di
                     # Clean up the folder name
                     cloud_folder = re.sub(r"[^\w/]", "_", cloud_folder)
 
-                    public_id = upload_to_cloudinary(file_path, cloud_folder)
-                    if public_id:
+                    upload_response = upload_to_cloudinary(file_path, cloud_folder)
+                    if upload_response:
                         uploaded_count += 1
+                        
+                        # Extract auto-generated public_id for database update
+                        auto_public_id = upload_response.get('public_id', '')
+                        cloudinary_url = upload_response.get('secure_url', upload_response.get('url', ''))
+                        
+                        # Update database with auto-generated public_id
+                        original_size = file_path.stat().st_size
+                        filetype = file_path.suffix.lower()
+                        db_key = (original_size, filetype)
+                        if db_key in database:
+                            database[db_key]['public_id'] = auto_public_id
+                            database[db_key]['url'] = cloudinary_url
 
                     # Update progress
                     
@@ -1554,8 +1566,15 @@ def create_resize_tmp_dir():
                     upload_result = upload_to_cloudinary(str(resized_file_path), folder_name)
                     if upload_result:
                         result_data['uploaded'] = True
-                        result_data['cloudinary_url'] = upload_result.get('secure_url', '')
-                        print(f"[DEBUG] Single process - Successfully uploaded: {file_path_obj.name}")
+                        result_data['cloudinary_url'] = upload_result.get('secure_url', upload_result.get('url', ''))
+                        
+                        # Update database with auto-generated public_id  
+                        auto_public_id = upload_result.get('public_id', '')
+                        if hasattr(self, 'database') and db_key in self.database:
+                            self.database[db_key]['public_id'] = auto_public_id
+                            self.database[db_key]['url'] = result_data['cloudinary_url']
+                        
+                        print(f"[DEBUG] Single process - Successfully uploaded: {file_path_obj.name} -> public_id: {auto_public_id}")
                     else:
                         print(f"[WARNING] Single process - Upload failed: {file_path_obj.name}")
                 except Exception as e:
@@ -1614,8 +1633,15 @@ def create_resize_tmp_dir():
                         upload_result = upload_to_cloudinary(str(resized_file_path), folder_name)
                         if upload_result:
                             result_data['uploaded'] = True
-                            result_data['cloudinary_url'] = upload_result.get('secure_url', '')
-                            print(f"[DEBUG] Single process - Successfully uploaded new file: {file_path_obj.name}")
+                            result_data['cloudinary_url'] = upload_result.get('secure_url', upload_result.get('url', ''))
+                            
+                            # Update database with auto-generated public_id
+                            auto_public_id = upload_result.get('public_id', '')
+                            if db_key in self.database:
+                                self.database[db_key]['public_id'] = auto_public_id
+                                self.database[db_key]['url'] = result_data['cloudinary_url']
+                            
+                            print(f"[DEBUG] Single process - Successfully uploaded new file: {file_path_obj.name} -> public_id: {auto_public_id}")
                         else:
                             print(f"[WARNING] Single process - Upload failed for new file: {file_path_obj.name}")
                     except Exception as e:

@@ -17,12 +17,17 @@ from io import BytesIO
 import logging
 from PyQt5.QtCore import QObject, pyqtSignal
 
+# Import debug utilities
+from .debug_utils import (
+    debug_assessment, debug_cloudinary, debug_file_ops, 
+    debug_memory, debug_errors, debug_startup
+)
+
 # Constants from Cloudinary system
 MAX_DIMENSION = 4000  # Maximum dimension on the longest side
 VALID_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp'}
 SUPPORTED_FORMATS = {'JPEG', 'PNG', 'GIF', 'BMP', 'TIFF', 'WEBP'}
 RESIZING_TIME_LIMIT = 20  # Set time limit in seconds
-DEFAULT_MAX_FILE_SIZE = 3.2 * 1024 * 1024  # 3.2MB in bytes
 DATABASE_FILE_NAME = "cloudinary_database.csv"
 LOG_NAME_PREFIX = "happytag_assessment_"
 
@@ -40,8 +45,35 @@ class ImageAssessment(QObject):
     assessment_complete = pyqtSignal(dict)   # Final assessment summary
     
     def __init__(self, max_file_size=None, cloudinary_updater=None, main_app=None):
+        """
+        Initialize ImageAssessment system
+        
+        Args:
+            max_file_size (int, optional): Maximum file size in bytes for image resizing.
+                                         If not provided, will be retrieved from cloudinary_updater.
+            cloudinary_updater (CloudinaryUpdater, optional): Cloudinary integration object.
+                                                             Used to get max file size from user settings.
+            main_app (QMainWindow, optional): Reference to main application for accessing cached data.
+            
+        Raises:
+            ValueError: If max_file_size is not provided and cannot be retrieved from cloudinary_updater.
+                       This is a critical configuration requirement.
+        """
         super().__init__()
-        self.max_file_size = max_file_size or DEFAULT_MAX_FILE_SIZE
+        
+        # Get max file size from cloudinary_updater if available, otherwise require explicit setting
+        if max_file_size is not None:
+            self.max_file_size = max_file_size
+        elif cloudinary_updater and hasattr(cloudinary_updater, 'maxFileSize') and cloudinary_updater.maxFileSize > 0:
+            self.max_file_size = cloudinary_updater.maxFileSize
+            debug_assessment(f"Using max file size from Cloudinary settings: {self.max_file_size:,} bytes")
+        else:
+            # This is a critical error - max file size must be configured
+            error_msg = ("Max file size not configured! Please configure Cloudinary settings " +
+                        "with a valid max file size, or provide max_file_size parameter.")
+            debug_errors(error_msg)
+            raise ValueError(error_msg)
+        
         self.cloudinary_updater = cloudinary_updater
         self.main_app = main_app  # Reference to main app for accessing cached data
         self.assessment_data = {}
@@ -63,6 +95,16 @@ class ImageAssessment(QObject):
         self.already_synced_count = 0  # Files already on Cloudinary
         self.total_original_size = 0   # Total size of original files
         self.total_upload_size = 0     # Total size of files to upload
+        
+    def reset_assessment_lists(self):
+        """Reset all assessment lists and counters for a new processing session"""
+        debug_assessment("Resetting assessment lists for new processing session")
+        self.files_to_upload = []
+        self.files_to_resize = []
+        self.already_synced_count = 0
+        self.total_original_size = 0
+        self.total_upload_size = 0
+        debug_assessment(f"Assessment lists reset - ready for new session")
         
     def setup_logging(self, log_folder):
         """Setup logging for assessment phase"""
@@ -92,7 +134,7 @@ class ImageAssessment(QObject):
             self.log_file_handle.write("=" * 50 + "\n\n")
             self.log_file_handle.flush()
             
-            print(f"[DEBUG] Assessment logging enabled: {log_file_path}")
+            debug_assessment(f"Assessment logging enabled: {log_file_path}")
             
         except Exception as e:
             print(f"[ERROR] Failed to setup assessment logging: {e}")
@@ -122,7 +164,7 @@ class ImageAssessment(QObject):
                 self.log_file_handle.write(f"\n\nSession ended: {session_end}\n")
                 self.log_file_handle.write("=" * 50 + "\n")
                 self.log_file_handle.close()
-                print("[DEBUG] Assessment logging closed")
+                debug_assessment("Assessment logging closed")
             except Exception as e:
                 print(f"[ERROR] Failed to close log file: {e}")
             finally:
@@ -158,19 +200,17 @@ class ImageAssessment(QObject):
                 'original_file': str(file_path),
                 'original_size': original_size,
                 'filetype': filetype,
-                'processed': False,
-                'uploaded': False,
-                'already_synced': False,
+                'processed': False,        # True if file was resized during this assessment
+                'already_synced': False,   # True if file is already synced with Cloudinary
                 'resized_size': None,
-                'cloudinary_url': None,
                 'error': None
             }
             
-            print(f"[DEBUG] Processing {file_path_obj.name}: {original_size} bytes, {filetype}")
+            debug_assessment(f"Processing {file_path_obj.name}: {original_size} bytes, {filetype}")
             
             # CORE CLOUDINARY LOGIC: Check if file is in database
             if self._is_file_in_database(original_size, filetype):
-                print(f"[DEBUG] File found in database: {file_path_obj.name}")
+                debug_assessment(f"File found in database: {file_path_obj.name}")
                 
                 # Get resized size from database
                 resized_size = self.database[db_key]['resized_size']
@@ -178,18 +218,17 @@ class ImageAssessment(QObject):
                 
                 # CRITICAL: Check if file is synced with Cloudinary
                 if self._is_file_synced(file_path_obj, resized_size):
-                    print(f"[DEBUG] File SYNCED with Cloudinary: {file_path_obj.name}")
+                    debug_cloudinary(f"File SYNCED with Cloudinary: {file_path_obj.name}")
                     result_data['already_synced'] = True
-                    result_data['cloudinary_url'] = self.database[db_key].get('url', '')
-                    return True, result_data, None
                 else:
-                    print(f"[DEBUG] File in database but NOT synced with Cloudinary: {file_path_obj.name}")
-                    # Will need to be re-uploaded (resized file should exist)
-                    result_data['uploaded'] = True  # Placeholder for now
-                    result_data['cloudinary_url'] = f"https://res.cloudinary.com/example/{file_path_obj.name}"
-                    return True, result_data, None
+                    debug_cloudinary(f"File NOT synced with Cloudinary: {file_path_obj.name}")
+                    result_data['already_synced'] = False
+                    # CRITICAL FIX: File is in database but not synced - needs resizing before upload
+                    # Add to resize list (original file path) - it will be resized later during upload phase
+                    self.files_to_resize.append(str(file_path))
+                return True, result_data, None
             else:
-                print(f"[DEBUG] File NOT in database, needs processing: {file_path_obj.name}")
+                debug_assessment(f"File NOT in database, needs processing: {file_path_obj.name}")
                 
                 # Create temp directory if needed
                 if not self.temp_dir:
@@ -216,19 +255,18 @@ class ImageAssessment(QObject):
                     'file_name': file_path_obj.name,
                     'original_size': original_size,
                     'resized_size': resized_size,
-                    'filetype': filetype,
-                    'url': f"https://res.cloudinary.com/example/{file_path_obj.name}"  # Placeholder
+                    'filetype': filetype
                 }
                 
                 # CRITICAL: Check if resized file is already synced with Cloudinary
                 if self._is_file_synced(file_path_obj, resized_size):
-                    print(f"[DEBUG] New file already SYNCED with Cloudinary: {file_path_obj.name}")
+                    debug_cloudinary(f"New file already SYNCED with Cloudinary: {file_path_obj.name}")
                     result_data['already_synced'] = True
-                    result_data['cloudinary_url'] = self.database[db_key]['url']
                 else:
-                    print(f"[DEBUG] New file NOT synced, needs upload: {file_path_obj.name}")
-                    result_data['uploaded'] = True  # Placeholder for actual upload
-                    result_data['cloudinary_url'] = self.database[db_key]['url']
+                    debug_cloudinary(f"New file NOT synced with Cloudinary: {file_path_obj.name}")
+                    result_data['already_synced'] = False
+                    # CRITICAL FIX: Add to upload list since newly processed file is not synced
+                    self.files_to_upload.append(str(resized_file_path))
                 
                 # Save database
                 self._save_database()
@@ -248,10 +286,8 @@ class ImageAssessment(QObject):
                 'original_size': original_size,
                 'filetype': file_path_obj.suffix.lower(),
                 'processed': False,
-                'uploaded': False,
-                'already_synced': False,
+                'already_synced': False,  # Always False for basic processing (no Cloudinary)
                 'resized_size': None,
-                'cloudinary_url': None,
                 'error': None
             }
             
@@ -340,12 +376,12 @@ class ImageAssessment(QObject):
                 original_size = file_path_obj.stat().st_size
                 filetype = file_path_obj.suffix.lower()
                 
-                print(f"[DEBUG] Assessing {file_path_obj.name}: {original_size} bytes, {filetype}")
+                debug_assessment(f"Assessing {file_path_obj.name}: {original_size} bytes, {filetype}")
                 self.log_message(f"Assessing {file_path_obj.name}: {original_size} bytes, {filetype}")
                 
                 # Check if file is in database (CORE CLOUDINARY LOGIC)
                 if self._is_file_in_database(original_size, filetype):
-                    print(f"[DEBUG] File found in database: {file_path_obj.name}")
+                    debug_assessment(f"File found in database: {file_path_obj.name}")
                     self.log_message(f"File found in database: {file_path_obj.name}")
                     
                     # FILE IS IN DATABASE - get resized size and check Cloudinary sync
@@ -353,19 +389,19 @@ class ImageAssessment(QObject):
                     resized_size = self.database[db_key]['resized_size']
                     
                     if not self._is_file_synced(file_path_obj, resized_size):
-                        print(f"[DEBUG] File in database but NOT synced with Cloudinary: {file_path_obj.name}")
+                        debug_cloudinary(f"File in database but NOT synced with Cloudinary: {file_path_obj.name}")
                         self.log_message(f"File in database but NOT synced with Cloudinary: {file_path_obj.name}")
                         # FILE IS NOT SYNCED WITH CLOUDINARY - will be resized and uploaded later
                         self.files_to_resize.append(file_path)
                         self.total_upload_size += resized_size
                         self.total_original_size += original_size
                     else:
-                        print(f"[DEBUG] File in database and SYNCED with Cloudinary: {file_path_obj.name}")
+                        debug_cloudinary(f"File in database and SYNCED with Cloudinary: {file_path_obj.name}")
                         self.log_message(f"File in database and SYNCED with Cloudinary: {file_path_obj.name}")
                         # FILE IS SYNCED WITH CLOUDINARY - skip
                         self.already_synced_count += 1
                 else:
-                    print(f"[DEBUG] File NOT in database, needs processing: {file_path_obj.name}")
+                    debug_assessment(f"File NOT in database, needs processing: {file_path_obj.name}")
                     self.log_message(f"File NOT in database, needs processing: {file_path_obj.name}")
                     # FILE NOT IN DATABASE - resize now to get size for Cloudinary comparison
                     files_to_be_resized_in_assessment.append(file_path)
@@ -413,17 +449,17 @@ class ImageAssessment(QObject):
                         'filetype': filetype
                     }
                     
-                    print(f"[DEBUG] Added to database: {file_path_obj.name}, original: {original_size}, resized: {resized_size}")
+                    debug_assessment(f"Added to database: {file_path_obj.name}, original: {original_size}, resized: {resized_size}")
                     
                     # Check if resized file is already synced with Cloudinary (CORE CLOUDINARY LOGIC)
                     if not self._is_file_synced(file_path_obj, resized_size):
-                        print(f"[DEBUG] New file NOT synced with Cloudinary: {file_path_obj.name}")
+                        debug_cloudinary(f"New file NOT synced with Cloudinary: {file_path_obj.name}")
                         # FILE NOT SYNCED - add to upload queue
                         self.files_to_upload.append(str(resized_file_path))
                         self.total_upload_size += resized_size
                         self.total_original_size += original_size
                     else:
-                        print(f"[DEBUG] New file already SYNCED with Cloudinary: {file_path_obj.name}")
+                        debug_cloudinary(f"New file already SYNCED with Cloudinary: {file_path_obj.name}")
                         # FILE ALREADY SYNCED - skip
                         self.already_synced_count += 1
                     
@@ -456,11 +492,11 @@ class ImageAssessment(QObject):
         self.assessment_progress.emit(100)
         self.assessment_complete.emit(assessment_summary)
         
-        print(f"[DEBUG] Assessment complete:")
-        print(f"  Total files: {len(valid_files)}")
-        print(f"  Already synced: {self.already_synced_count}")
-        print(f"  Need upload: {len(self.files_to_upload)}")
-        print(f"  Need resize: {len(self.files_to_resize)}")
+        debug_assessment("Assessment complete:")
+        debug_assessment(f"  Total files: {len(valid_files)}")
+        debug_assessment(f"  Already synced: {self.already_synced_count}")
+        debug_assessment(f"  Need upload: {len(self.files_to_upload)}")
+        debug_assessment(f"  Need resize: {len(self.files_to_resize)}")
         
         # Log final summary
         self.log_message("=== ASSESSMENT SUMMARY ===")
@@ -491,17 +527,17 @@ class ImageAssessment(QObject):
                 database_path = Path("logs") / DATABASE_FILE_NAME
             
             self.database = self._load_csv_database(database_path)
-            print(f"[DEBUG] Loaded database with {len(self.database)} entries from {database_path}")
+            debug_assessment(f"Loaded database with {len(self.database)} entries from {database_path}")
             self.log_message(f"Loaded database with {len(self.database)} entries from {database_path}")
             
             # Get Cloudinary files list from cache instead of making API calls
             if self.cloudinary_updater and self.main_app and hasattr(self.main_app, 'cloudinary_files_cache'):
                 # Use cached data from main app (retrieved once at startup)
                 self.cloudinary_files = self.main_app.cloudinary_files_cache
-                print(f"[DEBUG] Using cached Cloudinary files list: {len(self.cloudinary_files)} files")
+                debug_cloudinary(f"Using cached Cloudinary files list: {len(self.cloudinary_files)} files")
                 self.log_message(f"Using cached Cloudinary files list: {len(self.cloudinary_files)} files")
             elif self.cloudinary_updater:
-                print("[DEBUG] No cached Cloudinary files available, falling back to API call")
+                debug_cloudinary("No cached Cloudinary files available, falling back to API call")
                 try:
                     # Fallback to API call if cache not available (should rarely happen)
                     import cloudinary.api
@@ -520,14 +556,14 @@ class ImageAssessment(QObject):
                             break
                     
                     self.cloudinary_files = all_files
-                    print(f"[DEBUG] Retrieved {len(self.cloudinary_files)} files from Cloudinary API (fallback)")
+                    debug_cloudinary(f"Retrieved {len(self.cloudinary_files)} files from Cloudinary API (fallback)")
                     self.log_message(f"Retrieved {len(self.cloudinary_files)} files from Cloudinary API (fallback)")
                 except Exception as e:
                     print(f"[WARNING] Could not retrieve Cloudinary files: {e}")
                     self.log_message(f"Could not retrieve Cloudinary files: {e}", "WARNING")
                     self.cloudinary_files = []
             else:
-                print("[DEBUG] No CloudinaryUpdater available, skipping Cloudinary sync check")
+                debug_cloudinary("No CloudinaryUpdater available, skipping Cloudinary sync check")
                 self.log_message("No CloudinaryUpdater available, skipping Cloudinary sync check", "WARNING")
                 self.cloudinary_files = []
             
@@ -540,7 +576,7 @@ class ImageAssessment(QObject):
     
     def _basic_image_assessment(self, image_files):
         """Fallback to basic image assessment without Cloudinary integration"""
-        print("[DEBUG] Performing basic image assessment (no Cloudinary)")
+        debug_assessment("Performing basic image assessment (no Cloudinary)")
         self.log_message("Performing basic image assessment (no Cloudinary)", "WARNING")
         
         valid_files = []
@@ -724,10 +760,13 @@ class ImageAssessment(QObject):
                 fieldnames = ['file_name', 'original_size', 'resized_size', 'filetype']
                 writer = csv.DictWriter(file, fieldnames=fieldnames)
                 writer.writeheader()
-                for data in self.database.values():
+                
+                # Sort database entries by resized_size for better performance
+                sorted_entries = sorted(self.database.values(), key=lambda x: x.get('resized_size', 0))
+                for data in sorted_entries:
                     writer.writerow(data)
             
-            print(f"[DEBUG] Saved database with {len(self.database)} entries to {database_path}")
+            debug_assessment(f"Saved database with {len(self.database)} entries to {database_path}")
             
         except Exception as e:
             print(f"[ERROR] Failed to save database: {e}")
@@ -744,7 +783,7 @@ class ImageAssessment(QObject):
             try:
                 import shutil
                 shutil.rmtree(self.temp_dir, ignore_errors=True)
-                print(f"[DEBUG] Cleaned up temporary directory: {self.temp_dir}")
+                debug_file_ops(f"Cleaned up temporary directory: {self.temp_dir}")
             except Exception as e:
                 print(f"[WARNING] Failed to clean up temporary directory: {e}")
     

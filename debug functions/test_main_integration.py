@@ -23,7 +23,9 @@ def test_main_app_integration():
         print("✅ Imports successful")
         
         # Test that the new method exists
-        assessment = ImageAssessment()
+        # Initialize ImageAssessment with explicit max file size for testing
+        test_max_size = 3.2 * 1024 * 1024  # 3.2MB for testing
+        assessment = ImageAssessment(max_file_size=test_max_size)
         if hasattr(assessment, 'process_single_image_with_cloudinary_logic'):
             print("✅ New method exists in ImageAssessment")
         else:

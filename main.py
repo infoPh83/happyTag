@@ -8,9 +8,6 @@ from datetime import datetime
 from PIL import Image
 from PIL.ExifTags import TAGS
 
-# Debug control flags - set to False to reduce console output
-DEBUG_LAYOUT = False  # Set to True for layout debugging  
-DEBUG_SELECTION = False  # Set to True for selection debugging
 from PyQt5.QtWidgets import (QMainWindow, QApplication, QFileDialog, 
                            QWidget, QLabel, QTextEdit, QMessageBox,
                            QVBoxLayout, QGridLayout, QSizePolicy, QProgressBar, QRubberBand, QDialog)
@@ -23,6 +20,12 @@ from utilities.cloudinary_update_v13 import CloudinaryUpdater
 from ui.cloudinaryCreditsBar import CloudinaryCreditsBar
 from utilities.image_assessment import ImageAssessment
 from utilities.image_flow_manager import ImageFlowManager
+from utilities.cloudinary_upload_handler import CloudinaryUploadHandler
+from utilities.debug_utils import (
+    debug_startup, debug_layout, debug_image_display, debug_tags, 
+    debug_metadata, debug_cloudinary, debug_memory, debug_errors,
+    debug_file_ops, debug_assessment, debug_ui_events, configure_debug, print_debug_status, debug, debug_upload
+)
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -47,7 +50,7 @@ try:
     def cleanup_stale_exiftool_processes():
         """Clean up any stale ExifTool processes before starting new ones"""
         try:
-            print(f"[DEBUG] Cleaning up any stale ExifTool processes...")
+            debug_startup("Cleaning up any stale ExifTool processes...")
             if platform.system().lower() == 'windows':
                 # Kill any existing exiftool processes on Windows
                 subprocess.run(['taskkill', '/f', '/im', 'exiftool.exe'], 
@@ -58,9 +61,9 @@ try:
                 # Kill any existing exiftool processes on Unix-like systems
                 subprocess.run(['pkill', '-f', 'exiftool'], 
                              capture_output=True, text=True)
-            print(f"[DEBUG] Stale process cleanup completed")
+            debug_startup("Stale process cleanup completed")
         except Exception as e:
-            print(f"[DEBUG] Process cleanup warning (non-critical): {e}")
+            debug_startup(f"Process cleanup warning (non-critical): {e}")
     
     # Clean up any stale processes first
     cleanup_stale_exiftool_processes()
@@ -75,10 +78,10 @@ try:
         is_bundled = getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
         
         if is_bundled:
-            print(f"[DEBUG] Running from PyInstaller bundle, base path: {sys._MEIPASS}")
+            debug_startup(f"Running from PyInstaller bundle, base path: {sys._MEIPASS}")
             base_path = sys._MEIPASS
         else:
-            print(f"[DEBUG] Running in development mode")
+            debug_startup("Running in development mode")
             base_path = os.path.abspath(".")
         
         if system == 'windows':
@@ -120,25 +123,25 @@ try:
             return None
         
         if os.path.exists(exiftool_path):
-            print(f"[DEBUG] ExifTool found at: {exiftool_path}")
+            debug_startup(f"ExifTool found at: {exiftool_path}")
             return exiftool_path
         else:
-            print(f"[DEBUG] ExifTool executable not found at: {exiftool_path}")
+            debug_startup(f"ExifTool executable not found at: {exiftool_path}")
             return None
     
     # Try to find local ExifTool installation
     local_exiftool_path = detect_exiftool_path()
     
-    print(f"[DEBUG] Local ExifTool path detected: {local_exiftool_path}")
+    debug_startup(f"Local ExifTool path detected: {local_exiftool_path}")
     
     if local_exiftool_path:
         # Test if local ExifTool works
         try:
-            print(f"[DEBUG] Testing local ExifTool at: {local_exiftool_path}")
+            debug_startup(f"Testing local ExifTool at: {local_exiftool_path}")
             with exiftool.ExifTool(executable=local_exiftool_path) as et:
                 # Simple test - try to get version
                 test_result = et.execute("-ver")
-                print(f"[DEBUG] ExifTool version test result: {test_result}")
+                debug_startup(f"ExifTool version test result: {test_result}")
             EXIFTOOL_AVAILABLE = True
             EXIFTOOL_PATH = local_exiftool_path
             print(f"Successfully using local ExifTool from: {local_exiftool_path}")
@@ -147,17 +150,17 @@ try:
             EXIFTOOL_AVAILABLE = False
             EXIFTOOL_PATH = None
     else:
-        print(f"[DEBUG] No local ExifTool path found")
+        debug_startup("No local ExifTool path found")
         EXIFTOOL_AVAILABLE = False
         EXIFTOOL_PATH = None
     
     # Fallback to system ExifTool if local one doesn't work
     if not EXIFTOOL_AVAILABLE:
-        print(f"[DEBUG] Trying system ExifTool as fallback")
+        debug_startup("Trying system ExifTool as fallback")
         try:
             with exiftool.ExifTool() as et:
                 test_result = et.execute("-ver")
-                print(f"[DEBUG] System ExifTool version test result: {test_result}")
+                debug_startup(f"System ExifTool version test result: {test_result}")
             EXIFTOOL_AVAILABLE = True
             EXIFTOOL_PATH = None
             print("Using system ExifTool")
@@ -166,7 +169,7 @@ try:
             EXIFTOOL_PATH = None
             print("Warning: ExifTool executable not found - using fallback metadata reading")
 
-    print(f"[DEBUG] Final ExifTool status: EXIFTOOL_AVAILABLE={EXIFTOOL_AVAILABLE}, EXIFTOOL_PATH={EXIFTOOL_PATH}")
+    debug_startup(f"Final ExifTool status: EXIFTOOL_AVAILABLE={EXIFTOOL_AVAILABLE}, EXIFTOOL_PATH={EXIFTOOL_PATH}")
 
 except ImportError:
     EXIFTOOL_AVAILABLE = False
@@ -177,6 +180,10 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         
+        # Initialize debug system
+        debug_startup("Initializing HappyTag application")
+        print_debug_status()
+        
         # Check if UI file exists before loading
         ui_path = resource_path('ui/mainWindow.ui')
         if not os.path.exists(ui_path):
@@ -184,6 +191,7 @@ class MainWindow(QMainWindow):
             
         # Load the UI
         uic.loadUi(ui_path, self)
+        debug_startup("UI loaded successfully")
         
         # Initialize resize timer
         self.resize_timer = QTimer(self)
@@ -229,6 +237,10 @@ class MainWindow(QMainWindow):
         # Connect Settings action
         if hasattr(self, 'actionSettings'):
             self.actionSettings.triggered.connect(self.show_settings)
+        
+        # Connect Cloudinary Sync action
+        if hasattr(self, 'actionSynch_with_Cloudinary'):
+            self.actionSynch_with_Cloudinary.triggered.connect(self.start_cloudinary_upload)
         
         # Create the Tags Window action if it doesn't exist
         if not hasattr(self, 'actionTags_Window'):
@@ -302,6 +314,13 @@ class MainWindow(QMainWindow):
         self.image_assessment = ImageAssessment(cloudinary_updater=self.cloudinary_updater, main_app=self)
         self.setup_image_assessment_connections()
         
+        # Initialize Cloudinary Upload Handler (after Cloudinary and Assessment setup)
+        self.upload_handler = CloudinaryUploadHandler(
+            cloudinary_updater=self.cloudinary_updater,
+            image_assessment=self.image_assessment
+        )
+        self.setup_upload_handler_connections()
+        
         # Track metadata errors for reporting
         self.metadata_errors = []
         self.unsupported_files = []  # Track files that couldn't be loaded due to unsupported format
@@ -367,41 +386,41 @@ class MainWindow(QMainWindow):
             import exiftool as et_module
             
             if EXIFTOOL_AVAILABLE:
-                print(f"[DEBUG] Initializing persistent ExifTool...")
+                debug_startup("Initializing persistent ExifTool...")
                 
                 try:
                     if EXIFTOOL_PATH:
-                        print(f"[DEBUG] Using local ExifTool: {EXIFTOOL_PATH}")
+                        debug_startup(f"Using local ExifTool: {EXIFTOOL_PATH}")
                         self.persistent_exiftool = et_module.ExifTool(executable=EXIFTOOL_PATH)
                     else:
-                        print(f"[DEBUG] Using system ExifTool")
+                        debug_startup("Using system ExifTool")
                         self.persistent_exiftool = et_module.ExifTool()
                     
                     # Start the persistent process using __enter__
-                    print(f"[DEBUG] Starting ExifTool process...")
+                    debug_startup("Starting ExifTool process...")
                     self.persistent_exiftool.__enter__()
                     
                     # Test the connection with a simple command
                     test_result = self.persistent_exiftool.execute("-ver")
-                    print(f"[DEBUG] ExifTool connection test: {test_result.strip()}")
+                    debug_startup(f"ExifTool connection test: {test_result.strip()}")
                     
                     self.exiftool_available = True
-                    print(f"[DEBUG] Persistent ExifTool started successfully")
+                    debug_startup("Persistent ExifTool started successfully")
                     
                 except Exception as start_error:
-                    print(f"[DEBUG] Failed to start ExifTool process: {start_error}")
+                    debug_errors(f"Failed to start ExifTool process: {start_error}")
                     self.exiftool_available = False
                     self.persistent_exiftool = None
                     
             else:
-                print(f"[DEBUG] ExifTool not available globally, skipping persistent instance")
+                debug_startup("ExifTool not available globally, skipping persistent instance")
                 self.exiftool_available = False
                 
         except ImportError:
-            print(f"[DEBUG] ExifTool module not available for persistent instance")
+            debug_startup("ExifTool module not available for persistent instance")
             self.exiftool_available = False
         except Exception as e:
-            print(f"[DEBUG] Failed to initialize persistent ExifTool: {e}")
+            debug_errors(f"Failed to initialize persistent ExifTool: {e}")
             self.exiftool_available = False
             self.persistent_exiftool = None
 
@@ -409,11 +428,11 @@ class MainWindow(QMainWindow):
         """Clean up the persistent ExifTool instance"""
         if hasattr(self, 'persistent_exiftool') and self.persistent_exiftool:
             try:
-                print(f"[DEBUG] Terminating persistent ExifTool...")
+                debug_startup("Terminating persistent ExifTool...")
                 self.persistent_exiftool.__exit__(None, None, None)
-                print(f"[DEBUG] Persistent ExifTool terminated successfully")
+                debug_startup("Persistent ExifTool terminated successfully")
             except Exception as e:
-                print(f"[DEBUG] Error terminating persistent ExifTool: {e}")
+                debug_errors(f"Error terminating persistent ExifTool: {e}")
             finally:
                 self.persistent_exiftool = None
                 self.exiftool_available = False
@@ -426,26 +445,25 @@ class MainWindow(QMainWindow):
     # ImageFlowManager Signal Handlers
     def on_grid_selection_changed(self, selected_files):
         """Handle selection changes from the ImageFlowManager"""
-        if DEBUG_SELECTION:
-            print(f"[DEBUG] Flow selection changed: {len(selected_files)} files selected")
+        debug_ui_events(f"Flow selection changed: {len(selected_files)} files selected")
         self.selected_images = set(selected_files)
         self.update_status_bar()
         
     def on_image_double_clicked(self, file_path):
         """Handle image double-click from the ImageFlowManager"""
-        print(f"[DEBUG] Image double-clicked: {file_path}")
+        debug("ui_events", f"Image double-clicked: {file_path}")
         # Add your double-click logic here (e.g., open image in external viewer)
         
     def on_image_tags_changed(self, file_path, new_tags):
         """Handle tag changes from the ImageFlowManager"""
-        print(f"[DEBUG] Tags changed for {file_path}: {new_tags}")
+        debug("tags", f"Tags changed for {file_path}: {new_tags}")
         # Update the metadata storage
         if file_path in self.image_metadata:
             self.image_metadata[file_path]['keywords'] = new_tags
         
     def on_image_context_menu(self, file_path, position):
         """Handle context menu requests from the ImageFlowManager"""
-        print(f"[DEBUG] Context menu requested for {file_path} at {position}")
+        debug("ui_events", f"Context menu requested for {file_path} at {position}")
         # Add your context menu logic here
 
     def get_image_metadata(self, file_path):
@@ -456,12 +474,12 @@ class MainWindow(QMainWindow):
         
         # Skip files that previously caused issues
         if file_path in self.problematic_files:
-            print(f"[DEBUG] Skipping problematic file: {filename}")
+            debug_metadata(f"Skipping problematic file: {filename}")
             return year, keywords
         
         try:
             if self.exiftool_available and self.persistent_exiftool:
-                print(f"[DEBUG] Reading metadata with persistent ExifTool from: {filename}")
+                debug_metadata(f"Reading metadata with persistent ExifTool from: {filename}")
                 
                 # Use the persistent ExifTool instance (no context manager needed)
                 et = self.persistent_exiftool
@@ -485,7 +503,7 @@ class MainWindow(QMainWindow):
                                         else:
                                             # Standard format: 2025:08:03 19:09:13
                                             year = datetime.strptime(date_str, '%Y:%m:%d %H:%M:%S').year
-                                        print(f"[DEBUG] Found DateTimeOriginal year: {year}")
+                                        debug_metadata(f"Found DateTimeOriginal year: {year}")
                                         break
                                     except ValueError:
                                         continue
@@ -508,13 +526,13 @@ class MainWindow(QMainWindow):
                                             else:
                                                 # Standard format: 2025:08:03 19:09:13
                                                 year = datetime.strptime(date_str, '%Y:%m:%d %H:%M:%S').year
-                                            print(f"[DEBUG] Found CreateDate year: {year}")
+                                            debug_metadata(f"Found CreateDate year: {year}")
                                             break
                                         except ValueError:
                                             continue
                                         
                 except Exception as e:
-                    print(f"[DEBUG] Date extraction failed: {e}")
+                    debug_errors(f"Date extraction failed: {e}")
                 
                 # Read keywords (existing logic)
                 if self.enable_metadata_reading:
@@ -536,7 +554,7 @@ class MainWindow(QMainWindow):
                                     else:
                                         keywords.append(keyword_values.strip())
                     except Exception as e:
-                        print(f"[DEBUG] IPTC Keywords read failed: {e}")
+                        debug_errors(f"IPTC Keywords read failed: {e}")
                     
                     try:
                         # Try to get XMP Keywords  
@@ -556,7 +574,7 @@ class MainWindow(QMainWindow):
                                     else:
                                         keywords.append(keyword_values.strip())
                     except Exception as e:
-                        print(f"[DEBUG] XMP Keywords read failed: {e}")
+                        debug_errors(f"XMP Keywords read failed: {e}")
                     
                     try:
                         # Try to get XMP Subject (Dublin Core - for Windows/cross-platform compatibility)
@@ -576,7 +594,7 @@ class MainWindow(QMainWindow):
                                     else:
                                         keywords.append(keyword_values.strip())
                     except Exception as e:
-                        print(f"[DEBUG] XMP Subject read failed: {e}")
+                        debug_errors(f"XMP Subject read failed: {e}")
                     
                     try:
                         # Try to get XMP-dc:Subject (Dublin Core Subject - for macOS Finder compatibility)
@@ -596,11 +614,11 @@ class MainWindow(QMainWindow):
                                     else:
                                         keywords.append(keyword_values.strip())
                     except Exception as e:
-                        print(f"[DEBUG] XMP-dc:Subject read failed: {e}")
+                        debug_errors(f"XMP-dc:Subject read failed: {e}")
                 
             # Fallback to PIL for date if ExifTool not available
             elif not year:
-                print(f"[DEBUG] Using PIL fallback for date extraction: {filename}")
+                debug_metadata(f"Using PIL fallback for date extraction: {filename}")
                 try:
                     with Image.open(file_path) as img:
                         # Try to get EXIF data for JPEG files
@@ -638,7 +656,7 @@ class MainWindow(QMainWindow):
             if not year:
                 timestamp = os.path.getctime(file_path)
                 year = datetime.fromtimestamp(timestamp).year
-                print(f"[DEBUG] Using file creation year: {year}")
+                debug_metadata(f"Using file creation year: {year}")
             
             # Remove duplicate keywords while preserving order
             unique_keywords = []
@@ -649,15 +667,15 @@ class MainWindow(QMainWindow):
                     seen.add(keyword)
             
             if year:
-                print(f"[DEBUG] Found year for {filename}: {year}")
+                debug_metadata(f"Found year for {filename}: {year}")
             if unique_keywords:
-                print(f"[DEBUG] Found keywords for {filename}: {unique_keywords}")
+                debug_metadata(f"Found keywords for {filename}: {unique_keywords}")
                 
             return year, unique_keywords
                 
         except Exception as e:
             error_msg = str(e)[:200]
-            print(f"[DEBUG] Metadata read failed for {filename}: {error_msg}")
+            debug_errors(f"Metadata read failed for {filename}: {error_msg}")
             self.metadata_errors.append((file_path, [f"Metadata read error: {error_msg}"]))
             
             # Mark as problematic to avoid future attempts
@@ -689,11 +707,11 @@ class MainWindow(QMainWindow):
         
         changed = current_set != original_set
         if changed:
-            print(f"[DEBUG] Keywords changed for {os.path.basename(file_path)}")
-            print(f"[DEBUG]   Original: {sorted(original_set)}")
-            print(f"[DEBUG]   Current:  {sorted(current_set)}")
+            debug("tags", f"Keywords changed for {os.path.basename(file_path)}")
+            debug("tags", f"  Original: {sorted(original_set)}")
+            debug("tags", f"  Current:  {sorted(current_set)}")
         else:
-            print(f"[DEBUG] Keywords unchanged for {os.path.basename(file_path)}")
+            debug("tags", f"Keywords unchanged for {os.path.basename(file_path)}")
         
         return changed
 
@@ -721,7 +739,7 @@ class MainWindow(QMainWindow):
             ], capture_output=True, text=True)
             
             if result.returncode != 0:
-                print(f"[DEBUG] Failed to write extended attributes: {result.stderr}")
+                debug_errors(f"Failed to write extended attributes: {result.stderr}")
                 return False, f"xattr error: {result.stderr}"
             
             # Method 2: Write Spotlight Metadata (for search and indexing)
@@ -755,32 +773,32 @@ class MainWindow(QMainWindow):
                             value, file_path
                         ], capture_output=True)
                 
-                print(f"[DEBUG] Successfully wrote Spotlight metadata")
+                debug("tags", "Successfully wrote Spotlight metadata")
                 
             except Exception as spotlight_error:
-                print(f"[DEBUG] Spotlight metadata write failed: {spotlight_error}")
+                debug_errors(f"Spotlight metadata write failed: {spotlight_error}")
                 # Continue anyway, extended attributes are still written
             
-            print(f"[DEBUG] Successfully wrote macOS Finder tags to {os.path.basename(file_path)}")
+            debug("tags", f"Successfully wrote macOS Finder tags to {os.path.basename(file_path)}")
             
             # Force Spotlight reindex for immediate visibility
             try:
                 subprocess.run(['mdimport', file_path], capture_output=True, timeout=5)
-                print(f"[DEBUG] Triggered Spotlight reindex for {os.path.basename(file_path)}")
+                debug("tags", f"Triggered Spotlight reindex for {os.path.basename(file_path)}")
             except:
                 pass  # Non-critical if reindex fails
             
             return True, "Success"
                 
         except Exception as e:
-            print(f"[DEBUG] Error writing macOS Finder tags: {e}")
+            debug_errors(f"Error writing macOS Finder tags: {e}")
             return False, f"Error: {str(e)}"
 
     def save_keywords_to_image(self, file_path, keywords_text):
         """Save keywords to image metadata using ExifTool (with fallback notification)"""
         # Check if keywords have actually changed
         if not self.has_keywords_changed(file_path, keywords_text):
-            print(f"[DEBUG] Skipping save for {os.path.basename(file_path)} - no changes")
+            debug("tags", f"Skipping save for {os.path.basename(file_path)} - no changes")
             return True, ""
             
         if not keywords_text.strip():
@@ -797,7 +815,7 @@ class MainWindow(QMainWindow):
         
         if self.exiftool_available and self.persistent_exiftool:
             try:
-                print(f"[DEBUG] Saving keywords with persistent ExifTool to {file_path}: {keywords}")
+                debug("tags", f"Saving keywords with persistent ExifTool to {file_path}: {keywords}")
                 
                 # Use the persistent ExifTool instance (no context manager needed)
                 et = self.persistent_exiftool
@@ -810,7 +828,7 @@ class MainWindow(QMainWindow):
                 if file_ext not in writable_formats:
                     # Format doesn't support metadata writing
                     format_msg = f"Format {file_ext.upper()} doesn't support metadata writing. Keywords preserved in application only."
-                    print(f"[DEBUG] {format_msg}")
+                    debug("tags", format_msg)
                     return False, format_msg
                 
                 # OPTIMIZED: Write all tags in a single ExifTool call to avoid regenerating the file multiple times
@@ -860,7 +878,7 @@ class MainWindow(QMainWindow):
                     # Execute ALL operations in a SINGLE ExifTool call
                     if cmd_args:
                         cmd_args.extend(['-overwrite_original', file_path])
-                        print(f"[DEBUG] Executing single optimized ExifTool command with {len(cmd_args)-2} tag operations")
+                        debug("tags", f"Executing single optimized ExifTool command with {len(cmd_args)-2} tag operations")
                         et.execute(*cmd_args)
                     
                     # Update original keywords after successful save (including year)
@@ -870,24 +888,24 @@ class MainWindow(QMainWindow):
                     if keywords:  # Only write if there are keywords
                         finder_success, finder_msg = self.write_macos_finder_tags(file_path, keywords)
                         if finder_success:
-                            print(f"[DEBUG] macOS Finder tags also written successfully")
+                            debug("tags", "macOS Finder tags also written successfully")
                         else:
-                            print(f"[DEBUG] macOS Finder tags not written: {finder_msg}")
+                            debug("tags", f"macOS Finder tags not written: {finder_msg}")
                     
                     # Remove from new files tracking after successful save
                     if hasattr(self, 'new_files_with_year') and file_path in self.new_files_with_year:
                         self.new_files_with_year.remove(file_path)
                     
-                    print(f"[DEBUG] Successfully saved keywords to {file_path}")
+                    debug("tags", f"Successfully saved keywords to {file_path}")
                     return True, ""
                 except Exception as write_e:
                     error_msg = f"ExifTool write error: {str(write_e)[:200]}"
-                    print(f"[DEBUG] {error_msg}")
+                    debug_errors(error_msg)
                     return False, error_msg
                     
             except Exception as e:
                 error_msg = f"ExifTool write error: {str(e)[:200]}"
-                print(f"[DEBUG] {error_msg}")
+                debug_errors(error_msg)
                 return False, error_msg
         
         else:
@@ -1126,21 +1144,19 @@ class MainWindow(QMainWindow):
         if not self.image_flow_manager.image_widgets:
             return
         
-        if DEBUG_SELECTION:
-            print("[DEBUG] Selecting all images using ImageFlowManager")
+        debug_ui_events("Selecting all images using ImageFlowManager")
         
         # Use ImageFlowManager's select_all method
         self.image_flow_manager.select_all()
         
-        if DEBUG_SELECTION:
-            print(f"[DEBUG] Selected {len(self.image_flow_manager.selected_files)} images")
+        debug_ui_events(f"Selected {len(self.image_flow_manager.selected_files)} images")
 
     def clear_selected_tags(self):
         """Clear all tags from selected images"""
         if not self.selected_images:
             return
         
-        print(f"[DEBUG] Clearing tags from {len(self.selected_images)} selected images")
+        debug("ui_events", f"Clearing tags from {len(self.selected_images)} selected images")
         
         # Show confirmation dialog
         from PyQt5.QtWidgets import QMessageBox
@@ -1168,7 +1184,7 @@ class MainWindow(QMainWindow):
                 if widget.file_path in self.image_metadata:
                     self.image_metadata[widget.file_path]['keywords'] = ""
         
-        print(f"[DEBUG] Cleared tags from {cleared_count} images")
+        debug("tags", f"Cleared tags from {cleared_count} images")
         
         # Show completion message
         QMessageBox.information(
@@ -1373,7 +1389,7 @@ class MainWindow(QMainWindow):
             if not last_word:
                 return
                 
-            print(f"[DEBUG] sync_tags | last_word: '{last_word}' | source_field: {getattr(source_field, 'file_path', None)}")
+            debug("tags", f"sync_tags | last_word: '{last_word}' | source_field: {getattr(source_field, 'file_path', None)}")
             current_widgets = list(self.image_flow_manager.image_widgets.values()) if hasattr(self, 'image_flow_manager') else []
             for widget in current_widgets:
                 if (hasattr(widget, 'file_path') and 
@@ -1383,16 +1399,16 @@ class MainWindow(QMainWindow):
                     target = widget.input_field
                     target._updating = True
                     existing = target.toPlainText().strip()
-                    print(f"[DEBUG] sync_tags | target file_path: {widget.file_path} | existing: '{existing}'")
+                    debug("tags", f"sync_tags | target file_path: {widget.file_path} | existing: '{existing}'")
                     if existing:
                         if not existing.endswith(','):
                             existing += ','
                         existing += ' '
                         target.setText(f"{existing}{last_word}")
-                        print(f"[DEBUG] sync_tags | setText: '{existing}{last_word}'")
+                        debug("tags", f"sync_tags | setText: '{existing}{last_word}'")
                     else:
                         target.setText(last_word)
-                        print(f"[DEBUG] sync_tags | setText: '{last_word}'")
+                        debug("tags", f"sync_tags | setText: '{last_word}'")
                     target._updating = False
         
         def updateHeight():
@@ -1437,10 +1453,9 @@ class MainWindow(QMainWindow):
                 input_field.setFixedHeight(final_height)
                 updateContainerHeight()  # Update container height after input field height change
                 
-                if DEBUG_LAYOUT:
-                    print(f"[DEBUG] updateHeight | file_path: {file_path} | width: {current_width} | available_width: {available_width}")
-                    print(f"[DEBUG]   content_chars: {len(content)} | doc_height: {doc_height} | estimated_lines: {estimated_lines} | final_height: {final_height}")
-                    print(f"[DEBUG]   block_count: {block_count} | line_height: {line_height}")
+                debug_layout(f"updateHeight | width: {current_width} | available_width: {available_width}")
+                debug_layout(f"  content_chars: {len(content)} | doc_height: {doc_height} | estimated_lines: {estimated_lines} | final_height: {final_height}")
+                debug_layout(f"  block_count: {block_count} | line_height: {line_height}")
             else:
                 # Fallback if document is not available
                 input_field.setFixedHeight(28)
@@ -1488,10 +1503,9 @@ class MainWindow(QMainWindow):
                 input_field.setFixedHeight(final_height)
                 updateContainerHeight()  # Update container height after input field height change
                 
-                if DEBUG_LAYOUT:
-                    print(f"[DEBUG] updateHeightImmediate | file_path: {file_path} | width: {current_width} | available_width: {available_width}")
-                    print(f"[DEBUG]   content_chars: {len(content)} | doc_height: {doc_height} | estimated_lines: {estimated_lines} | final_height: {final_height}")
-                    print(f"[DEBUG]   block_count: {block_count} | line_height: {line_height}")
+                debug_layout(f"updateHeightImmediate | width: {current_width} | available_width: {available_width}")
+                debug_layout(f"  content_chars: {len(content)} | doc_height: {doc_height} | estimated_lines: {estimated_lines} | final_height: {final_height}")
+                debug_layout(f"  block_count: {block_count} | line_height: {line_height}")
             else:
                 # Fallback if document is not available
                 input_field.setFixedHeight(28)
@@ -1510,7 +1524,7 @@ class MainWindow(QMainWindow):
             # Find where the "pre-existing" content ends (before any actively typed content)
             input_field._pre_existing_boundary = len(current_text)
             
-            print(f"[DEBUG] focusInEvent | file_path: {file_path} | focus_start_text: '{current_text}' | boundary: {input_field._pre_existing_boundary}")
+            debug("ui_events", f"focusInEvent | focus_start_text: '{current_text}' | boundary: {input_field._pre_existing_boundary}")
             
         def focusOutEvent(e):
             QTextEdit.focusOutEvent(input_field, e)
@@ -1536,7 +1550,7 @@ class MainWindow(QMainWindow):
             updateHeightImmediate()
             current_text = input_field.toPlainText()
             
-            print(f"[DEBUG] onTextChanged | file_path: {file_path} | current_text: '{current_text}' | selected: {input_field.property('selected')}")
+            debug("ui_events", f"onTextChanged | current_text: '{current_text}' | selected: {input_field.property('selected')}")
             
             # Only sync if this field is selected, part of multi-selection, and we have focus tracking
             if (input_field.property("selected") and 
@@ -1550,7 +1564,7 @@ class MainWindow(QMainWindow):
                 
                 # Calculate the change from last synced state
                 if current_text != last_synced:
-                    print(f"[DEBUG] onTextChanged | Text change detected - last_synced: '{last_synced}' -> current: '{current_text}'")
+                    debug("ui_events", f"onTextChanged | Text change detected - last_synced: '{last_synced}' -> current: '{current_text}'")
                     
                     # Synchronize the entire content to all other selected fields
                     for widget in self.image_widgets:
@@ -1585,10 +1599,10 @@ class MainWindow(QMainWindow):
                             new_content = target_pre_existing + source_typed_content
                             target.setText(new_content)
                             
-                            print(f"[DEBUG] onTextChanged | sync to: {widget.file_path}")
-                            print(f"[DEBUG]   target_pre_existing: '{target_pre_existing}' (boundary: {target_boundary})")
-                            print(f"[DEBUG]   source_typed: '{source_typed_content}' (from boundary: {source_boundary})")
-                            print(f"[DEBUG]   result: '{new_content}'")
+                            debug("ui_events", f"onTextChanged | sync to: {widget.file_path}")
+                            debug("ui_events", f"  target_pre_existing: '{target_pre_existing}' (boundary: {target_boundary})")
+                            debug("ui_events", f"  source_typed: '{source_typed_content}' (from boundary: {source_boundary})")
+                            debug("ui_events", f"  result: '{new_content}'")
                             
                             # Update height for this target field
                             current_width = target.width()
@@ -1666,7 +1680,7 @@ class MainWindow(QMainWindow):
         container.updateContainerHeight = updateContainerHeight  # Store reference to height update function
         
         def update_selection_state(selected):
-            print(f"[DEBUG] update_selection_state | file_path: {file_path} | selected: {selected}")
+            debug("ui_events", f"update_selection_state | selected: {selected}")
             image_label.setProperty("selected", selected)
             input_field.setProperty("selected", selected)
             image_label.style().polish(image_label)
@@ -1777,17 +1791,17 @@ class MainWindow(QMainWindow):
         # Get widget width from discrete slider steps
         slider_step = self.horizontalSlider.value()
         widget_width = self.size_steps[slider_step]
-        print(f"Slider step {slider_step} -> Setting widget width to {widget_width}px")
+        debug_layout(f"Slider step {slider_step} -> Setting widget width to {widget_width}px")
         
         # PRESERVE CURRENT TEXT CONTENT before any layout changes
         current_text_content = {}
         if hasattr(self, 'image_flow_manager') and self.image_flow_manager.image_widgets:
-            print("[DEBUG] Preserving current text content before layout update...")
+            debug("layout", "Preserving current text content before layout update...")
             for file_path, widget in self.image_flow_manager.image_widgets.items():
                 if hasattr(widget, 'get_tags'):
                     current_content = widget.get_tags()
                     current_text_content[file_path] = ', '.join(current_content) if isinstance(current_content, list) else str(current_content)
-                    print(f"[DEBUG] Preserved text for {os.path.basename(file_path)}: '{current_text_content[file_path]}'")
+                    debug("layout", f"Preserved text for {os.path.basename(file_path)}: '{current_text_content[file_path]}'")
         
         # Check if this is just a resize (same images, different width) or new image set
         current_loaded_files = set(self.image_flow_manager.image_widgets.keys()) if hasattr(self, 'image_flow_manager') else set()
@@ -1795,7 +1809,7 @@ class MainWindow(QMainWindow):
         is_resize = bool(current_text_content) and current_loaded_files == new_image_files
         
         if is_resize:
-            print("[DEBUG] This is a resize - updating widget widths without recreating widgets")
+            debug("layout", "This is a resize - updating widget widths without recreating widgets")
             # Just update widget widths for existing widgets
             self.image_flow_manager.set_widget_width(widget_width)
             
@@ -1804,12 +1818,12 @@ class MainWindow(QMainWindow):
                 if file_path in self.image_flow_manager.image_widgets:
                     widget = self.image_flow_manager.image_widgets[file_path]
                     widget.set_tags(preserved_text)
-                    print(f"[DEBUG] Restored text for {os.path.basename(file_path)}: '{preserved_text}'")
+                    debug_layout(f"Restored text for {os.path.basename(file_path)}: '{preserved_text}'")
             
             # Explicitly trigger height adjustment after all content is restored
             # Use a timer to ensure programmatic flags have cleared
             def trigger_height_adjustment():
-                print("[DEBUG] Triggering height adjustment after text restoration...")
+                debug_layout("Triggering height adjustment after text restoration...")
                 for widget in self.image_flow_manager.image_widgets.values():
                     if hasattr(widget, '_adjust_text_height'):
                         # Temporarily bypass suppression for this specific height adjustment
@@ -1825,7 +1839,7 @@ class MainWindow(QMainWindow):
             self.image_flow_manager.update_layout()
             
         else:
-            print("[DEBUG] This is initial load - creating widgets from metadata")
+            debug_startup("This is initial load - creating widgets from metadata")
             # Update the flow manager's widget width
             self.image_flow_manager.set_widget_width(widget_width)
             
@@ -1865,7 +1879,7 @@ class MainWindow(QMainWindow):
                                 seen.add(keyword_str)
                     
                     existing_tags = ', '.join(all_tags) if all_tags else ''
-                    print(f"[DEBUG] Tags for {os.path.basename(file_path)}: year='{year}', keywords={keywords}, final_tags='{existing_tags}'")
+                    debug_tags(f"Tags for {os.path.basename(file_path)}: year='{year}', keywords={keywords}, final_tags='{existing_tags}'")
                     
                     image_data.append({
                         'file_path': file_path,
@@ -1882,13 +1896,12 @@ class MainWindow(QMainWindow):
         # Update backward compatibility references
         self.image_widgets = list(self.image_flow_manager.image_widgets.values())
         
-        # Update Cloudinary sync status for loaded images
-        if self.cloudinary_connected:
-            self.update_cloudinary_status_for_loaded_images()
+        # NOTE: No need to call update_cloudinary_status_for_loaded_images() anymore
+        # since widgets are now created with correct Cloudinary sync status from the start
         
         operation_type = "resized" if is_resize else "loaded"
-        print(f"Layout update completed - {len(self.image_widgets)} images {operation_type} with {widget_width}px width")
-        print(f"ImageFlowManager now manages {len(self.image_widgets)} widgets")
+        debug_layout(f"Layout update completed - {len(self.image_widgets)} images {operation_type} with {widget_width}px width")
+        debug_memory(f"ImageFlowManager now manages {len(self.image_widgets)} widgets")
 
     def open_files(self):
         print("Opening file dialog...")
@@ -1966,30 +1979,40 @@ class MainWindow(QMainWindow):
 
     def start_integrated_processing(self, image_files, source):
         """Start integrated processing combining Cloudinary assessment with image loading"""
-        print(f"[DEBUG] Starting integrated processing for {len(image_files)} valid images (source: {source})")
+        debug_startup(f"Starting integrated processing for {len(image_files)} valid images (source: {source})")
         
         # Determine if Cloudinary processing should be enabled
-        print(f"[DEBUG] Cloudinary connection check:")
-        print(f"  - self.cloudinary_connected: {getattr(self, 'cloudinary_connected', 'NOT SET')}")
-        print(f"  - has cloudinary_updater attr: {hasattr(self, 'cloudinary_updater')}")
-        print(f"  - cloudinary_updater value: {getattr(self, 'cloudinary_updater', 'NOT SET')}")
+        debug_cloudinary("Cloudinary connection check:")
+        debug_cloudinary(f"  - self.cloudinary_connected: {getattr(self, 'cloudinary_connected', 'NOT SET')}")
+        debug_cloudinary(f"  - has cloudinary_updater attr: {hasattr(self, 'cloudinary_updater')}")
+        debug_cloudinary(f"  - cloudinary_updater value: {getattr(self, 'cloudinary_updater', 'NOT SET')}")
         
         cloudinary_enabled = self.cloudinary_connected and hasattr(self, 'cloudinary_updater') and self.cloudinary_updater
         
         if cloudinary_enabled:
-            print(f"[DEBUG] ✅ Cloudinary enabled - will process with cloud operations")
+            debug_cloudinary("✅ Cloudinary enabled - will process with cloud operations")
         else:
-            print(f"[DEBUG] ❌ Cloudinary disabled - processing locally only")
+            debug_cloudinary("❌ Cloudinary disabled - processing locally only")
+        
+        # CRITICAL FIX: Reset assessment and upload handler lists to prevent accumulation across sessions
+        if hasattr(self, 'image_assessment') and self.image_assessment:
+            debug_startup("Resetting ImageAssessment lists for new processing session")
+            self.image_assessment.reset_assessment_lists()
+        
+        if hasattr(self, 'upload_handler') and self.upload_handler:
+            debug_startup("Resetting CloudinaryUploadHandler for new processing session")
+            self.upload_handler.reset_upload_handler()
         
         # Show progress
         self.show_progress(len(image_files), "Processing images...")
         
         # Process each image
         processed_data = []
+        cloudinary_sync_status = {}  # Store sync status from assessment phase
         for i, file_path in enumerate(image_files):
             try:
                 
-                print(f"\n[DEBUG] Loading image {i+1}/{len(image_files)}: {os.path.basename(file_path)}")
+                debug_file_ops(f"Loading image {i+1}/{len(image_files)}: {os.path.basename(file_path)}")
                 
                 # Update progress
                 self.update_progress(i + 1)
@@ -2002,6 +2025,8 @@ class MainWindow(QMainWindow):
                         from utilities.settings_dialog import SettingsDialog
                         settings_dialog = SettingsDialog(self)
                         
+                        debug_assessment(f"[ASSESSMENT] Processing {os.path.basename(file_path)} - File {i+1}/{len(image_files)}")
+                        
                         # Process single image with full ImageAssessment Cloudinary logic
                         success, result_data, optimized_file = self.image_assessment.process_single_image_with_cloudinary_logic(
                             file_path, settings_dialog
@@ -2009,16 +2034,26 @@ class MainWindow(QMainWindow):
                         
                         if success:
                             if result_data.get('already_synced'):
-                                print(f"[DEBUG] {os.path.basename(file_path)} - Already synced with Cloudinary")
-                            elif result_data.get('uploaded'):
-                                print(f"[DEBUG] {os.path.basename(file_path)} - Processed and uploaded to Cloudinary")
+                                debug_cloudinary(f"[ASSESSMENT] {os.path.basename(file_path)} - Already synced with Cloudinary (SKIPPED)")
+                                debug_assessment(f"[ASSESSMENT] {os.path.basename(file_path)} - Status: ALREADY_SYNCED")
+                                cloudinary_sync_status[file_path] = True  # Store sync status
                             else:
-                                print(f"[DEBUG] {os.path.basename(file_path)} - Assessment complete, added to database")
+                                debug_assessment(f"[ASSESSMENT] {os.path.basename(file_path)} - Assessment complete, will be processed for upload")
+                                # Log detailed result data
+                                debug_assessment(f"[ASSESSMENT] {os.path.basename(file_path)} - Result: processed={result_data.get('processed', False)}, uploaded={result_data.get('uploaded', False)}")
+                                debug_assessment(f"[ASSESSMENT] {os.path.basename(file_path)} - Status: NEEDS_PROCESSING")
+                                cloudinary_sync_status[file_path] = False  # Store sync status
                         else:
-                            print(f"[DEBUG] {os.path.basename(file_path)} - Assessment failed: {result_data.get('error', 'Unknown error')}")
+                            debug_errors(f"[ASSESSMENT] {os.path.basename(file_path)} - Assessment failed: {result_data.get('error', 'Unknown error')}")
+                            debug_assessment(f"[ASSESSMENT] {os.path.basename(file_path)} - Status: FAILED")
+                            cloudinary_sync_status[file_path] = False  # Default to not synced on failure
                             
                     except Exception as e:
-                        print(f"[DEBUG] Cloudinary assessment failed for {os.path.basename(file_path)}: {e}")
+                        debug_errors(f"[ASSESSMENT] Cloudinary assessment failed for {os.path.basename(file_path)}: {e}")
+                        cloudinary_sync_status[file_path] = False  # Default to not synced on exception
+                else:
+                    # Cloudinary not enabled - default to not synced
+                    cloudinary_sync_status[file_path] = False
                 
                 # Create preview and extract metadata
                 try:
@@ -2034,11 +2069,12 @@ class MainWindow(QMainWindow):
                             'file_path': file_path,
                             'preview': preview,
                             'year': year,
-                            'keywords': keywords
+                            'keywords': keywords,
+                            'cloudinary_synced': cloudinary_sync_status.get(file_path, False)  # Include sync status
                         }
                         processed_data.append(image_data)
                         
-                        print(f"[DEBUG] {os.path.basename(file_path)} - Complete processing finished")
+                        debug_file_ops(f"{os.path.basename(file_path)} - Complete processing finished")
                     
                 except Exception as e:
                     print(f"[WARNING] Metadata extraction failed for {os.path.basename(file_path)}: {e}")
@@ -2050,7 +2086,8 @@ class MainWindow(QMainWindow):
                                 'file_path': file_path,
                                 'preview': preview,
                                 'year': None,
-                                'keywords': []
+                                'keywords': [],
+                                'cloudinary_synced': cloudinary_sync_status.get(file_path, False)  # Include sync status
                             }
                             processed_data.append(image_data)
                     except Exception as preview_e:
@@ -2061,25 +2098,57 @@ class MainWindow(QMainWindow):
         
         self.hide_progress()
         
-        print(f"[DEBUG] Integrated processing complete: {len(processed_data)}/{len(image_files)} images processed")
+        debug_startup(f"Integrated processing complete: {len(processed_data)}/{len(image_files)} images processed")
+        
+        # DEBUG: Show sync status summary
+        if cloudinary_sync_status:
+            synced_files = [f for f, status in cloudinary_sync_status.items() if status]
+            unsynced_files = [f for f, status in cloudinary_sync_status.items() if not status]
+            debug_cloudinary(f"SYNC STATUS SUMMARY: {len(synced_files)} synced, {len(unsynced_files)} not synced")
+            
+            if synced_files:
+                debug_cloudinary("Files marked as SYNCED:")
+                for file_path in synced_files:
+                    debug_cloudinary(f"  ✅ {os.path.basename(file_path)}")
+            
+            if unsynced_files:
+                debug_cloudinary("Files marked as NOT SYNCED:")
+                for file_path in unsynced_files:
+                    debug_cloudinary(f"  ❌ {os.path.basename(file_path)}")
+        else:
+            debug_cloudinary("No Cloudinary sync status data available")
+        
+        # ENHANCED DEBUG: Show detailed assessment results if Cloudinary was enabled
+        if cloudinary_enabled and self.cloudinary_updater and hasattr(self, 'image_assessment'):
+            debug_assessment("=== ASSESSMENT PHASE SUMMARY ===")
+            debug_assessment(f"Total files processed: {len(image_files)}")
+            
+            if hasattr(self.image_assessment, 'files_to_upload'):
+                debug_assessment(f"Files ready for direct upload: {len(self.image_assessment.files_to_upload)}")
+                for i, file_path in enumerate(self.image_assessment.files_to_upload, 1):
+                    debug_assessment(f"  {i}. {os.path.basename(file_path)} (ready for upload)")
+            
+            if hasattr(self.image_assessment, 'files_to_resize'):
+                debug_assessment(f"Files that need resizing: {len(self.image_assessment.files_to_resize)}")
+                for i, file_path in enumerate(self.image_assessment.files_to_resize, 1):
+                    debug_assessment(f"  {i}. {os.path.basename(file_path)} (needs resize)")
+            
+            if hasattr(self.image_assessment, 'already_synced_count'):
+                debug_assessment(f"Files already synced (skipped): {self.image_assessment.already_synced_count}")
+            
+            debug_assessment("=== END ASSESSMENT SUMMARY ===")
         
         # Store processed images
         self.image_files = [data['file_path'] for data in processed_data]
         self.image_previews = {data['file_path']: data['preview'] for data in processed_data}
-        self.image_metadata = {data['file_path']: {'year': data['year'], 'keywords': data['keywords']} 
+        self.image_metadata = {data['file_path']: {'year': data['year'], 'keywords': data['keywords'], 'cloudinary_synced': data.get('cloudinary_synced', False)} 
                              for data in processed_data}
         
         # Update layout with processed data
         if processed_data:
             self.update_layout()
-            
-            # Update Cloudinary status for loaded images (this will set the visual indicators)
-            # Re-check the same condition as before since cloudinary_enabled is out of scope
-            if self.cloudinary_connected and hasattr(self, 'cloudinary_updater') and self.cloudinary_updater:
-                print("[DEBUG] Updating Cloudinary status for loaded image widgets...")
-                self.update_cloudinary_status_for_loaded_images()
-            else:
-                print("[DEBUG] Skipping Cloudinary status update - Cloudinary not enabled")
+            # NOTE: No need to call update_cloudinary_status_for_loaded_images() anymore
+            # since widgets are now created with correct Cloudinary sync status from the start
         else:
             print("No images were successfully processed")
 
@@ -2100,7 +2169,7 @@ class MainWindow(QMainWindow):
     
     def initialize_cloudinary(self):
         """Initialize Cloudinary integration with proper error handling"""
-        print("[DEBUG] Initializing Cloudinary integration...")
+        debug_startup("Initializing Cloudinary integration...")
         
         # Initialize as disconnected
         self.cloudinary_connected = False
@@ -2112,20 +2181,20 @@ class MainWindow(QMainWindow):
             settings = SettingsDialog.get_saved_settings()
             cloudinary_settings = SettingsDialog.get_cloudinary_settings()
             
-            print(f"[DEBUG] Retrieved settings: {cloudinary_settings}")
+            debug_cloudinary(f"Retrieved settings: {cloudinary_settings}")
             
             # Check if Cloudinary is configured
             if not SettingsDialog.is_cloudinary_configured():
-                print("[DEBUG] Cloudinary not configured - skipping CloudinaryUpdater setup")
-                print("[DEBUG] Configure Cloudinary settings in File > Settings to enable cloud features")
+                debug_cloudinary("Cloudinary not configured - skipping CloudinaryUpdater setup")
+                debug_cloudinary("Configure Cloudinary settings in File > Settings to enable cloud features")
                 self._update_cloudinary_ui_status(False, "Not configured")
                 return
             
             # Create CloudinaryUpdater instance
             self.cloudinary_updater = CloudinaryUpdater()
-            print("[DEBUG] CloudinaryUpdater instance created successfully")
+            debug_cloudinary("CloudinaryUpdater instance created successfully")
             
-            print("[DEBUG] Cloudinary settings found - configuring CloudinaryUpdater...")
+            debug_cloudinary("Cloudinary settings found - configuring CloudinaryUpdater...")
             
             # Prepare config in the format expected by CloudinaryUpdater
             cloudinary_config = [
@@ -2136,14 +2205,14 @@ class MainWindow(QMainWindow):
                 cloudinary_settings.get('max_size', '10')  # Default 10MB
             ]
             
-            print(f"[DEBUG] Cloudinary config prepared: {[cloudinary_config[0], cloudinary_config[1], '*****', '*****', cloudinary_config[4]]}")
+            debug_cloudinary(f"Cloudinary config prepared: {[cloudinary_config[0], cloudinary_config[1], '*****', '*****', cloudinary_config[4]]}")
             
             # Configure the CloudinaryUpdater
             self.cloudinary_updater.setCloudinaryUpdaterConfig(cloudinary_config)
-            print("[DEBUG] CloudinaryUpdater configured successfully")
+            debug_cloudinary("CloudinaryUpdater configured successfully")
             
             # Test initial connection and retrieve account info
-            print("[DEBUG] Testing Cloudinary connection and retrieving account info...")
+            debug_cloudinary("Testing Cloudinary connection and retrieving account info...")
             try:
                 # Connect signals to capture the response
                 self.cloudinary_updater.beginning_signal.connect(self.on_cloudinary_status_received)
@@ -2151,13 +2220,13 @@ class MainWindow(QMainWindow):
                 
                 # Request account status
                 self.cloudinary_updater.cloud_status()
-                print("[DEBUG] Cloudinary status request sent")
+                debug_cloudinary("Cloudinary status request sent")
                 
                 # For now, assume connection will succeed (will be updated by signal handlers)
                 # The actual status will be set when we receive the response
                 
             except Exception as e:
-                print(f"[DEBUG] Error testing Cloudinary connection: {str(e)}")
+                debug_errors(f"Error testing Cloudinary connection: {str(e)}")
                 self.cloudinary_connected = False
                 self._update_cloudinary_ui_status(False, "Connection failed")
                 
@@ -2185,64 +2254,60 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'creditsBar'):
                 self.creditsBar.setVisible(connected)
                 
-            print(f"[DEBUG] Cloudinary UI status updated - Connected: {connected}, Message: {status_message}")
+            debug_cloudinary(f" Cloudinary UI status updated - Connected: {connected}, Message: {status_message}")
             
         except Exception as e:
-            print(f"[DEBUG] Error updating Cloudinary UI status: {str(e)}")
+            debug_cloudinary(f"Error updating Cloudinary UI status: {str(e)}")
     
     def update_cloudinary_status_for_loaded_images(self):
         """Check and update Cloudinary sync status for all currently loaded images"""
-        if not self.cloudinary_connected or not self.cloudinary_updater:
-            print("[DEBUG] Cloudinary not connected - skipping status check")
-            return
-            
         if not hasattr(self.image_flow_manager, 'image_widgets') or not self.image_flow_manager.image_widgets:
-            print("[DEBUG] No images loaded - skipping Cloudinary status check")
+            debug_cloudinary(f"No images loaded - skipping Cloudinary status check")
             return
             
-        print(f"[DEBUG] Checking Cloudinary sync status for {len(self.image_flow_manager.image_widgets)} loaded images...")
+        debug_cloudinary(f"Updating Cloudinary sync status for {len(self.image_flow_manager.image_widgets)} loaded images using assessment results...")
         
         try:
-            # Use our cached cloudinary files list instead of accessing cloudinary_updater
-            cloudinary_files = getattr(self, 'cloudinary_files_cache', [])
-            
-            if not cloudinary_files:
-                print("[DEBUG] No cached Cloudinary files available - skipping status update...")
-                return
-            
             synced_count = 0
             for file_path, widget in self.image_flow_manager.image_widgets.items():
                 try:
-                    # Get file information for sync check
-                    from pathlib import Path
-                    file_path_obj = Path(file_path)
-                    
-                    if not file_path_obj.exists():
-                        continue
-                    
-                    # Use a simple approach: check if file appears to be synced
-                    # For now, use a basic check - this can be enhanced later
-                    original_size = file_path_obj.stat().st_size
-                    
-                    # Simple heuristic: check if file is in the cloudinary files list
-                    filename = file_path_obj.name
-                    is_synced = any(filename in str(cf) for cf in cloudinary_files) if cloudinary_files else False
+                    # Use the sync status from our assessment phase (stored in metadata)
+                    is_synced = False
+                    if hasattr(self, 'image_metadata') and file_path in self.image_metadata:
+                        metadata = self.image_metadata[file_path]
+                        is_synced = metadata.get('cloudinary_synced', False)
+                        debug_cloudinary(f"File {os.path.basename(file_path)}: sync status from assessment = {is_synced}")
+                    else:
+                        debug_cloudinary(f"File {os.path.basename(file_path)}: no assessment data, defaulting to not synced")
                     
                     # Update widget Cloudinary status
-                    widget.set_cloudinary_status(is_synced)
+                    if hasattr(widget, 'set_cloudinary_status'):
+                        widget.set_cloudinary_status(is_synced)
+                        debug_cloudinary(f"Set widget sync status for {os.path.basename(file_path)}: {is_synced}")
+                    else:
+                        debug_cloudinary(f"Widget for {os.path.basename(file_path)} has no set_cloudinary_status method")
                     
                     if is_synced:
                         synced_count += 1
                         
                 except Exception as e:
-                    print(f"[DEBUG] Error checking Cloudinary status for {os.path.basename(file_path)}: {e}")
+                    debug_cloudinary(f"Error updating Cloudinary status for {os.path.basename(file_path)}: {e}")
                     # Set as not synced if there's an error
-                    widget.set_cloudinary_status(False)
+                    if hasattr(widget, 'set_cloudinary_status'):
+                        widget.set_cloudinary_status(False)
             
-            print(f"[DEBUG] Cloudinary status update complete: {synced_count}/{len(self.image_flow_manager.image_widgets)} images synced")
+            debug_cloudinary(f"Cloudinary status update complete: {synced_count}/{len(self.image_flow_manager.image_widgets)} images marked as synced")
+            
+            # Force immediate visual update of all widgets
+            for widget in self.image_flow_manager.image_widgets.values():
+                if hasattr(widget, 'update'):
+                    widget.update()
+            
+            # Process any pending paint events to ensure immediate visual refresh
+            QApplication.processEvents()
             
         except Exception as e:
-            print(f"[DEBUG] Error updating Cloudinary status for loaded images: {e}")
+            debug_cloudinary(f"Error updating Cloudinary status for loaded images: {e}")
     
     def setup_image_assessment_connections(self):
         """Setup connections for the image assessment system"""
@@ -2251,7 +2316,120 @@ class MainWindow(QMainWindow):
             self.image_assessment.assessment_progress.connect(self.update_progress)
             self.image_assessment.assessment_status.connect(self.update_progress_label)
             # Note: Removed connections to unused methods (on_image_assessed, on_assessment_complete)
-            print("[DEBUG] Image assessment system connected")
+            debug_assessment(f"Image assessment system connected")
+    
+    def setup_upload_handler_connections(self):
+        """Setup connections for the upload handler system"""
+        if self.upload_handler:
+            # Connect upload progress signals
+            self.upload_handler.upload_progress_signal.connect(self.update_progress)
+            self.upload_handler.upload_status_signal.connect(self.update_progress_label)
+            self.upload_handler.upload_complete_signal.connect(self.on_upload_complete)
+            self.upload_handler.upload_preview_signal.connect(self.on_upload_preview)
+            debug_upload("Upload handler system connected")
+    
+    def start_cloudinary_upload(self):
+        """Start the Cloudinary upload phase using the upload handler"""
+        debug_upload("Starting Cloudinary upload phase from UI action")
+        
+        if not self.upload_handler:
+            debug_upload("ERROR: Upload handler not initialized")
+            return
+            
+        if not self.image_assessment or (not self.image_assessment.files_to_upload and not self.image_assessment.files_to_resize):
+            debug_upload("ERROR: No assessment results available for upload")
+            QMessageBox.warning(self, "Upload Error", 
+                              "Please run image assessment first before uploading.")
+            return
+        
+        # ENHANCED DEBUG: Show assessment data being passed to upload handler
+        debug_upload(f"Assessment data being passed to upload handler:")
+        debug_upload(f"  - files_to_upload: {len(self.image_assessment.files_to_upload)} files")
+        debug_upload(f"  - files_to_resize: {len(self.image_assessment.files_to_resize)} files")
+        
+        if self.image_assessment.files_to_upload:
+            debug_upload("Files ready for direct upload:")
+            for i, file_path in enumerate(self.image_assessment.files_to_upload, 1):
+                debug_upload(f"  {i}. {os.path.basename(file_path)}")
+                
+        if self.image_assessment.files_to_resize:
+            debug_upload("Files that need resizing first:")
+            for i, file_path in enumerate(self.image_assessment.files_to_resize, 1):
+                debug_upload(f"  {i}. {os.path.basename(file_path)}")
+        
+        # Get tag widgets for metadata extraction
+        tag_widgets = self.get_tag_widgets_for_upload()
+        
+        # Extract source folder name from original image files (not temp files)
+        source_folder_name = self._extract_original_folder_name()
+        
+        # Prepare assessment data in the format expected by upload handler
+        assessment_data = {
+            'files_to_upload': self.image_assessment.files_to_upload,
+            'files_to_resize': self.image_assessment.files_to_resize
+        }
+        
+        # Set assessment data, tag widgets, and source folder name
+        self.upload_handler.set_assessment_data(assessment_data)
+        self.upload_handler.set_tag_widgets(tag_widgets)
+        self.upload_handler.set_source_folder_name(source_folder_name)
+        
+        # Start the upload process
+        self.upload_handler.start_upload_phase()
+    
+    def get_tag_widgets_for_upload(self):
+        """Collect tag input widgets from the UI for metadata extraction"""
+        tag_widgets = []
+        
+        # Get widgets from the image flow manager
+        if hasattr(self, 'image_flow_manager') and self.image_flow_manager.image_widgets:
+            for widget in self.image_flow_manager.image_widgets.values():
+                # Get text input field from each image widget
+                text_field = self.get_widget_text_field(widget)
+                if text_field:
+                    tag_widgets.append(text_field)
+        
+        debug_upload(f"Collected {len(tag_widgets)} tag widgets for upload")
+        return tag_widgets
+    
+    def _extract_original_folder_name(self):
+        """Extract folder name from original image file paths (not temp paths)"""
+        if not hasattr(self, 'image_files') or not self.image_files:
+            debug_upload("No original image files available to extract folder name")
+            return None
+            
+        try:
+            # Get first original file path
+            first_original_file = self.image_files[0]
+            from pathlib import Path
+            file_path_obj = Path(first_original_file)
+            folder_name = file_path_obj.parent.name
+            
+            debug_upload(f"Extracted original folder name: '{folder_name}' from {first_original_file}")
+            return folder_name
+            
+        except Exception as e:
+            debug_upload(f"Error extracting original folder name: {e}")
+            return None
+    
+    def on_upload_complete(self, upload_data):
+        """Handle upload completion"""
+        uploaded_count, error_count = upload_data
+        debug_upload(f"Upload complete: {uploaded_count} uploaded, {error_count} errors")
+        
+        # Show completion message
+        if error_count == 0:
+            QMessageBox.information(self, "Upload Complete", 
+                                  f"Successfully uploaded {uploaded_count} files to Cloudinary!")
+        else:
+            QMessageBox.warning(self, "Upload Complete with Errors", 
+                              f"Uploaded {uploaded_count} files with {error_count} errors. Check logs for details.")
+    
+    def on_upload_preview(self, file_path):
+        """Handle upload preview updates"""
+        debug_upload(f"Currently uploading: {file_path}")
+        # Update UI to show which file is currently being uploaded
+        # This could update a preview widget or status bar
     
     def update_progress_label(self, message):
         """Update the progress label with a custom message"""
@@ -2260,10 +2438,10 @@ class MainWindow(QMainWindow):
     
     def on_cloudinary_status_received(self, data):
         """Handle Cloudinary status data received from cloud_status"""
-        print(f"[DEBUG] Cloudinary status received: {data}")
+        debug_cloudinary(f" Cloudinary status received: {data}")
         if data and len(data) > 0:
             if data[0] == True:  # Status retrieval successful
-                print("[DEBUG] ✅ Cloudinary connection successful!")
+                debug_cloudinary(f"✅ Cloudinary connection successful!")
                 self._update_cloudinary_ui_status(True, "Connected")
                 
                 # Retrieve Cloudinary files list once at initialization
@@ -2273,7 +2451,7 @@ class MainWindow(QMainWindow):
                     storage_credits = data[8] if len(data) > 8 else "Unknown"
                     transformations = data[9] if len(data) > 9 else "Unknown"
                     bandwidth = data[10] if len(data) > 10 else "Unknown"
-                    print(f"[DEBUG] 📊 Account Usage - Storage: {storage_credits}, Transformations: {transformations}, Bandwidth: {bandwidth}")
+                    debug_cloudinary(f"📊 Account Usage - Storage: {storage_credits}, Transformations: {transformations}, Bandwidth: {bandwidth}")
                     
                     # Use the correct percentage values from the data (indices 5, 6, 7)
                     storage_percent = data[5] if len(data) > 5 else 0
@@ -2283,15 +2461,15 @@ class MainWindow(QMainWindow):
                     # Update the CloudinaryCreditsBar if it exists
                     self.update_credits_bar(storage_percent, transformations_percent, bandwidth_percent)
             else:
-                print(f"[DEBUG] ❌ Cloudinary connection failed: {data}")
+                debug_cloudinary(f"❌ Cloudinary connection failed: {data}")
                 self._update_cloudinary_ui_status(False, "Connection failed")
         else:
-            print("[DEBUG] ❌ No data received from Cloudinary")
+            debug_cloudinary(f"❌ No data received from Cloudinary")
             self._update_cloudinary_ui_status(False, "No response")
     
     def _retrieve_cloudinary_files_cache(self):
         """Retrieve and cache Cloudinary files list once during initialization"""
-        print("[DEBUG] Retrieving Cloudinary files list for global cache...")
+        debug_cloudinary(f"Retrieving Cloudinary files list for global cache...")
         try:
             import cloudinary.api
             
@@ -2309,7 +2487,7 @@ class MainWindow(QMainWindow):
                     break
             
             self.cloudinary_files_cache = all_files
-            print(f"[DEBUG] ✅ Cached {len(self.cloudinary_files_cache)} files from Cloudinary for global use")
+            debug_cloudinary(f"✅ Cached {len(self.cloudinary_files_cache)} files from Cloudinary for global use")
             
         except Exception as e:
             print(f"[WARNING] Could not retrieve Cloudinary files for cache: {e}")
@@ -2317,20 +2495,20 @@ class MainWindow(QMainWindow):
     
     def update_credits_bar(self, storage_percent, transformations_percent, bandwidth_percent):
         """Update the CloudinaryCreditsBar with usage data"""
-        print(f"[DEBUG] main.py update_credits_bar() called with:")
+        debug_cloudinary(f"main.py update_credits_bar() called with:")
         print(f"  Storage: {storage_percent} (type: {type(storage_percent)})")
         print(f"  Transformations: {transformations_percent} (type: {type(transformations_percent)})")
         print(f"  Bandwidth: {bandwidth_percent} (type: {type(bandwidth_percent)})")
         
         # Only update if Cloudinary is connected
         if not self.cloudinary_connected:
-            print("[DEBUG] Cloudinary not connected - skipping credits bar update")
+            debug_cloudinary(f" Cloudinary not connected - skipping credits bar update")
             return
             
         # Check if this is a duplicate update (same values as last time)
         current_values = (storage_percent, transformations_percent, bandwidth_percent)
         if hasattr(self, '_last_credits_values') and self._last_credits_values == current_values:
-            print("[DEBUG] Credits bar values unchanged - skipping unnecessary update")
+            debug_cloudinary("Credits bar values unchanged - skipping unnecessary update")
             return
         
         try:
@@ -2341,7 +2519,7 @@ class MainWindow(QMainWindow):
             for attr_name in ['cloudinaryCreditsBar', 'creditsBar', 'credits_bar']:
                 if hasattr(self, attr_name):
                     credits_bar = getattr(self, attr_name)
-                    print(f"[DEBUG] Found credits bar widget: {attr_name}")
+                    debug_cloudinary(f"Found credits bar widget: {attr_name}")
                     break
             
             if credits_bar is not None:
@@ -2352,7 +2530,7 @@ class MainWindow(QMainWindow):
                 
                 # Only set colors if this is the first time or they're not set
                 if not self.credits_bar_initialized:
-                    print(f"[DEBUG] First-time credits bar initialization")
+                    debug_cloudinary(f"First-time credits bar initialization")
                     credits_bar.setColors(STORAGE_COLOUR, TRANSFORMATIONS_COLOUR, BANDWIDTH_COLOUR)
                     self.credits_bar_initialized = True
                 
@@ -2361,31 +2539,31 @@ class MainWindow(QMainWindow):
                 transformations_perc = float(transformations_percent) if isinstance(transformations_percent, (int, float)) else 0
                 bandwidth_perc = float(bandwidth_percent) if isinstance(bandwidth_percent, (int, float)) else 0
                 
-                print(f"[DEBUG] Converted percentages - Storage: {storage_perc}, Transformations: {transformations_perc}, Bandwidth: {bandwidth_perc}")
+                debug_tags(f"Converted percentages - Storage: {storage_perc}, Transformations: {transformations_perc}, Bandwidth: {bandwidth_perc}")
                 
                 # Set the percentages (this will handle caching internally)
-                print(f"[DEBUG] Calling setPercentages on credits bar")
+                debug_tags(f"Calling setPercentages on credits bar")
                 credits_bar.setPercentages(storage_perc, transformations_perc, bandwidth_perc)
                 
                 # Store values to prevent duplicate updates
                 self._last_credits_values = current_values
                 
-                print(f"[DEBUG] 📊 Credits bar updated - Storage: {storage_perc:.2f}%, Transformations: {transformations_perc:.2f}%, Bandwidth: {bandwidth_perc:.2f}%")
+                debug_cloudinary(f"📊 Credits bar updated - Storage: {storage_perc:.2f}%, Transformations: {transformations_perc:.2f}%, Bandwidth: {bandwidth_perc:.2f}%")
                 
             else:
-                print("[DEBUG] ⚠️ Credits bar widget not found in main window")
+                debug_cloudinary(f"⚠️ Credits bar widget not found in main window")
                 # List all widget attributes for debugging
                 widget_attrs = [attr for attr in dir(self) if not attr.startswith('_') and hasattr(getattr(self, attr, None), 'setVisible')]
-                print(f"[DEBUG] Available widget attributes: {widget_attrs[:10]}...")  # Show first 10
+                debug_cloudinary(f"Available widget attributes: {widget_attrs[:10]}...")  # Show first 10
                 
         except Exception as e:
-            print(f"[DEBUG] ❌ Error updating credits bar: {str(e)}")
+            debug_cloudinary(f"❌ Error updating credits bar: {str(e)}")
             import traceback
             traceback.print_exc()
     
     def on_cloudinary_ui_update(self, message):
         """Handle UI update messages from Cloudinary"""
-        print(f"[DEBUG] Cloudinary UI update: {message}")
+        debug_cloudinary(f" Cloudinary UI update: {message}")
             
     def show_settings(self):
         """Create and show the settings dialog"""
@@ -2394,7 +2572,7 @@ class MainWindow(QMainWindow):
         
         # If user clicked OK and settings were saved, re-initialize Cloudinary
         if result == QDialog.Accepted:
-            print("[DEBUG] Settings saved, re-initializing Cloudinary...")
+            debug_cloudinary(f"Settings saved, re-initializing Cloudinary...")
             # Reset credits bar flag to allow new data to be shown
             self.credits_bar_initialized = False
             if hasattr(self, '_last_credits_values'):
@@ -2402,7 +2580,7 @@ class MainWindow(QMainWindow):
             self.initialize_cloudinary()
             
     def on_tag_clicked(self, tag_text):
-        print(f"[DEBUG] Tag clicked: '{tag_text}' | Selected images: {self.selected_images}")
+        debug_tags(f"Tag clicked: '{tag_text}' | Selected images: {self.selected_images}")
         if not self.selected_images:
             return
 
@@ -2410,7 +2588,7 @@ class MainWindow(QMainWindow):
         for widget in self.image_widgets:
             if hasattr(widget, 'file_path') and widget.file_path in self.selected_images:
                 current_text = self.get_widget_text(widget)
-                print(f"[DEBUG] Before append | file_path: {widget.file_path} | current_text: '{current_text}'")
+                debug_tags(f"Before append | file_path: {widget.file_path} | current_text: '{current_text}'")
                 # Split tags, strip whitespace, and ensure uniqueness
                 tags = [t.strip() for t in current_text.split(',') if t.strip()]
                 if tag_text in tags:
@@ -2426,13 +2604,13 @@ class MainWindow(QMainWindow):
                 
                 # Use helper function to set the text (handles both ImageCardWidget and legacy widgets)
                 self.set_widget_text(widget, new_text)
-                print(f"[DEBUG] After append | file_path: {widget.file_path} | new_text: '{new_text}'")
+                debug_tags(f"After append | file_path: {widget.file_path} | new_text: '{new_text}'")
     
     def on_business_clicked(self, business_button):
         """Handle business button clicks and add business description to selected images with field-level duplicate checking"""
         business_text = business_button.get_full_description()
         business_fields = business_button.get_individual_fields()
-        print(f"[DEBUG] Business clicked: '{business_text}' | Fields: {business_fields} | Selected images: {self.selected_images}")
+        debug_tags(f"Business clicked: '{business_text}' | Fields: {business_fields} | Selected images: {self.selected_images}")
         if not self.selected_images:
             return
 
@@ -2440,7 +2618,7 @@ class MainWindow(QMainWindow):
         for widget in self.image_widgets:
             if hasattr(widget, 'file_path') and widget.file_path in self.selected_images:
                 current_text = self.get_widget_text(widget)
-                print(f"[DEBUG] Before append | file_path: {widget.file_path} | current_text: '{current_text}'")
+                debug_tags(f"Before append | file_path: {widget.file_path} | current_text: '{current_text}'")
                 
                 # Advanced duplicate checking: check each field individually
                 duplicate_fields = []
@@ -2454,19 +2632,19 @@ class MainWindow(QMainWindow):
                 
                 # If all fields are already present, skip entirely
                 if len(duplicate_fields) == len([f for f in business_fields if f.strip()]):
-                    print(f"[DEBUG] All business fields already present, skipping. Duplicates: {duplicate_fields}")
+                    debug_tags(f"All business fields already present, skipping. Duplicates: {duplicate_fields}")
                     continue
                 
                 # If some fields are missing, add only the missing ones
                 if missing_fields:
                     if duplicate_fields:
-                        print(f"[DEBUG] Partial duplicates found: {duplicate_fields}. Adding missing fields: {missing_fields}")
+                        debug_tags(f"Partial duplicates found: {duplicate_fields}. Adding missing fields: {missing_fields}")
                         new_business_text = ", ".join(missing_fields)  # Add commas between fields
                     else:
-                        print(f"[DEBUG] No duplicates found. Adding all fields: {missing_fields}")
+                        debug_tags(f"No duplicates found. Adding all fields: {missing_fields}")
                         new_business_text = ", ".join(business_fields)  # Add commas between all fields
                 else:
-                    print(f"[DEBUG] All fields already present, skipping")
+                    debug_tags(f"All fields already present, skipping")
                     continue
                 
                 # Add the new business text (handle comma duplication)
@@ -2481,12 +2659,12 @@ class MainWindow(QMainWindow):
                 
                 # Use helper function to set the text (handles both ImageCardWidget and legacy widgets)
                 self.set_widget_text(widget, new_text)
-                print(f"[DEBUG] After append | file_path: {widget.file_path} | new_text: '{new_text}'")
+                debug_tags(f"After append | file_path: {widget.file_path} | new_text: '{new_text}'")
 
     def on_building_clicked(self, building_button):
         """Handle building button clicks and add building description to selected images"""
         building_text = f"{building_button.building_name}, {building_button.street_address}"
-        print(f"[DEBUG] Building clicked: '{building_text}' | Selected images: {self.selected_images}")
+        debug_tags(f"Building clicked: '{building_text}' | Selected images: {self.selected_images}")
         if not self.selected_images:
             return
 
@@ -2494,11 +2672,11 @@ class MainWindow(QMainWindow):
         for widget in self.image_widgets:
             if hasattr(widget, 'file_path') and widget.file_path in self.selected_images:
                 current_text = self.get_widget_text(widget)
-                print(f"[DEBUG] Before append | file_path: {widget.file_path} | current_text: '{current_text}'")
+                debug_tags(f"Before append | file_path: {widget.file_path} | current_text: '{current_text}'")
                 
                 # Check for duplicates
                 if building_text in current_text:
-                    print(f"[DEBUG] Building already present, skipping")
+                    debug_tags(f" Building already present, skipping")
                     continue
                 
                 # Add the building text
@@ -2512,12 +2690,12 @@ class MainWindow(QMainWindow):
                 
                 # Use helper function to set the text (handles both ImageCardWidget and legacy widgets)
                 self.set_widget_text(widget, new_text)
-                print(f"[DEBUG] After append | file_path: {widget.file_path} | new_text: '{new_text}'")
+                debug_tags(f"After append | file_path: {widget.file_path} | new_text: '{new_text}'")
 
     def on_street_clicked(self, street_button):
         """Handle street button clicks and add street name to selected images"""
         street_text = street_button.street_name
-        print(f"[DEBUG] Street clicked: '{street_text}' | Selected images: {self.selected_images}")
+        debug_tags(f"Street clicked: '{street_text}' | Selected images: {self.selected_images}")
         if not self.selected_images:
             return
 
@@ -2528,11 +2706,11 @@ class MainWindow(QMainWindow):
                 if hasattr(widget, 'text_edit'):
                     text_field = widget.text_edit
                     current_text = text_field.toPlainText().strip()
-                    print(f"[DEBUG] Before append | file_path: {widget.file_path} | current_text: '{current_text}'")
+                    debug_tags(f"Before append | file_path: {widget.file_path} | current_text: '{current_text}'")
                     
                     # Check for duplicates
                     if street_text in current_text:
-                        print(f"[DEBUG] Street already present, skipping")
+                        debug_tags(f" Street already present, skipping")
                         continue
                     
                     # Add the street text
@@ -2550,7 +2728,7 @@ class MainWindow(QMainWindow):
                     if street_text not in current_tags:
                         current_tags.append(street_text)
                         widget.set_tags(', '.join(current_tags))
-                        print(f"[DEBUG] After append | file_path: {widget.file_path} | new_tags: '{', '.join(current_tags)}'")
+                        debug_tags(f"After append | file_path: {widget.file_path} | new_tags: '{', '.join(current_tags)}'")
                 
                 # Handle legacy widget types (if any still exist)
                 elif hasattr(widget, 'input_field'):
@@ -2574,7 +2752,7 @@ class MainWindow(QMainWindow):
                     input_field._updating = True
                     input_field.setText(new_text)
                     input_field._updating = False
-                    print(f"[DEBUG] After append | file_path: {widget.file_path} | new_text: '{new_text}'")
+                    debug_tags(f"After append | file_path: {widget.file_path} | new_text: '{new_text}'")
                     
                     # Apply proper height calculation
                     input_field.document().adjustSize()
@@ -2591,18 +2769,18 @@ class MainWindow(QMainWindow):
 
 if __name__ == '__main__':
     try:
-        print("[DEBUG] Starting HappyTag application...")
+        debug_tags(f"Starting HappyTag application...")
         app = QApplication(sys.argv)
-        print("[DEBUG] QApplication created successfully")
+        debug_startup("QApplication created successfully")
         
         window = MainWindow()
-        print("[DEBUG] MainWindow created successfully")
+        debug_startup("MainWindow created successfully")
         
         window.show()
-        print("[DEBUG] Window shown, starting event loop...")
+        debug_startup("Window shown, starting event loop...")
         
         result = app.exec_()
-        print(f"[DEBUG] Application exited with code: {result}")
+        debug_startup(f"Application exited with code: {result}")
         sys.exit(result)
         
     except Exception as e:
