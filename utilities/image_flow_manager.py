@@ -9,6 +9,7 @@ from PyQt5.QtCore import Qt, pyqtSignal, QSize, QTimer, QRect
 from PyQt5.QtGui import QMouseEvent
 from .image_card_widget import ImageCardWidget
 from .tag_widgets import FlowLayout
+from .image_sorter import ImageSorter
 import gc
 from .debug_utils import debug_layout, debug_memory, debug_errors, debug
 
@@ -43,6 +44,10 @@ class ImageFlowManager(QWidget):
         # Data
         self.image_widgets = {}  # file_path -> ImageCardWidget
         self.selected_files = set()
+        
+        # Sorting
+        self.image_sorter = ImageSorter()
+        self.current_sort_order = []  # List of file_paths in current display order
         
         # Rubber band selection
         self.rubber_band = None
@@ -165,34 +170,43 @@ class ImageFlowManager(QWidget):
     
     def update_layout(self):
         """Update the flow layout - much simpler than grid layout"""
-        debug_layout("Updating flow layout...")
+        # Prevent recursion during layout updates
+        if getattr(self, '_updating_flow_layout', False):
+            debug_layout("Skipping update_layout - already in progress")
+            return
         
-        # Flow layout handles everything automatically - just trigger a repaint
-        self.flow_widget.updateGeometry()
-        self.flow_layout.invalidate()
-        
-        # Update widget widths in case slider changed
-        for widget in self.image_widgets.values():
-            widget.set_max_width(self.widget_width)
-        
-        # Debug information for scrolling issue
-        flow_size = self.flow_widget.size()
-        flow_hint = self.flow_widget.sizeHint()
-        flow_min = self.flow_widget.minimumSizeHint()
-        debug_layout(f"Flow layout updated - {len(self.image_widgets)} widgets")
-        debug_layout(f"Flow widget size: {flow_size.width()}x{flow_size.height()}")
-        debug_layout(f"Flow widget sizeHint: {flow_hint.width()}x{flow_hint.height()}")
-        debug_layout(f"Flow widget minimumSizeHint: {flow_min.width()}x{flow_min.height()}")
-        
-        if hasattr(self, 'scroll_area') and self.scroll_area and self.scroll_area.viewport():
-            viewport_size = self.scroll_area.viewport().size()
-            debug_layout(f"Scroll area viewport: {viewport_size.width()}x{viewport_size.height()}")
-        elif self.parent() and hasattr(self.parent(), 'size'):
-            parent_size = self.parent().size()
-            debug_layout(f"Parent size: {parent_size.width()}x{parent_size.height()}")
-        
-        # Force correct document widths after layout update (for resize operations)
-        # QTimer.singleShot(100, self.force_all_document_widths)  # Test if still needed with QPlainTextEdit
+        self._updating_flow_layout = True
+        try:
+            debug_layout("Updating flow layout...")
+            
+            # Flow layout handles everything automatically - just trigger a repaint
+            self.flow_widget.updateGeometry()
+            self.flow_layout.invalidate()
+            
+            # Update widget widths in case slider changed
+            for widget in self.image_widgets.values():
+                widget.set_max_width(self.widget_width)
+            
+            # Debug information for scrolling issue
+            flow_size = self.flow_widget.size()
+            flow_hint = self.flow_widget.sizeHint()
+            flow_min = self.flow_widget.minimumSizeHint()
+            debug_layout(f"Flow layout updated - {len(self.image_widgets)} widgets")
+            debug_layout(f"Flow widget size: {flow_size.width()}x{flow_size.height()}")
+            debug_layout(f"Flow widget sizeHint: {flow_hint.width()}x{flow_hint.height()}")
+            debug_layout(f"Flow widget minimumSizeHint: {flow_min.width()}x{flow_min.height()}")
+            
+            if hasattr(self, 'scroll_area') and self.scroll_area and self.scroll_area.viewport():
+                viewport_size = self.scroll_area.viewport().size()
+                debug_layout(f"Scroll area viewport: {viewport_size.width()}x{viewport_size.height()}")
+            elif self.parent() and hasattr(self.parent(), 'size'):
+                parent_size = self.parent().size()
+                debug_layout(f"Parent size: {parent_size.width()}x{parent_size.height()}")
+            
+            # Force correct document widths after layout update (for resize operations)
+            # QTimer.singleShot(100, self.force_all_document_widths)  # Test if still needed with QPlainTextEdit
+        finally:
+            self._updating_flow_layout = False
     
     # Signal handlers
     def _on_selection_changed(self, file_path, is_selected):
@@ -241,6 +255,88 @@ class ImageFlowManager(QWidget):
             should_select = file_path in file_paths
             if widget.is_selected_state() != should_select:
                 widget.set_selected(should_select)
+    
+    # Sorting methods
+    def sort_by_cloudinary_status(self, reverse=False):
+        """Sort images by Cloudinary sync status (non-synced first by default)"""
+        if not self.image_widgets:
+            debug_layout("No images to sort")
+            return
+        
+        debug_layout(f"Sorting images by Cloudinary status (reverse={reverse})")
+        sorted_items = self.image_sorter.sort_images_by_cloudinary_status(self.image_widgets, reverse)
+        self._apply_sort_order(sorted_items)
+    
+    def sort_by_filename(self, reverse=False):
+        """Sort images alphabetically by filename"""
+        if not self.image_widgets:
+            debug_layout("No images to sort")
+            return
+        
+        debug_layout(f"Sorting images by filename (reverse={reverse})")
+        sorted_items = self.image_sorter.sort_images_by_filename(self.image_widgets, reverse)
+        self._apply_sort_order(sorted_items)
+    
+    def sort_by_date_modified(self, reverse=False):
+        """Sort images by modification date"""
+        if not self.image_widgets:
+            debug_layout("No images to sort")
+            return
+        
+        debug_layout(f"Sorting images by date modified (reverse={reverse})")
+        sorted_items = self.image_sorter.sort_images_by_date_modified(self.image_widgets, reverse)
+        self._apply_sort_order(sorted_items)
+    
+    def sort_by_file_size(self, reverse=False):
+        """Sort images by file size"""
+        if not self.image_widgets:
+            debug_layout("No images to sort")
+            return
+        
+        debug_layout(f"Sorting images by file size (reverse={reverse})")
+        sorted_items = self.image_sorter.sort_images_by_file_size(self.image_widgets, reverse)
+        self._apply_sort_order(sorted_items)
+    
+    def _apply_sort_order(self, sorted_items):
+        """Apply the sorted order to the flow layout"""
+        debug_layout(f"Applying sort order to {len(sorted_items)} widgets")
+        
+        # Store the new order
+        self.current_sort_order = [file_path for file_path, widget in sorted_items]
+        
+        # Temporarily disable updates to prevent flicker
+        self.setUpdatesEnabled(False)
+        
+        try:
+            # Remove all widgets from the layout (but don't delete them)
+            while self.flow_layout.count():
+                item = self.flow_layout.takeAt(0)
+                if item and item.widget():
+                    item.widget().setParent(None)  # Remove from layout but keep widget
+            
+            # Re-add widgets in new sorted order
+            for file_path, widget in sorted_items:
+                self.flow_layout.addWidget(widget)
+            
+            # Force layout update
+            self.flow_layout.invalidate()
+            self.flow_widget.updateGeometry()
+            
+        finally:
+            # Re-enable updates
+            self.setUpdatesEnabled(True)
+            self.update()
+        
+        debug_layout("Sort order applied successfully")
+    
+    def get_current_sort_info(self):
+        """Get information about current sort state"""
+        return {
+            'criteria': self.image_sorter.last_sort_criteria,
+            'reverse': self.image_sorter.last_sort_reverse,
+            'criteria_display': self.image_sorter.get_sort_criteria_display_name(
+                self.image_sorter.last_sort_criteria) if self.image_sorter.last_sort_criteria else None
+        }
     
     # Bulk loading method
     def load_images(self, image_data_list):

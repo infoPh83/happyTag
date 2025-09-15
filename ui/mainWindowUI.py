@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Form implementation generated from reading ui file 'd:\Python playfolder\happyTag\ui\mainWindow.ui'
+# Form implementation generated from reading ui file 'ui/mainWindow.ui'
 #
 # Created by: PyQt5 UI code generator 5.15.11
 #
@@ -39,6 +39,11 @@ class Ui_MainWindow(object):
         self.horizontalLayout_2.addWidget(self.creditsBar)
         spacerItem1 = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
         self.horizontalLayout_2.addItem(spacerItem1)
+        self.sortButton = QtWidgets.QPushButton(self.centralwidget)
+        self.sortButton.setMinimumSize(QtCore.QSize(80, 32))
+        self.sortButton.setMaximumSize(QtCore.QSize(80, 32))
+        self.sortButton.setObjectName("sortButton")
+        self.horizontalLayout_2.addWidget(self.sortButton)
         self.SelectAlButton = QtWidgets.QPushButton(self.centralwidget)
         self.SelectAlButton.setObjectName("SelectAlButton")
         self.horizontalLayout_2.addWidget(self.SelectAlButton)
@@ -89,8 +94,11 @@ class Ui_MainWindow(object):
         self.actionOpen_Folder.setObjectName("actionOpen_Folder")
         self.actionSave = QtWidgets.QAction(MainWindow)
         self.actionSave.setObjectName("actionSave")
+        self.actionSynch_with_Cloudinary = QtWidgets.QAction(MainWindow)
+        self.actionSynch_with_Cloudinary.setObjectName("actionSynch_with_Cloudinary")
         self.menuFile.addAction(self.actionOpenFiles)
         self.menuFile.addAction(self.actionOpen_Folder)
+        self.menuFile.addAction(self.actionSynch_with_Cloudinary)
         self.menuFile.addAction(self.actionSave)
         self.menuFile.addSeparator()
         self.menuFile.addAction(self.actionSettings)
@@ -106,6 +114,8 @@ class Ui_MainWindow(object):
         MainWindow.setWindowTitle(_translate("MainWindow", "HappyTag"))
         self.clearTagsButton.setText(_translate("MainWindow", "Clear Tags"))
         self.label.setText(_translate("MainWindow", "Current Credits Usage"))
+        self.sortButton.setText(_translate("MainWindow", "Sort ⏷"))
+        self.sortButton.setToolTip(_translate("MainWindow", "Sort images by various criteria"))
         self.SelectAlButton.setText(_translate("MainWindow", "Select All"))
         self.SelectAlButton.setShortcut(_translate("MainWindow", "Ctrl+A"))
         self.menuFile.setTitle(_translate("MainWindow", "File"))
@@ -119,14 +129,5 @@ class Ui_MainWindow(object):
         self.actionOpen_Folder.setShortcut(_translate("MainWindow", "Ctrl+D"))
         self.actionSave.setText(_translate("MainWindow", "Save"))
         self.actionSave.setShortcut(_translate("MainWindow", "Ctrl+S"))
+        self.actionSynch_with_Cloudinary.setText(_translate("MainWindow", "Synch with Cloudinary"))
 from ui.cloudinaryCreditsBar import CloudinaryCreditsBar
-
-
-if __name__ == "__main__":
-    import sys
-    app = QtWidgets.QApplication(sys.argv)
-    MainWindow = QtWidgets.QMainWindow()
-    ui = Ui_MainWindow()
-    ui.setupUi(MainWindow)
-    MainWindow.show()
-    sys.exit(app.exec_())

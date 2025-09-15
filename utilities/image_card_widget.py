@@ -639,6 +639,12 @@ class ImageCardWidget(QWidget):
             # print(f"[DEBUG-HEIGHT] Skipping height adjustment during programmatic update suppression")
             return
         
+        # Add guard to prevent recursive calls
+        if getattr(self, '_adjusting_height', False):
+            return
+        
+        self._adjusting_height = True
+        
         # Get actual text content
         text_content = self.text_edit.toPlainText().strip()
         
@@ -712,7 +718,7 @@ class ImageCardWidget(QWidget):
                 # Method: Ask QPlainTextEdit directly for its actual line count
                 # First ensure the widget has been laid out properly
                 self.text_edit.updateGeometry()
-                QApplication.processEvents()  # Let Qt finish layout
+                # QApplication.processEvents()  # DISABLED: Let Qt finish layout - can cause recursion
                 
                 # Get the actual document from the QPlainTextEdit
                 doc = self.text_edit.document()
@@ -772,6 +778,9 @@ class ImageCardWidget(QWidget):
             
             # Also update the minimum height to prevent overlapping
             self._create_safe_timer(150, lambda: self._safe_minimum_height_calculation())
+            
+            # Clear the recursion guard
+            self._adjusting_height = False
         else:
             # Fallback if document is not available - use old method
             debug("layout", "Document not available, using fallback height calculation")
@@ -779,6 +788,9 @@ class ImageCardWidget(QWidget):
             self.text_edit.setMaximumHeight(dynamic_min_height)
             self.text_edit.setMinimumHeight(dynamic_min_height)
             self.text_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        
+        # Clear the recursion guard
+        self._adjusting_height = False
     
     def _safe_check_actual_height(self, description):
         """Safely check actual height with additional widget existence validation"""

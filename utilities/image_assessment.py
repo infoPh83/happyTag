@@ -104,6 +104,14 @@ class ImageAssessment(QObject):
         self.already_synced_count = 0
         self.total_original_size = 0
         self.total_upload_size = 0
+        
+        # CRITICAL FIX: Reset initialization flag to allow fresh database loading for new session
+        # This ensures that if the user loads images from a different folder or session,
+        # the database will be properly reloaded with current data
+        if hasattr(self, '_cloudinary_data_initialized'):
+            self._cloudinary_data_initialized = False
+            debug_assessment("Reset Cloudinary data initialization flag for new session")
+        
         debug_assessment(f"Assessment lists reset - ready for new session")
         
     def setup_logging(self, log_folder):
@@ -513,22 +521,47 @@ class ImageAssessment(QObject):
         return assessment_summary
     
     def _initialize_cloudinary_data(self, settings_dialog=None):
-        """Initialize database and Cloudinary files data"""
+        """Initialize database and Cloudinary files data - FIXED to only initialize once per session"""
+        
+        # CRITICAL FIX: Only initialize once per session, not for every image
+        # This prevents database from being reloaded and losing upload data
+        if hasattr(self, '_cloudinary_data_initialized') and self._cloudinary_data_initialized:
+            debug_assessment("Cloudinary data already initialized - skipping reload to preserve database")
+            return True
+        
         try:
-            # Load database
-            if settings_dialog:
-                cloudinary_settings = settings_dialog.get_cloudinary_settings()
-                if cloudinary_settings and cloudinary_settings.get('log_folder'):
-                    log_folder = cloudinary_settings['log_folder']
-                    database_path = Path(log_folder) / DATABASE_FILE_NAME
+            # CRITICAL FIX: Use CloudinaryUpdater's database if already loaded to prevent data loss
+            # Check if CloudinaryUpdater has a loaded database with data
+            if (self.cloudinary_updater and 
+                hasattr(self.cloudinary_updater, 'database') and 
+                self.cloudinary_updater.database and 
+                len(self.cloudinary_updater.database) > 0):
+                
+                # Use existing database from CloudinaryUpdater to preserve upload data
+                self.database = self.cloudinary_updater.database
+                debug_assessment(f"Using existing CloudinaryUpdater database with {len(self.database)} entries")
+                self.log_message(f"Using existing CloudinaryUpdater database with {len(self.database)} entries")
+                
+            else:
+                # Load database from CSV if CloudinaryUpdater doesn't have one
+                if settings_dialog:
+                    cloudinary_settings = settings_dialog.get_cloudinary_settings()
+                    if cloudinary_settings and cloudinary_settings.get('log_folder'):
+                        log_folder = cloudinary_settings['log_folder']
+                        database_path = Path(log_folder) / DATABASE_FILE_NAME
+                    else:
+                        database_path = Path("logs") / DATABASE_FILE_NAME
                 else:
                     database_path = Path("logs") / DATABASE_FILE_NAME
-            else:
-                database_path = Path("logs") / DATABASE_FILE_NAME
-            
-            self.database = self._load_csv_database(database_path)
-            debug_assessment(f"Loaded database with {len(self.database)} entries from {database_path}")
-            self.log_message(f"Loaded database with {len(self.database)} entries from {database_path}")
+                
+                self.database = self._load_csv_database(database_path)
+                debug_assessment(f"Loaded database from CSV with {len(self.database)} entries from {database_path}")
+                self.log_message(f"Loaded database from CSV with {len(self.database)} entries from {database_path}")
+                
+                # Share the loaded database with CloudinaryUpdater to keep them in sync
+                if self.cloudinary_updater:
+                    self.cloudinary_updater.database = self.database
+                    debug_assessment("Shared loaded database with CloudinaryUpdater")
             
             # Get Cloudinary files list from cache instead of making API calls
             if self.cloudinary_updater and self.main_app and hasattr(self.main_app, 'cloudinary_files_cache'):
@@ -566,6 +599,10 @@ class ImageAssessment(QObject):
                 debug_cloudinary("No CloudinaryUpdater available, skipping Cloudinary sync check")
                 self.log_message("No CloudinaryUpdater available, skipping Cloudinary sync check", "WARNING")
                 self.cloudinary_files = []
+            
+            # CRITICAL FIX: Mark initialization as complete to prevent reloading
+            self._cloudinary_data_initialized = True
+            debug_assessment("Cloudinary data initialization complete - database preserved")
             
             return True
             
@@ -728,7 +765,7 @@ class ImageAssessment(QObject):
             return None
     
     def _load_csv_database(self, csv_path):
-        """Load the CSV database (from original Cloudinary logic)"""
+        """Load the CSV database (from original Cloudinary logic) - FIXED to load ALL fields including public_id and url"""
         database = {}
         if csv_path.exists():
             try:
@@ -737,11 +774,16 @@ class ImageAssessment(QObject):
                     for row in reader:
                         try:
                             key = (int(row['original_size']), row['filetype'])
+                            # CRITICAL FIX: Load ALL fields including public_id and url
+                            # Previous version was only loading partial data causing upload info loss
                             database[key] = {
-                                'file_name': row['file_name'],
+                                'file_name': row.get('file_name', ''),
                                 'original_size': int(row['original_size']),
-                                'resized_size': int(row['resized_size']) if row['resized_size'] else None,
-                                'filetype': row['filetype']
+                                'resized_size': int(row['resized_size']) if row.get('resized_size') else None,
+                                'filetype': row['filetype'],
+                                'public_id': row.get('public_id', ''),  # ← FIXED: Load public_id
+                                'url': row.get('url', ''),              # ← FIXED: Load url  
+                                'upload_date': row.get('upload_date', '') # ← FIXED: Load upload_date
                             }
                         except (KeyError, ValueError) as e:
                             print(f"[WARNING] Invalid database row: {e}")

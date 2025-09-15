@@ -242,6 +242,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'actionSynch_with_Cloudinary'):
             self.actionSynch_with_Cloudinary.triggered.connect(self.start_cloudinary_upload)
         
+        # Setup sort button menu (button is now defined in UI file)
+        self.setup_sort_menu()
+        
         # Create the Tags Window action if it doesn't exist
         if not hasattr(self, 'actionTags_Window'):
             from PyQt5.QtWidgets import QAction
@@ -715,6 +718,71 @@ class MainWindow(QMainWindow):
         
         return changed
 
+    def write_platform_specific_tags(self, file_path, keywords):
+        """Write platform-specific tags for enhanced OS integration"""
+        import platform
+        
+        current_platform = platform.system().lower()
+        
+        if current_platform == 'darwin':
+            # macOS: Write Finder tags and extended attributes
+            return self.write_macos_finder_tags(file_path, keywords)
+        elif current_platform == 'windows':
+            # Windows: Write Windows Explorer compatible metadata
+            return self.write_windows_explorer_tags(file_path, keywords)
+        else:
+            # Linux or other: No platform-specific handling needed
+            return True, "No platform-specific tags needed"
+
+    def write_windows_explorer_tags(self, file_path, keywords):
+        """Write Windows Explorer compatible tags using ExifTool"""
+        try:
+            if not keywords:
+                return True, "No keywords to write"
+            
+            if not self.exiftool_available or not self.persistent_exiftool:
+                return False, "ExifTool not available for Windows Explorer tags"
+            
+            debug("tags", f"Writing Windows Explorer tags to {os.path.basename(file_path)}")
+            
+            # Use the persistent ExifTool instance
+            et = self.persistent_exiftool
+            
+            # Windows Explorer specifically looks for these metadata fields
+            cmd_args = []
+            
+            # 1. Keywords field (standard for Windows)
+            cmd_args.append('-Keywords=')  # Clear existing
+            if keywords:
+                keywords_str = ';'.join(keywords)
+                cmd_args.append(f'-Keywords={keywords_str}')
+            
+            # 2. Tags field (Windows 10+ specific)
+            cmd_args.append('-Tags=')  # Clear existing
+            if keywords:
+                keywords_str = ';'.join(keywords)
+                cmd_args.append(f'-Tags={keywords_str}')
+            
+            # 3. Subject field (for compatibility)
+            cmd_args.append('-Subject=')  # Clear existing
+            if keywords:
+                keywords_str = ', '.join(keywords)
+                cmd_args.append(f'-Subject={keywords_str}')
+            
+            # Execute the Windows-specific metadata write
+            if cmd_args:
+                cmd_args.extend(['-overwrite_original', file_path])
+                debug("tags", f"Executing Windows Explorer metadata command: {' '.join(cmd_args)}")
+                result = et.execute(*cmd_args)
+                debug("tags", f"Windows Explorer metadata result: {result}")
+            
+            debug("tags", f"Successfully wrote Windows Explorer tags to {os.path.basename(file_path)}")
+            return True, "Success"
+                
+        except Exception as e:
+            debug_errors(f"Error writing Windows Explorer tags: {e}")
+            return False, f"Error: {str(e)}"
+
     def write_macos_finder_tags(self, file_path, keywords):
         """Write macOS Finder tags using extended attributes and Spotlight metadata"""
         try:
@@ -831,66 +899,95 @@ class MainWindow(QMainWindow):
                     debug("tags", format_msg)
                     return False, format_msg
                 
-                # OPTIMIZED: Write all tags in a single ExifTool call to avoid regenerating the file multiple times
+                # CROSS-PLATFORM METADATA STRATEGY:
+                # Write to ALL standard metadata fields for maximum compatibility
+                # This ensures tags work on Windows, macOS, and Linux regardless of where they were written
+                
                 try:
-                    # Build command arguments for single ExifTool execution
+                    # Build comprehensive command arguments for universal compatibility
                     cmd_args = []
                     
-                    # For JPEG/TIFF: Write to multiple fields for cross-platform compatibility
-                    if file_ext in ['.jpg', '.jpeg', '.tiff', '.tif']:
-                        # 1. Write IPTC Keywords (semicolon-separated for legacy compatibility)
-                        keywords_str = ';'.join(keywords) if keywords else ''
-                        cmd_args.append(f'-IPTC:Keywords={keywords_str}')
-                        
-                        # 2. Write XMP Keywords (semicolon-separated for some applications)
-                        cmd_args.append(f'-XMP:Keywords={keywords_str}')
-                        
-                        # 3. Clear and write XMP-dc:Subject as individual array elements (for macOS Finder)
-                        cmd_args.append('-XMP-dc:Subject=')  # Clear existing
-                        if keywords:
-                            for keyword in keywords:
-                                cmd_args.append(f'-XMP-dc:Subject+={keyword}')
-                        
-                        # 4. Clear and write XMP Subject as individual array elements (for Windows Explorer)
-                        cmd_args.append('-XMP:Subject=')  # Clear existing
-                        if keywords:
-                            for keyword in keywords:
-                                cmd_args.append(f'-XMP:Subject+={keyword}')
+                    # === UNIVERSAL FIELDS (All File Types) ===
                     
-                    # For PNG/GIF/WebP: Use XMP Keywords + XMP-dc:Subject + XMP Subject for cross-platform compatibility
-                    elif file_ext in ['.png', '.gif', '.webp']:
-                        # 1. Write XMP Keywords (semicolon-separated for some applications)
-                        keywords_str = ';'.join(keywords) if keywords else ''
+                    # 1. IPTC Keywords (Legacy standard - widely supported)
+                    cmd_args.append('-IPTC:Keywords=')  # Clear existing
+                    if keywords:
+                        keywords_str = ';'.join(keywords)
+                        cmd_args.append(f'-IPTC:Keywords={keywords_str}')
+                    
+                    # 2. XMP Keywords (Modern standard)
+                    cmd_args.append('-XMP:Keywords=')  # Clear existing
+                    if keywords:
+                        keywords_str = ';'.join(keywords)
                         cmd_args.append(f'-XMP:Keywords={keywords_str}')
+                    
+                    # 3. XMP-dc:Subject (Dublin Core standard - macOS Finder compatible)
+                    cmd_args.append('-XMP-dc:Subject=')  # Clear existing
+                    if keywords:
+                        for keyword in keywords:
+                            cmd_args.append(f'-XMP-dc:Subject={keyword}')
+                    
+                    # 4. XMP:Subject (Alternative subject field - Windows Explorer compatible)
+                    cmd_args.append('-XMP:Subject=')  # Clear existing
+                    if keywords:
+                        for keyword in keywords:
+                            cmd_args.append(f'-XMP:Subject={keyword}')
+                    
+                    # === FORMAT-SPECIFIC ADDITIONAL FIELDS ===
+                    
+                    if file_ext in ['.jpg', '.jpeg', '.tiff', '.tif']:
+                        # Additional EXIF fields for JPEG/TIFF
                         
-                        # 2. Clear and write XMP-dc:Subject as individual array elements (for macOS Finder)
-                        cmd_args.append('-XMP-dc:Subject=')  # Clear existing
+                        # 5. EXIF Keywords (if supported by format)
+                        cmd_args.append('-EXIF:Keywords=')  # Clear existing
                         if keywords:
-                            for keyword in keywords:
-                                cmd_args.append(f'-XMP-dc:Subject+={keyword}')
+                            keywords_str = ';'.join(keywords)
+                            cmd_args.append(f'-EXIF:Keywords={keywords_str}')
                         
-                        # 3. Clear and write XMP Subject as individual array elements (for Windows Explorer)
-                        cmd_args.append('-XMP:Subject=')  # Clear existing
+                        # 6. EXIF UserComment (fallback field)
                         if keywords:
-                            for keyword in keywords:
-                                cmd_args.append(f'-XMP:Subject+={keyword}')
+                            user_comment = f"Keywords: {', '.join(keywords)}"
+                            cmd_args.append(f'-EXIF:UserComment={user_comment}')
+                    
+                    # === WINDOWS-SPECIFIC FIELDS ===
+                    # These help Windows Explorer display tags properly
+                    
+                    # 7. Windows Keywords field
+                    cmd_args.append('-Keywords=')  # Clear existing
+                    if keywords:
+                        keywords_str = ';'.join(keywords)
+                        cmd_args.append(f'-Keywords={keywords_str}')
+                    
+                    # 8. Windows Tags field (Windows 10+)
+                    cmd_args.append('-Tags=')  # Clear existing  
+                    if keywords:
+                        keywords_str = ';'.join(keywords)
+                        cmd_args.append(f'-Tags={keywords_str}')
+                    
+                    # 9. Subject field (generic, cross-platform)
+                    cmd_args.append('-Subject=')  # Clear existing
+                    if keywords:
+                        keywords_str = ', '.join(keywords)
+                        cmd_args.append(f'-Subject={keywords_str}')
                     
                     # Execute ALL operations in a SINGLE ExifTool call
                     if cmd_args:
                         cmd_args.extend(['-overwrite_original', file_path])
                         debug("tags", f"Executing single optimized ExifTool command with {len(cmd_args)-2} tag operations")
-                        et.execute(*cmd_args)
+                        debug("tags", f"Full ExifTool command: {' '.join(cmd_args)}")
+                        result = et.execute(*cmd_args)
+                        debug("tags", f"ExifTool result: {result}")
                     
                     # Update original keywords after successful save (including year)
                     self.original_keywords[file_path] = keywords.copy()
                     
-                    # Also write macOS Finder tags for better integration
+                    # Write platform-specific tags for better OS integration
                     if keywords:  # Only write if there are keywords
-                        finder_success, finder_msg = self.write_macos_finder_tags(file_path, keywords)
-                        if finder_success:
-                            debug("tags", "macOS Finder tags also written successfully")
+                        platform_success, platform_msg = self.write_platform_specific_tags(file_path, keywords)
+                        if platform_success:
+                            debug("tags", f"Platform-specific tags written successfully: {platform_msg}")
                         else:
-                            debug("tags", f"macOS Finder tags not written: {finder_msg}")
+                            debug("tags", f"Platform-specific tags not written: {platform_msg}")
                     
                     # Remove from new files tracking after successful save
                     if hasattr(self, 'new_files_with_year') and file_path in self.new_files_with_year:
@@ -1052,26 +1149,40 @@ class MainWindow(QMainWindow):
                 padding: 20px;
             }
         """)
-        progress_container.setFixedSize(300, 80)
+        # Create progress bar container with adaptive height
+        progress_container = QWidget()
+        progress_container.setStyleSheet("""
+            QWidget {
+                background-color: white;
+                border-radius: 8px;
+                padding: 20px;
+            }
+        """)
         
-        # Create progress bar layout
+        # Create progress bar layout with controlled spacing
         progress_layout = QVBoxLayout(progress_container)
-        progress_layout.setSpacing(10)
+        progress_layout.setSpacing(15)
+        progress_layout.setContentsMargins(10, 10, 10, 10)
         
-        # Add dynamic progress label (will be updated based on operation)
+        # Add dynamic progress label with flexible height
         self.progress_label = QLabel("Loading images...")
         self.progress_label.setAlignment(Qt.AlignCenter)
-        self.progress_label.setStyleSheet("font-size: 12px; font-weight: bold;")
+        self.progress_label.setStyleSheet("font-size: 12px; font-weight: bold; padding: 5px;")
+        self.progress_label.setWordWrap(True)  # Enable word wrap for multi-line text
+        self.progress_label.setMinimumHeight(20)  # Minimum height for single line
+        self.progress_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         progress_layout.addWidget(self.progress_label)
         
-        # Create progress bar
+        # Create progress bar with fixed height
         self.progress_bar = QProgressBar()
+        self.progress_bar.setFixedHeight(20)  # Fixed height for progress bar
         self.progress_bar.setStyleSheet("""
             QProgressBar {
                 border: 1px solid #ccc;
                 border-radius: 4px;
                 text-align: center;
                 font-size: 10px;
+                height: 20px;
             }
             QProgressBar::chunk {
                 background-color: #0078D4;
@@ -1079,6 +1190,9 @@ class MainWindow(QMainWindow):
             }
         """)
         progress_layout.addWidget(self.progress_bar)
+        
+        # Set adaptive width and let height adjust based on content
+        progress_container.setFixedWidth(320)  # Fixed width, adaptive height
         
         # Add container to overlay
         overlay_layout.addWidget(progress_container)
@@ -1095,9 +1209,28 @@ class MainWindow(QMainWindow):
         # Set custom message or default based on context
         if message:
             self.progress_label.setText(message)
+            # Count lines to adjust container height dynamically
+            line_count = message.count('\n') + 1
+            # Calculate adaptive height: base height + extra height per line
+            base_height = 80  # Base height for single line + progress bar
+            line_height = 20  # Additional height per extra line
+            adaptive_height = base_height + (line_count - 1) * line_height
+            
+            # Get the progress container (first child of overlay layout)
+            overlay_layout = self.progress_overlay.layout()
+            if overlay_layout and overlay_layout.count() > 0:
+                progress_container = overlay_layout.itemAt(0).widget()
+                if progress_container:
+                    progress_container.setFixedHeight(adaptive_height)
         else:
             # Default fallback
             self.progress_label.setText("Processing files...")
+            # Reset to single line height
+            overlay_layout = self.progress_overlay.layout()
+            if overlay_layout and overlay_layout.count() > 0:
+                progress_container = overlay_layout.itemAt(0).widget()
+                if progress_container:
+                    progress_container.setFixedHeight(80)
         
         self.progress_bar.setRange(0, total_files)
         self.progress_bar.setValue(0)
@@ -1129,13 +1262,18 @@ class MainWindow(QMainWindow):
             self.resize_timer.start()
 
     def update_status_bar(self):
-        """Update the status bar with selection info"""
+        """Update the status bar with selection info or loaded images count"""
         if self.selected_images:
             self.statusBar().showMessage(f"Selected {len(self.selected_images)} images")
             # Enable clear tags button when images are selected
             self.clearTagsButton.setEnabled(True)
         else:
-            self.statusBar().showMessage("Ready")
+            # Show loaded images count in ready state
+            loaded_count = len(self.image_flow_manager.image_widgets) if hasattr(self, 'image_flow_manager') and self.image_flow_manager else 0
+            if loaded_count > 0:
+                self.statusBar().showMessage(f"Ready - {loaded_count} images loaded")
+            else:
+                self.statusBar().showMessage("Ready")
             # Disable clear tags button when no images are selected
             self.clearTagsButton.setEnabled(False)
 
@@ -1245,20 +1383,22 @@ class MainWindow(QMainWindow):
                         'keywords': keywords
                     }
                     
-                    # Store original keywords for change tracking (including year for new files)
+                    # Store original keywords for change tracking (should match what will be in UI)
                     if not hasattr(self, 'original_keywords'):
                         self.original_keywords = {}
-                    # Track if this is a new file that will need the year added
-                    if not hasattr(self, 'new_files_with_year'):
-                        self.new_files_with_year = set()
-                    # If the file has no existing keywords but will get a year, mark it as needing save
-                    if not keywords and year:
-                        self.new_files_with_year.add(file_path)
-                        # Store empty original keywords for new files
-                        self.original_keywords[file_path] = []
-                    else:
-                        # Store all existing keywords including year if present
-                        self.original_keywords[file_path] = keywords.copy() if keywords else []
+                    
+                    # Build the original keywords list to match what will appear in UI
+                    ui_keywords = []
+                    if year:
+                        ui_keywords.append(str(year))
+                    
+                    # Add existing keywords (avoid duplicating year if it's already in keywords)
+                    for keyword in keywords if keywords else []:
+                        if keyword and keyword.strip() and keyword.strip() != str(year):
+                            ui_keywords.append(keyword.strip())
+                    
+                    # Store the keywords that will actually appear in the UI
+                    self.original_keywords[file_path] = ui_keywords.copy()
                     
                     # Year will be added to UI and saved as a keyword in metadata
                     
@@ -1784,125 +1924,219 @@ class MainWindow(QMainWindow):
         """Update the layout using the new ImageFlowManager"""
         print("\nStarting update_layout with ImageFlowManager...")
         
+        # Prevent recursion during layout updates
+        if getattr(self, '_updating_layout', False):
+            debug_layout("Skipping update_layout - already in progress")
+            return
+        
         if not self.image_files:
             print("No image files to display")
             return
         
-        # Get widget width from discrete slider steps
-        slider_step = self.horizontalSlider.value()
-        widget_width = self.size_steps[slider_step]
-        debug_layout(f"Slider step {slider_step} -> Setting widget width to {widget_width}px")
+        # Set recursion guard
+        self._updating_layout = True
         
-        # PRESERVE CURRENT TEXT CONTENT before any layout changes
-        current_text_content = {}
-        if hasattr(self, 'image_flow_manager') and self.image_flow_manager.image_widgets:
-            debug("layout", "Preserving current text content before layout update...")
-            for file_path, widget in self.image_flow_manager.image_widgets.items():
-                if hasattr(widget, 'get_tags'):
-                    current_content = widget.get_tags()
-                    current_text_content[file_path] = ', '.join(current_content) if isinstance(current_content, list) else str(current_content)
-                    debug("layout", f"Preserved text for {os.path.basename(file_path)}: '{current_text_content[file_path]}'")
+        try:
+            # Get widget width from discrete slider steps
+            slider_step = self.horizontalSlider.value()
+            widget_width = self.size_steps[slider_step]
+            debug_layout(f"Slider step {slider_step} -> Setting widget width to {widget_width}px")
+            
+            # PRESERVE CURRENT TEXT CONTENT before any layout changes
+            current_text_content = {}
+            if hasattr(self, 'image_flow_manager') and self.image_flow_manager.image_widgets:
+                debug("layout", "Preserving current text content before layout update...")
+                for file_path, widget in self.image_flow_manager.image_widgets.items():
+                    if hasattr(widget, 'get_tags'):
+                        current_content = widget.get_tags()
+                        current_text_content[file_path] = ', '.join(current_content) if isinstance(current_content, list) else str(current_content)
+                        debug("layout", f"Preserved text for {os.path.basename(file_path)}: '{current_text_content[file_path]}'")
+            
+            # Check if this is just a resize (same images, different width) or new image set
+            current_loaded_files = set(self.image_flow_manager.image_widgets.keys()) if hasattr(self, 'image_flow_manager') else set()
+            new_image_files = set(self.image_files)
+            is_resize = bool(current_text_content) and current_loaded_files == new_image_files
         
-        # Check if this is just a resize (same images, different width) or new image set
-        current_loaded_files = set(self.image_flow_manager.image_widgets.keys()) if hasattr(self, 'image_flow_manager') else set()
-        new_image_files = set(self.image_files)
-        is_resize = bool(current_text_content) and current_loaded_files == new_image_files
-        
-        if is_resize:
-            debug("layout", "This is a resize - updating widget widths without recreating widgets")
-            # Just update widget widths for existing widgets
-            self.image_flow_manager.set_widget_width(widget_width)
-            
-            # Restore preserved text content and trigger height adjustment
-            for file_path, preserved_text in current_text_content.items():
-                if file_path in self.image_flow_manager.image_widgets:
-                    widget = self.image_flow_manager.image_widgets[file_path]
-                    widget.set_tags(preserved_text)
-                    debug_layout(f"Restored text for {os.path.basename(file_path)}: '{preserved_text}'")
-            
-            # Explicitly trigger height adjustment after all content is restored
-            # Use a timer to ensure programmatic flags have cleared
-            def trigger_height_adjustment():
-                debug_layout("Triggering height adjustment after text restoration...")
-                for widget in self.image_flow_manager.image_widgets.values():
-                    if hasattr(widget, '_adjust_text_height'):
-                        # Temporarily bypass suppression for this specific height adjustment
-                        original_flag = getattr(widget, '_programmatic_update_in_progress', False)
-                        widget._programmatic_update_in_progress = False
-                        widget._adjust_text_height()
-                        widget._programmatic_update_in_progress = original_flag
-            
-            from PyQt5.QtCore import QTimer
-            QTimer.singleShot(200, trigger_height_adjustment)  # Short delay, bypass suppression manually
-            
-            # Update the layout
-            self.image_flow_manager.update_layout()
-            
-        else:
-            debug_startup("This is initial load - creating widgets from metadata")
-            # Update the flow manager's widget width
-            self.image_flow_manager.set_widget_width(widget_width)
-            
-            # Prepare image data for the flow manager
-            image_data = []
-            for file_path in self.image_files:
-                if file_path in self.image_previews:
-                    # Get existing metadata/tags if available
-                    metadata = self.image_metadata.get(file_path, {})
-                    
-                    # Build tags from year and keywords
-                    year = metadata.get('year', '')
-                    keywords = metadata.get('keywords', [])
-                    
-                    # Combine year and keywords into a single tag string with duplicate checking
-                    all_tags = []
-                    seen = set()
-                    
-                    # Add year first if it exists and isn't already in keywords
-                    if year:
-                        year_str = str(year)
-                        all_tags.append(year_str)
-                        seen.add(year_str)
-                    
-                    # Add keywords, checking for duplicates
-                    if keywords:
-                        if isinstance(keywords, list):
-                            for keyword in keywords:
-                                keyword_str = str(keyword).strip()
+            if is_resize:
+                debug("layout", "This is a resize - updating widget widths without recreating widgets")
+                # Just update widget widths for existing widgets
+                self.image_flow_manager.set_widget_width(widget_width)
+                
+                # Restore preserved text content and trigger height adjustment
+                for file_path, preserved_text in current_text_content.items():
+                    if file_path in self.image_flow_manager.image_widgets:
+                        widget = self.image_flow_manager.image_widgets[file_path]
+                        widget.set_tags(preserved_text)
+                        debug_layout(f"Restored text for {os.path.basename(file_path)}: '{preserved_text}'")
+                
+                # Explicitly trigger height adjustment after all content is restored
+                # Use a timer to ensure programmatic flags have cleared
+                def trigger_height_adjustment():
+                    debug_layout("Triggering height adjustment after text restoration...")
+                    for widget in self.image_flow_manager.image_widgets.values():
+                        if hasattr(widget, '_adjust_text_height'):
+                            # Temporarily bypass suppression for this specific height adjustment
+                            original_flag = getattr(widget, '_programmatic_update_in_progress', False)
+                            widget._programmatic_update_in_progress = False
+                            widget._adjust_text_height()
+                            widget._programmatic_update_in_progress = original_flag
+                
+                from PyQt5.QtCore import QTimer
+                QTimer.singleShot(200, trigger_height_adjustment)  # Short delay, bypass suppression manually
+                
+                # Update the layout
+                self.image_flow_manager.update_layout()
+                
+            else:
+                debug_startup("This is initial load - creating widgets from metadata")
+                # Update the flow manager's widget width
+                self.image_flow_manager.set_widget_width(widget_width)
+                
+                # Prepare image data for the flow manager
+                image_data = []
+                for file_path in self.image_files:
+                    if file_path in self.image_previews:
+                        # Get existing metadata/tags if available
+                        metadata = self.image_metadata.get(file_path, {})
+                        
+                        # Build tags from year and keywords
+                        year = metadata.get('year', '')
+                        keywords = metadata.get('keywords', [])
+                        
+                        # Combine year and keywords into a single tag string with duplicate checking
+                        all_tags = []
+                        seen = set()
+                        
+                        # Add year first if it exists and isn't already in keywords
+                        if year:
+                            year_str = str(year)
+                            all_tags.append(year_str)
+                            seen.add(year_str)
+                        
+                        # Add keywords, checking for duplicates
+                        if keywords:
+                            if isinstance(keywords, list):
+                                for keyword in keywords:
+                                    keyword_str = str(keyword).strip()
+                                    if keyword_str and keyword_str not in seen:
+                                        all_tags.append(keyword_str)
+                                        seen.add(keyword_str)
+                            else:
+                                keyword_str = str(keywords).strip()
                                 if keyword_str and keyword_str not in seen:
                                     all_tags.append(keyword_str)
                                     seen.add(keyword_str)
-                        else:
-                            keyword_str = str(keywords).strip()
-                            if keyword_str and keyword_str not in seen:
-                                all_tags.append(keyword_str)
-                                seen.add(keyword_str)
-                    
-                    existing_tags = ', '.join(all_tags) if all_tags else ''
-                    debug_tags(f"Tags for {os.path.basename(file_path)}: year='{year}', keywords={keywords}, final_tags='{existing_tags}'")
-                    
-                    image_data.append({
-                        'file_path': file_path,
-                        'preview': self.image_previews[file_path],
-                        'metadata': metadata,
-                        'tags': existing_tags
-                    })
-                else:
-                    print(f"Warning: No preview available for {file_path}, skipping...")
+                        
+                        existing_tags = ', '.join(all_tags) if all_tags else ''
+                        debug_tags(f"Tags for {os.path.basename(file_path)}: year='{year}', keywords={keywords}, final_tags='{existing_tags}'")
+                        
+                        image_data.append({
+                            'file_path': file_path,
+                            'preview': self.image_previews[file_path],
+                            'metadata': metadata,
+                            'tags': existing_tags
+                        })
+                    else:
+                        print(f"Warning: No preview available for {file_path}, skipping...")
+                
+                # Load images into the flow manager - much simpler than grid!
+                self.image_flow_manager.load_images(image_data)
             
-            # Load images into the flow manager - much simpler than grid!
-            self.image_flow_manager.load_images(image_data)
+            # Update backward compatibility references
+            self.image_widgets = list(self.image_flow_manager.image_widgets.values())
+            
+            # NOTE: No need to call update_cloudinary_status_for_loaded_images() anymore
+            # since widgets are now created with correct Cloudinary sync status from the start
+            
+            operation_type = "resized" if is_resize else "loaded"
+            debug_layout(f"Layout update completed - {len(self.image_widgets)} images {operation_type} with {widget_width}px width")
+            debug_memory(f"ImageFlowManager now manages {len(self.image_widgets)} widgets")
         
-        # Update backward compatibility references
-        self.image_widgets = list(self.image_flow_manager.image_widgets.values())
+        finally:
+            # Clear recursion guard
+            self._updating_layout = False
+    
+    def setup_sort_menu(self):
+        """Setup the sort menu for the UI file sort button"""
+        from PyQt5.QtWidgets import QMenu
         
-        # NOTE: No need to call update_cloudinary_status_for_loaded_images() anymore
-        # since widgets are now created with correct Cloudinary sync status from the start
+        # Create sort menu for the existing UI button
+        sort_menu = QMenu(self)
         
-        operation_type = "resized" if is_resize else "loaded"
-        debug_layout(f"Layout update completed - {len(self.image_widgets)} images {operation_type} with {widget_width}px width")
-        debug_memory(f"ImageFlowManager now manages {len(self.image_widgets)} widgets")
-
+        # Add Cloudinary sort options
+        cloudinary_action = sort_menu.addAction("📦 Non-Cloudinary First")
+        cloudinary_action.triggered.connect(lambda: self.sort_images_by_cloudinary(reverse=False))
+        
+        cloudinary_reverse_action = sort_menu.addAction("☁️ Cloudinary First") 
+        cloudinary_reverse_action.triggered.connect(lambda: self.sort_images_by_cloudinary(reverse=True))
+        
+        sort_menu.addSeparator()
+        
+        # Add other sort options
+        filename_action = sort_menu.addAction("🔤 Filename A-Z")
+        filename_action.triggered.connect(lambda: self.sort_images_by_filename(reverse=False))
+        
+        filename_reverse_action = sort_menu.addAction("🔤 Filename Z-A")
+        filename_reverse_action.triggered.connect(lambda: self.sort_images_by_filename(reverse=True))
+        
+        sort_menu.addSeparator()
+        
+        date_action = sort_menu.addAction("📅 Newest First")
+        date_action.triggered.connect(lambda: self.sort_images_by_date(reverse=False))
+        
+        date_reverse_action = sort_menu.addAction("📅 Oldest First")
+        date_reverse_action.triggered.connect(lambda: self.sort_images_by_date(reverse=True))
+        
+        sort_menu.addSeparator()
+        
+        size_action = sort_menu.addAction("📏 Largest First")
+        size_action.triggered.connect(lambda: self.sort_images_by_size(reverse=False))
+        
+        size_reverse_action = sort_menu.addAction("📏 Smallest First")
+        size_reverse_action.triggered.connect(lambda: self.sort_images_by_size(reverse=True))
+        
+        # Set the menu to the existing UI button
+        self.sortButton.setMenu(sort_menu)
+        
+        debug_layout("Sort menu setup complete for UI file button")
+    
+    def sort_images_by_cloudinary(self, reverse=False):
+        """Sort images by Cloudinary sync status"""
+        if hasattr(self, 'image_flow_manager') and self.image_flow_manager:
+            self.image_flow_manager.sort_by_cloudinary_status(reverse=reverse)
+            sort_info = self.image_flow_manager.get_current_sort_info()
+            status_msg = f"Sorted by {sort_info['criteria_display']}"
+            if reverse:
+                status_msg += " (Cloudinary first)"
+            else:
+                status_msg += " (Non-Cloudinary first)"
+            self.update_progress_label(status_msg)
+            debug_layout(f"Images sorted by Cloudinary status (reverse={reverse})")
+    
+    def sort_images_by_filename(self, reverse=False):
+        """Sort images alphabetically by filename"""
+        if hasattr(self, 'image_flow_manager') and self.image_flow_manager:
+            self.image_flow_manager.sort_by_filename(reverse=reverse)
+            direction = "Z-A" if reverse else "A-Z"
+            self.update_progress_label(f"Sorted by filename ({direction})")
+            debug_layout(f"Images sorted by filename (reverse={reverse})")
+    
+    def sort_images_by_date(self, reverse=False):
+        """Sort images by modification date"""
+        if hasattr(self, 'image_flow_manager') and self.image_flow_manager:
+            self.image_flow_manager.sort_by_date_modified(reverse=reverse)
+            direction = "oldest first" if reverse else "newest first"
+            self.update_progress_label(f"Sorted by date ({direction})")
+            debug_layout(f"Images sorted by date (reverse={reverse})")
+    
+    def sort_images_by_size(self, reverse=False):
+        """Sort images by file size"""
+        if hasattr(self, 'image_flow_manager') and self.image_flow_manager:
+            self.image_flow_manager.sort_by_file_size(reverse=reverse)
+            direction = "smallest first" if reverse else "largest first"
+            self.update_progress_label(f"Sorted by size ({direction})")
+            debug_layout(f"Images sorted by size (reverse={reverse})")
+    
     def open_files(self):
         print("Opening file dialog...")
         files, _ = QFileDialog.getOpenFileNames(
@@ -1929,7 +2163,8 @@ class MainWindow(QMainWindow):
             self.image_widgets.clear()
             
             # Start complete integrated processing (new approach)
-            self.start_integrated_processing(files, "files")
+            # For files selection, non_image_files is 0 since user selected specific files
+            self.start_integrated_processing(files, "files", 0)
 
     def open_folder(self):
         """Open a folder dialog and import all image files from the selected folder"""
@@ -1944,19 +2179,27 @@ class MainWindow(QMainWindow):
         print(f"Selected folder: {folder_path}")
         
         if folder_path:
-            # Define supported image extensions
-            image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.xmp', '.tiff', '.tif', '.webp'}
+            # Define supported image extensions (excluding XMP which are metadata sidecar files)
+            image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff', '.tif', '.webp'}
             
-            # Find all image files in the folder
+            # Find all image files in the folder and count different file types
             image_files = []
+            non_image_files = 0
+            total_files = 0
+            
             for filename in os.listdir(folder_path):
                 file_path = os.path.join(folder_path, filename)
                 if os.path.isfile(file_path):
+                    total_files += 1
                     _, ext = os.path.splitext(filename.lower())
                     if ext in image_extensions:
                         image_files.append(file_path)
+                    else:
+                        non_image_files += 1
             
             print(f"Found {len(image_files)} image files in folder")
+            if non_image_files > 0:
+                print(f"Skipping {non_image_files} non-image files")
             
             if image_files:
                 # Clear previous metadata errors and data
@@ -1973,13 +2216,18 @@ class MainWindow(QMainWindow):
                 self.image_widgets.clear()
                 
                 # Start complete integrated processing (new approach)
-                self.start_integrated_processing(image_files, "folder")
+                self.start_integrated_processing(image_files, "folder", non_image_files)
             else:
                 print("No image files found in the selected folder")
 
-    def start_integrated_processing(self, image_files, source):
+    def start_integrated_processing(self, image_files, source, non_image_files=0):
         """Start integrated processing combining Cloudinary assessment with image loading"""
         debug_startup(f"Starting integrated processing for {len(image_files)} valid images (source: {source})")
+        
+        # Create detailed progress message
+        progress_message = f"Processing {len(image_files)} images"
+        if non_image_files > 0:
+            progress_message += f"\nSkipping {non_image_files} non-image files"
         
         # Determine if Cloudinary processing should be enabled
         debug_cloudinary("Cloudinary connection check:")
@@ -2003,8 +2251,8 @@ class MainWindow(QMainWindow):
             debug_startup("Resetting CloudinaryUploadHandler for new processing session")
             self.upload_handler.reset_upload_handler()
         
-        # Show progress
-        self.show_progress(len(image_files), "Processing images...")
+        # Show progress with detailed message
+        self.show_progress(len(image_files), progress_message)
         
         # Process each image
         processed_data = []
@@ -2149,8 +2397,15 @@ class MainWindow(QMainWindow):
             self.update_layout()
             # NOTE: No need to call update_cloudinary_status_for_loaded_images() anymore
             # since widgets are now created with correct Cloudinary sync status from the start
+            
+            # Update status bar after a brief delay to ensure widgets are fully created
+            QTimer.singleShot(100, self.update_status_bar)
+            
+            # Auto-hide progress after 2 seconds
+            QTimer.singleShot(2000, self.hide_progress)
         else:
             print("No images were successfully processed")
+            self.statusBar().showMessage("No images loaded")
 
     def show_tag_manager(self):
         """Create and show the tag manager dialog"""
