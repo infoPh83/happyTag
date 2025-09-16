@@ -24,6 +24,8 @@ from utilities.cloudinary_update_v13 import update_csv_database, DATABASE_FILE_N
 from PIL import Image
 import cloudinary
 import cloudinary.uploader
+import cloudinary.api
+from cloudinary.exceptions import Error as CloudinaryError
 from PyQt5.QtCore import QObject, pyqtSignal
 
 from utilities.debug_utils import debug_upload, debug_assessment
@@ -31,87 +33,14 @@ from utilities.image_assessment import ImageAssessment
 import subprocess
 import sys
 
-# Import exiftool availability from main
-try:
-    from main import EXIFTOOL_AVAILABLE, EXIFTOOL_PATH
-except ImportError:
-    EXIFTOOL_AVAILABLE = False
-    EXIFTOOL_PATH = None
+# Import exiftool utilities
+from utilities.exiftool_utils import (
+    write_cloudinary_metadata_to_file, 
+    get_cloudinary_public_id_from_metadata,
+    EXIFTOOL_AVAILABLE,
+    EXIFTOOL_PATH
+)
 
-
-def get_cloudinary_public_id_from_metadata(file_path):
-    """
-    Read stored Cloudinary public_id from image metadata using exiftool.
-    
-    Args:
-        file_path: Path to the image file
-        
-    Returns:
-        str or None: The public_id if found, None if not found or error
-    """
-    if not EXIFTOOL_AVAILABLE or not EXIFTOOL_PATH:
-        debug_upload(f"ExifTool not available for reading metadata from {file_path}")
-        return None
-        
-    try:
-        # Use exiftool to read UserComment field which stores our public_id
-        result = subprocess.run([
-            EXIFTOOL_PATH,
-            '-UserComment',
-            '-s3',  # Short format, no tag names
-            str(file_path)
-        ], capture_output=True, text=True, timeout=30)
-        
-        if result.returncode == 0 and result.stdout.strip():
-            user_comment = result.stdout.strip()
-            # Check if it contains our cloudinary public_id marker
-            if user_comment.startswith('cloudinary_public_id:'):
-                public_id = user_comment.replace('cloudinary_public_id:', '', 1)
-                debug_upload(f"Found Cloudinary public_id in metadata: {public_id}")
-                return public_id
-        
-        debug_upload(f"No Cloudinary public_id found in metadata for {os.path.basename(file_path)}")
-        return None
-        
-    except Exception as e:
-        debug_upload(f"Error reading metadata from {file_path}: {e}")
-        return None
-
-
-def write_cloudinary_public_id_to_metadata(file_path, public_id):
-    """
-    Write Cloudinary public_id to image metadata using exiftool.
-    
-    Args:
-        file_path: Path to the image file
-        public_id: The Cloudinary public_id to store
-        
-    Returns:
-        bool: True if successful, False if error
-    """
-    if not EXIFTOOL_AVAILABLE or not EXIFTOOL_PATH:
-        debug_upload(f"ExifTool not available for writing metadata to {file_path}")
-        return False
-        
-    try:
-        # Use exiftool to write public_id to UserComment field
-        result = subprocess.run([
-            EXIFTOOL_PATH,
-            f'-UserComment=cloudinary_public_id:{public_id}',
-            '-overwrite_original',  # Don't create backup files
-            str(file_path)
-        ], capture_output=True, text=True, timeout=30)
-        
-        if result.returncode == 0:
-            debug_upload(f"Successfully wrote public_id to metadata: {os.path.basename(file_path)} -> {public_id}")
-            return True
-        else:
-            debug_upload(f"Error writing metadata to {file_path}: {result.stderr}")
-            return False
-            
-    except Exception as e:
-        debug_upload(f"Exception writing metadata to {file_path}: {e}")
-        return False
 
 
 def check_file_cloudinary_status_by_metadata(file_path):
@@ -160,13 +89,51 @@ class CloudinaryUploadHandler(QObject):
         self.assessment_data = None
         self.tag_widgets = []  # Will store references to tag input widgets
         self.source_folder_name = None  # Will store the folder name extracted from first file
+        self.metadata_write_failures = []  # Track files where metadata writing failed
         
+    def get_metadata_failure_summary(self):
+        """
+        Get a summary of metadata write failures for user display.
+        
+        Returns:
+            dict: Summary with details for user notification
+        """
+        if not self.metadata_write_failures:
+            return None
+            
+        return {
+            'count': len(self.metadata_write_failures),
+            'files': [failure['file'] for failure in self.metadata_write_failures],
+            'reasons': [failure['reason'] for failure in self.metadata_write_failures],
+            'exiftool_available': EXIFTOOL_AVAILABLE,
+            'exiftool_path': EXIFTOOL_PATH,
+            'recommendation': self._get_metadata_failure_recommendation()
+        }
+    
+    def _get_metadata_failure_recommendation(self):
+        """Get recommendation for fixing metadata write failures"""
+        if not EXIFTOOL_AVAILABLE:
+            return (
+                "ExifTool is not available. To save metadata to image files:\n"
+                "• Download ExifTool from https://exiftool.org/\n"
+                "• Place exiftool.exe in the 'utilities' folder\n"
+                "• Restart the application"
+            )
+        else:
+            return (
+                "ExifTool is available but metadata writing failed. This may be due to:\n"
+                "• File permission issues\n"
+                "• Read-only files\n"
+                "• Unsupported file formats"
+            )
+    
     def reset_upload_handler(self):
         """Reset all upload handler data for a new processing session"""
         debug_upload("Resetting upload handler for new processing session")
         self.assessment_data = None
         self.tag_widgets = []
         self.source_folder_name = None
+        self.metadata_write_failures = []  # Reset metadata failure tracking
         debug_upload("Upload handler reset complete - ready for new session")
         
     def set_assessment_data(self, assessment_data):
@@ -247,8 +214,10 @@ class CloudinaryUploadHandler(QObject):
         
     def start_upload_phase(self):
         """
-        Start the Cloudinary upload phase.
-        Processes both files_to_upload (ready) and files_to_resize (needs processing).
+        Start the NEW Cloudinary upload phase.
+        Processes files based on simplified categorization:
+        - files_for_tag_update_only: update tags only (no reupload)  
+        - files_not_on_cloudinary: resize + upload
         """
         if not self.assessment_data:
             debug_upload("ERROR: No assessment data available for upload")
@@ -260,66 +229,190 @@ class CloudinaryUploadHandler(QObject):
             self.upload_status_signal.emit("Error: No Cloudinary configuration available")
             return
             
-        debug_upload("Starting Cloudinary upload phase")
+        debug_upload("Starting NEW Cloudinary upload phase")
         self.upload_status_signal.emit("Starting Cloudinary upload...")
         
         try:
-            # Extract data from assessment
-            files_to_upload = self.assessment_data.get('files_to_upload', [])
-            files_to_resize = self.assessment_data.get('files_to_resize', [])
+            # Extract data from NEW assessment structure
+            files_for_tag_update = self.assessment_data.get('files_for_tag_update_only', [])
+            files_not_on_cloudinary = self.assessment_data.get('files_not_on_cloudinary', [])
+            already_synced_count = self.assessment_data.get('already_synced_count', 0)
             
-            debug_upload(f"Upload phase: {len(files_to_upload)} files ready to upload")
-            debug_upload(f"Upload phase: {len(files_to_resize)} files need resizing first")
+            debug_upload(f"NEW upload phase:")
+            debug_upload(f"  Files for tag update only: {len(files_for_tag_update)}")
+            debug_upload(f"  Files not on Cloudinary (resize + upload): {len(files_not_on_cloudinary)}")
+            debug_upload(f"  Files already synced (no action): {already_synced_count}")
             
-            # ENHANCED DEBUG: Show detailed file information
-            if files_to_upload:
-                debug_upload("Files ready for direct upload:")
-                for i, file_path in enumerate(files_to_upload, 1):
-                    debug_upload(f"  {i}. {Path(file_path).name} (ready)")
+            # Show detailed file information for each category
                     
-            if files_to_resize:
-                debug_upload("Files that need resizing first:")
-                for i, file_path in enumerate(files_to_resize, 1):
-                    debug_upload(f"  {i}. {Path(file_path).name} (resize needed)")
+            if files_for_tag_update:
+                debug_upload("Files needing tag updates only:")
+                for i, file_data in enumerate(files_for_tag_update, 1):
+                    file_path = file_data.get('file_path', 'Unknown')
+                    ui_tags = file_data.get('ui_tags', [])
+                    public_id = file_data.get('public_id', 'Unknown')
+                    debug_upload(f"  {i}. {Path(file_path).name} - Tags: {ui_tags} - ID: {public_id}")
+                    
+            if files_not_on_cloudinary:
+                debug_upload("Files not on Cloudinary needing full upload:")
+                for i, file_data in enumerate(files_not_on_cloudinary, 1):
+                    file_path = file_data.get('file_path', 'Unknown')
+                    ui_tags = file_data.get('ui_tags', [])
+                    debug_upload(f"  {i}. {Path(file_path).name} - Tags: {ui_tags}")
             
-            total_files_to_process = len(files_to_upload) + len(files_to_resize)
+            total_files_to_process = len(files_for_tag_update) + len(files_not_on_cloudinary)
             debug_upload(f"Total files to process: {total_files_to_process}")
             
-            if not files_to_upload and not files_to_resize:
-                debug_upload("No files to upload - all files already synced")
+            if total_files_to_process == 0:
+                debug_upload("No files to process - all files already synced")
                 self.upload_status_signal.emit("All files already synced - no upload needed")
                 self.upload_complete_signal.emit([0, 0])
                 return
                 
-            # Extract tags from UI widgets
-            upload_tags = self.extract_tags_from_widgets()
-            
-            # Process upload
-            uploaded_count, error_count = self._process_upload_batch(
-                files_to_upload, files_to_resize, upload_tags
+            # Process NEW upload batch
+            uploaded_count, error_count = self._process_new_upload_batch(
+                files_for_tag_update, files_not_on_cloudinary
             )
             
             # Save updated database to CSV after uploads complete
             self._save_database_after_upload()
             
-            debug_upload(f"Upload phase complete: {uploaded_count} uploaded, {error_count} errors")
-            self.upload_status_signal.emit(f"Upload complete: {uploaded_count} files uploaded")
-            self.upload_complete_signal.emit([uploaded_count, error_count])
+            # Report metadata write failures if any
+            metadata_failures_count = len(self.metadata_write_failures)
+            if metadata_failures_count > 0:
+                debug_upload(f"⚠️  Metadata write failures: {metadata_failures_count} files")
+                for failure in self.metadata_write_failures:
+                    debug_upload(f"  - {failure['file']}: {failure['reason']}")
+            
+            debug_upload(f"NEW upload phase complete: {uploaded_count} uploaded/updated, {error_count} errors, {metadata_failures_count} metadata failures")
+            
+            # Create detailed status message
+            status_msg = f"Upload complete: {uploaded_count} files processed"
+            if metadata_failures_count > 0:
+                status_msg += f" (⚠️ {metadata_failures_count} metadata warnings)"
+            
+            self.upload_status_signal.emit(status_msg)
+            self.upload_complete_signal.emit([uploaded_count, error_count, metadata_failures_count])
             
         except Exception as e:
-            error_msg = f"Upload phase failed: {e}"
+            error_msg = f"NEW upload phase failed: {e}"
             debug_upload(f"ERROR: {error_msg}")
             self.upload_status_signal.emit(f"Upload failed: {str(e)}")
             self.upload_complete_signal.emit([0, 1])
             
-    def _process_upload_batch(self, files_to_upload, files_to_resize, upload_tags):
+    def _process_new_upload_batch(self, files_for_tag_update, files_not_on_cloudinary):
+        """
+        Process the NEW upload batch with categorized files.
+        
+        Args:
+            files_on_cloudinary: List of file data for files on Cloudinary (resize+reupload)
+            files_for_tag_update: List of file data for files needing tag updates only
+            files_not_on_cloudinary: List of file data for files not on Cloudinary (full upload)
+            
+        Returns:
+            tuple: (uploaded_count, error_count)
+        """
+        uploaded_count = 0
+        error_count = 0
+        
+        # Calculate total work for progress tracking
+        total_files = len(files_for_tag_update) + len(files_not_on_cloudinary)
+        processed_files = 0
+        
+        debug_upload(f"Processing NEW upload batch: {total_files} total files")
+        
+        # Extract folder name from the first file for Cloudinary organization
+        all_file_data = files_for_tag_update + files_not_on_cloudinary
+        if all_file_data:
+            first_file_path = all_file_data[0].get('file_path')
+            if first_file_path:
+                self._extract_source_folder_name_from_single_file(first_file_path)
+        
+        # Create temporary directory for resized files
+        temp_dir = None
+        try:
+            temp_dir = Path(tempfile.mkdtemp(prefix="happytag_new_upload_"))
+            debug_upload(f"Created temporary directory: {temp_dir}")
+            
+            # Process files that need tag updates only (no reupload)
+            for file_data in files_for_tag_update:
+                try:
+                    file_path = file_data.get('file_path')
+                    ui_tags = file_data.get('ui_tags', [])
+                    public_id = file_data.get('public_id')
+                    
+                    debug_upload(f"Updating tags for existing Cloudinary file: {Path(file_path).name}")
+                    self.upload_preview_signal.emit(f"Updating tags: {Path(file_path).name}")
+                    
+                    success = self._update_cloudinary_tags_only(public_id, ui_tags)
+                    if success:
+                        uploaded_count += 1
+                        debug_upload(f"Tag update successful for {Path(file_path).name}")
+                    else:
+                        error_count += 1
+                        debug_upload(f"Tag update failed for {Path(file_path).name}")
+                    
+                    processed_files += 1
+                    progress = int((processed_files / total_files) * 100)
+                    self.upload_progress_signal.emit(progress)
+                    
+                except Exception as e:
+                    debug_upload(f"Error updating tags for {file_data}: {e}")
+                    error_count += 1
+                    processed_files += 1
+            
+            # Process files not on Cloudinary (full upload)
+            for file_data in files_not_on_cloudinary:
+                try:
+                    file_path = file_data.get('file_path')
+                    ui_tags = file_data.get('ui_tags', [])
+                    
+                    debug_upload(f"Full upload for new file: {Path(file_path).name}")
+                    self.upload_preview_signal.emit(f"Uploading: {Path(file_path).name}")
+                    
+                    # Resize the file first
+                    resized_path = self._resize_file_for_upload(file_path, temp_dir)
+                    if resized_path:
+                        # Upload resized file with individual tags
+                        success = self._upload_file_to_cloudinary(resized_path, ui_tags, original_file_path=file_path)
+                        if success:
+                            uploaded_count += 1
+                            debug_upload(f"Full upload successful for {Path(file_path).name}")
+                        else:
+                            error_count += 1
+                            debug_upload(f"Full upload failed for {Path(file_path).name}")
+                    else:
+                        error_count += 1
+                        debug_upload(f"Resize failed for full upload: {Path(file_path).name}")
+                    
+                    processed_files += 1
+                    progress = int((processed_files / total_files) * 100)
+                    self.upload_progress_signal.emit(progress)
+                    
+                except Exception as e:
+                    debug_upload(f"Error processing full upload for {file_data}: {e}")
+                    error_count += 1
+                    processed_files += 1
+        
+        finally:
+            # Clean up temporary directory
+            if temp_dir and temp_dir.exists():
+                try:
+                    import shutil
+                    shutil.rmtree(temp_dir)
+                    debug_upload(f"Cleaned up temporary directory: {temp_dir}")
+                except Exception as e:
+                    debug_upload(f"Warning: Failed to clean up temp directory {temp_dir}: {e}")
+        
+        return uploaded_count, error_count
+            
+    def _process_upload_batch(self, files_to_upload, files_to_resize):
         """
         Process the upload batch, handling both ready files and files that need resizing.
         
         Args:
             files_to_upload: List of file paths ready for direct upload
             files_to_resize: List of file paths that need resizing before upload
-            upload_tags: List of tags to include in upload metadata
             
         Returns:
             tuple: (uploaded_count, error_count)
@@ -346,7 +439,7 @@ class CloudinaryUploadHandler(QObject):
                     debug_upload(f"Uploading ready file: {file_path}")
                     self.upload_preview_signal.emit(str(file_path))
                     
-                    success = self._upload_file_to_cloudinary(file_path, upload_tags)
+                    success = self._upload_file_to_cloudinary(file_path, [])
                     if success:
                         uploaded_count += 1
                         debug_upload(f"Successfully uploaded: {file_path}")
@@ -373,7 +466,7 @@ class CloudinaryUploadHandler(QObject):
                     resized_path = self._resize_file_for_upload(file_path, temp_dir)
                     if resized_path:
                         # Upload the resized file
-                        success = self._upload_file_to_cloudinary(resized_path, upload_tags)
+                        success = self._upload_file_to_cloudinary(resized_path, [], original_file_path=file_path)
                         if success:
                             uploaded_count += 1
                             debug_upload(f"Successfully uploaded resized file: {file_path}")
@@ -479,8 +572,56 @@ class CloudinaryUploadHandler(QObject):
         except Exception as e:
             debug_upload(f"Error extracting source folder name: {e}")
             self.source_folder_name = None
+    
+    def _extract_source_folder_name_from_single_file(self, file_path):
+        """Extract source folder name from a single file path"""
+        try:
+            if file_path:
+                file_path_obj = Path(file_path)
+                self.source_folder_name = file_path_obj.parent.name
+                debug_upload(f"Source folder name extracted: {self.source_folder_name}")
+            else:
+                self.source_folder_name = None
+        except Exception as e:
+            debug_upload(f"Error extracting source folder name from single file: {e}")
+            self.source_folder_name = None
+    
+    def _update_cloudinary_tags_only(self, public_id, ui_tags):
+        """Update tags on Cloudinary for an existing file without reuploading"""
+        try:
+            debug_upload(f"Tag-only update for public_id {public_id}: {ui_tags}")
             
-    def _upload_file_to_cloudinary(self, file_path, upload_tags):
+            # Use Cloudinary Admin API to update tags for existing resource
+            # First, remove all existing tags, then add the new ones
+            try:
+                # Remove all existing tags (replace with empty array)
+                cloudinary.api.update(public_id, tags=[])
+                debug_upload(f"Cleared existing tags for {public_id}")
+                
+                # Add new tags if any
+                if ui_tags:
+                    # Convert tags to strings and filter out empty ones
+                    clean_tags = [str(tag).strip() for tag in ui_tags if str(tag).strip()]
+                    if clean_tags:
+                        cloudinary.api.update(public_id, tags=clean_tags)
+                        debug_upload(f"Successfully updated tags for {public_id}: {clean_tags}")
+                    else:
+                        debug_upload(f"No valid tags to set for {public_id}")
+                else:
+                    debug_upload(f"No tags provided for {public_id} - tags cleared")
+                
+                return True
+                
+            except CloudinaryError as ce:
+                debug_upload(f"Cloudinary API error updating tags for {public_id}: {ce}")
+                return False
+                
+        except Exception as e:
+            debug_upload(f"Error updating tags for {public_id}: {e}")
+            return False
+            
+            
+    def _upload_file_to_cloudinary(self, file_path, upload_tags, original_file_path=None):
         """
         Upload a single file to Cloudinary with metadata.
         
@@ -523,11 +664,35 @@ class CloudinaryUploadHandler(QObject):
             
             # Update database if available
             if self.cloudinary_updater and hasattr(self.cloudinary_updater, 'database'):
-                self._update_database_entry(file_path_obj, response)
+                # Use original file path if provided, otherwise use the uploaded file path
+                db_file_path = Path(original_file_path) if original_file_path else file_path_obj
+                self._update_database_entry(db_file_path, response, resized_file_path=file_path_obj)
             
-            # Write public_id to image metadata for future reference
+            # Write both public_id and tags to image metadata for future reference
             if final_public_id:
-                write_cloudinary_public_id_to_metadata(file_path_obj, final_public_id)
+                # Always write to the original file, not the resized temporary file
+                metadata_file_path = Path(original_file_path) if original_file_path else file_path_obj
+                
+                # Get current tags from UI if available (for enhanced metadata saving)
+                current_tags = upload_tags if upload_tags else []
+                
+                # Write comprehensive metadata (public_id + tags)
+                metadata_result = write_cloudinary_metadata_to_file(
+                    metadata_file_path, 
+                    final_public_id, 
+                    tags=current_tags
+                )
+                
+                # Track metadata write failures for user notification
+                if not metadata_result['success']:
+                    self.metadata_write_failures.append({
+                        'file': os.path.basename(metadata_file_path),
+                        'reason': metadata_result['message'],
+                        'details': metadata_result['details']
+                    })
+                    debug_upload(f"❌ Metadata write failed for {os.path.basename(metadata_file_path)}: {metadata_result['message']}")
+                else:
+                    debug_upload(f"✅ Metadata written successfully for {os.path.basename(metadata_file_path)}")
                 
             return True
             
@@ -558,10 +723,14 @@ class CloudinaryUploadHandler(QObject):
                 debug_upload(f"Using default folder: '{folder}'")
         return folder
         
-    def _update_database_entry(self, file_path, cloudinary_response):
+    def _update_database_entry(self, file_path, cloudinary_response, resized_file_path=None):
         """
         Update the local database with upload information.
         Handles duplicate (size+filetype) keys by using incremental identifiers.
+        Args:
+            file_path: Path to the original file
+            cloudinary_response: Response from Cloudinary upload
+            resized_file_path: Path to the resized file that was actually uploaded
         """
         try:
             if not self.cloudinary_updater or not hasattr(self.cloudinary_updater, 'database'):
@@ -569,11 +738,13 @@ class CloudinaryUploadHandler(QObject):
                 return
                 
             original_size = file_path.stat().st_size
+            # Calculate resized size - use resized file if available, otherwise use original
+            if resized_file_path and resized_file_path.exists():
+                resized_size = resized_file_path.stat().st_size
+            else:
+                resized_size = original_size
             filetype = file_path.suffix.lower()
             base_key = (original_size, filetype)
-            
-            # Get resized size from response or use original size
-            resized_size = cloudinary_response.get('bytes', original_size)
             
             # Extract auto-generated public_id and URL from Cloudinary response
             auto_public_id = cloudinary_response.get('public_id', '')

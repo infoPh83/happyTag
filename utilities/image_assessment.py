@@ -89,18 +89,18 @@ class ImageAssessment(QObject):
         self.database = {}
         self.cloudinary_files = []
         
-        # Assessment results (matching original Cloudinary logic)
-        self.files_to_upload = []      # Files ready to upload (already resized)
-        self.files_to_resize = []      # Files that need resizing before upload
-        self.already_synced_count = 0  # Files already on Cloudinary
-        self.total_original_size = 0   # Total size of original files
-        self.total_upload_size = 0     # Total size of files to upload
+        # Assessment results (SIMPLIFIED LOGIC FOR FRESH CLOUDINARY DATABASE)
+        self.files_not_on_cloudinary = []         # Files without public_id that need resize + upload
+        self.files_for_tag_update_only = []       # Files with public_id that only need tag updates (no reupload)
+        self.already_synced_count = 0             # Files already perfectly synced (no changes needed)
+        self.total_original_size = 0              # Total size of original files
+        self.total_upload_size = 0                # Total size of files to upload
         
     def reset_assessment_lists(self):
         """Reset all assessment lists and counters for a new processing session"""
         debug_assessment("Resetting assessment lists for new processing session")
-        self.files_to_upload = []
-        self.files_to_resize = []
+        self.files_not_on_cloudinary = []
+        self.files_for_tag_update_only = []
         self.already_synced_count = 0
         self.total_original_size = 0
         self.total_upload_size = 0
@@ -231,9 +231,10 @@ class ImageAssessment(QObject):
                 else:
                     debug_cloudinary(f"File NOT synced with Cloudinary: {file_path_obj.name}")
                     result_data['already_synced'] = False
-                    # CRITICAL FIX: File is in database but not synced - needs resizing before upload
-                    # Add to resize list (original file path) - it will be resized later during upload phase
-                    self.files_to_resize.append(str(file_path))
+                    # File is in database but not synced - would need resizing before upload
+                    # Note: In simplified workflow, this would go to files_not_on_cloudinary
+                    debug_cloudinary(f"File in DB but not synced, would need resize+upload: {file_path_obj.name}")
+                    result_data['needs_resize_and_upload'] = True
                 return True, result_data, None
             else:
                 debug_assessment(f"File NOT in database, needs processing: {file_path_obj.name}")
@@ -273,8 +274,10 @@ class ImageAssessment(QObject):
                 else:
                     debug_cloudinary(f"New file NOT synced with Cloudinary: {file_path_obj.name}")
                     result_data['already_synced'] = False
-                    # CRITICAL FIX: Add to upload list since newly processed file is not synced
-                    self.files_to_upload.append(str(resized_file_path))
+                    # File not synced with Cloudinary - would need upload
+                    # Note: In simplified workflow, this would go to files_not_on_cloudinary
+                    debug_cloudinary(f"New resized file not synced, would need upload: {file_path_obj.name}")
+                    result_data['needs_upload'] = True
                 
                 # Save database
                 self._save_database()
@@ -325,18 +328,94 @@ class ImageAssessment(QObject):
         except Exception as e:
             return False, {'error': f'Basic processing failed: {str(e)}'}, None
 
-    def assess_images(self, image_files, settings_dialog=None):
+    def check_cloudinary_sync_status_lightweight(self, file_path):
         """
-        Main assessment function that processes a list of image files
-        Performs the equivalent of Cloudinary's assessment_phase with full logic
+        Lightweight method to check if a file is synced with Cloudinary using public_id matching.
+        This method only checks public_id existence without resizing or creating CSV records.
+        Used during the loading/assessment phase for fast sync status checking.
+        
+        Returns: bool - True if file has a public_id and is synced with Cloudinary, False otherwise
+        """
+        try:
+            debug_assessment(f"[LIGHTWEIGHT] Checking sync status for {os.path.basename(file_path)}")
+            
+            # Check if Cloudinary is available
+            if not self.cloudinary_updater:
+                debug_assessment(f"[LIGHTWEIGHT] No Cloudinary updater available")
+                return False
+            
+            # Import ExifTool functionality (same as used in main.py)
+            try:
+                import subprocess
+                import json
+                
+                # Read public_id from UserComment field using ExifTool
+                cmd = ['exiftool', '-UserComment', '-j', file_path]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                
+                if result.returncode != 0:
+                    debug_assessment(f"[LIGHTWEIGHT] ExifTool failed for {os.path.basename(file_path)}")
+                    return False
+                
+                data = json.loads(result.stdout)
+                if not data:
+                    debug_assessment(f"[LIGHTWEIGHT] No metadata found for {os.path.basename(file_path)}")
+                    return False
+                
+                user_comment = data[0].get('UserComment', '')
+                if not user_comment or not user_comment.startswith('cloudinary_public_id:'):
+                    debug_assessment(f"[LIGHTWEIGHT] No public_id found for {os.path.basename(file_path)}")
+                    return False
+                
+                public_id = user_comment.replace('cloudinary_public_id:', '').strip()
+                debug_assessment(f"[LIGHTWEIGHT] Found public_id '{public_id}' for {os.path.basename(file_path)}")
+                
+                # Check if this public_id exists in Cloudinary files cache
+                cloudinary_resources = []
+                if self.main_app and hasattr(self.main_app, 'cloudinary_files_cache'):
+                    cloudinary_resources = self.main_app.cloudinary_files_cache
+                    debug_assessment(f"[LIGHTWEIGHT] Using cached Cloudinary files: {len(cloudinary_resources)} files")
+                
+                if not cloudinary_resources:
+                    debug_assessment(f"[LIGHTWEIGHT] No Cloudinary resources available")
+                    return False
+                
+                for resource in cloudinary_resources:
+                    if resource.get('public_id') == public_id:
+                        debug_cloudinary(f"[LIGHTWEIGHT] File {os.path.basename(file_path)} is SYNCED (public_id: {public_id})")
+                        return True
+                
+                debug_cloudinary(f"[LIGHTWEIGHT] File {os.path.basename(file_path)} has orphaned public_id: {public_id}")
+                return False
+                
+            except Exception as e:
+                debug_errors(f"[LIGHTWEIGHT] Error checking public_id for {os.path.basename(file_path)}: {e}")
+                return False
+                
+        except Exception as e:
+            debug_errors(f"[LIGHTWEIGHT] General error for {os.path.basename(file_path)}: {e}")
+            return False
+
+    def assess_images_for_upload(self, image_files, ui_tag_data, settings_dialog=None):
+        """
+        NEW: Assess images for upload based on UI tag data and Cloudinary sync status.
+        This replaces the old assess_images method with redesigned logic.
+        
+        Args:
+            image_files: List of file paths to assess
+            ui_tag_data: Dict mapping file_path -> list of tags from UI widgets
+            settings_dialog: Settings dialog for configuration
+            
+        Returns:
+            dict: Assessment results with new categorization
         """
         self.total_count = len(image_files)
         self.processed_count = 0
         self.assessment_data = {}
         
-        # Reset counters
-        self.files_to_upload = []
-        self.files_to_resize = []
+        # Reset counters for simplified assessment structure
+        self.files_not_on_cloudinary = []
+        self.files_for_tag_update_only = []  
         self.already_synced_count = 0
         self.total_original_size = 0
         self.total_upload_size = 0
@@ -347,75 +426,85 @@ class ImageAssessment(QObject):
                 cloudinary_settings = settings_dialog.get_cloudinary_settings()
                 if cloudinary_settings and cloudinary_settings.get('log_folder'):
                     self.setup_logging(cloudinary_settings['log_folder'])
-                    self.log_message(f"Starting assessment of {len(image_files)} images")
+                    self.log_message(f"Starting NEW upload assessment of {len(image_files)} images")
                 else:
                     print("[WARNING] No log folder configured - assessment logging disabled")
             except Exception as e:
                 print(f"[WARNING] Failed to setup assessment logging: {e}")
         
         # Create temporary directory for processed images
-        self.temp_dir = Path(tempfile.mkdtemp(prefix="happytag_assessment_"))
+        self.temp_dir = Path(tempfile.mkdtemp(prefix="happytag_upload_assessment_"))
         self.log_message(f"Created temporary directory: {self.temp_dir}")
         
-        self.assessment_status.emit(f"Starting assessment of {self.total_count} images...")
+        self.assessment_status.emit(f"Analyzing {self.total_count} images for upload...")
         
-        # Initialize database and Cloudinary data (returns True/False)
+        # Initialize database and Cloudinary data
         cloudinary_available = self._initialize_cloudinary_data(settings_dialog)
         if not cloudinary_available:
-            # If Cloudinary is not configured, just do basic image processing
-            self.log_message("Cloudinary not available - falling back to basic assessment")
-            return self._basic_image_assessment(image_files)
+            # If Cloudinary is not configured, all files are "not on cloudinary"
+            self.log_message("Cloudinary not available - treating all files as new uploads")
+            self.files_not_on_cloudinary = image_files.copy()
+            return self._finalize_assessment_results(image_files)
         
-        # Phase 1: Initial assessment - categorize images (original logic)
-        files_to_be_resized_in_assessment = []
-        valid_files = []
-        
-        self.assessment_status.emit(f"Checking {len(image_files)} images against database and Cloudinary...")
-        
+        # Analyze each image based on Cloudinary sync status and UI tags
         for i, file_path in enumerate(image_files):
             try:
                 if not self._is_valid_image_file(file_path):
                     continue
                     
-                valid_files.append(file_path)
                 file_path_obj = Path(file_path)
+                ui_tags = ui_tag_data.get(file_path, [])  # Get tags from UI for this file
                 
                 # Get file details
                 original_size = file_path_obj.stat().st_size
-                filetype = file_path_obj.suffix.lower()
+                self.total_original_size += original_size
                 
-                debug_assessment(f"Assessing {file_path_obj.name}: {original_size} bytes, {filetype}")
-                self.log_message(f"Assessing {file_path_obj.name}: {original_size} bytes, {filetype}")
+                debug_assessment(f"Analyzing {file_path_obj.name} with UI tags: {ui_tags}")
+                self.log_message(f"Analyzing {file_path_obj.name} with UI tags: {ui_tags}")
                 
-                # Check if file is in database (CORE CLOUDINARY LOGIC)
-                if self._is_file_in_database(original_size, filetype):
-                    debug_assessment(f"File found in database: {file_path_obj.name}")
-                    self.log_message(f"File found in database: {file_path_obj.name}")
+                # Check if file has public_id (already on Cloudinary)
+                cloudinary_public_id = self._get_cloudinary_public_id_from_metadata(file_path)
+                
+                if cloudinary_public_id:
+                    # File is already on Cloudinary - check if tags match for update-only
+                    debug_cloudinary(f"File {file_path_obj.name} has public_id: {cloudinary_public_id}")
                     
-                    # FILE IS IN DATABASE - get resized size and check Cloudinary sync
-                    db_key = (original_size, filetype)
-                    resized_size = self.database[db_key]['resized_size']
+                    # Get current Cloudinary tags for this file
+                    current_cloudinary_tags = self._get_cloudinary_tags_for_public_id(cloudinary_public_id)
                     
-                    if not self._is_file_synced(file_path_obj, resized_size):
-                        debug_cloudinary(f"File in database but NOT synced with Cloudinary: {file_path_obj.name}")
-                        self.log_message(f"File in database but NOT synced with Cloudinary: {file_path_obj.name}")
-                        # FILE IS NOT SYNCED WITH CLOUDINARY - will be resized and uploaded later
-                        self.files_to_resize.append(file_path)
-                        self.total_upload_size += resized_size
-                        self.total_original_size += original_size
-                    else:
-                        debug_cloudinary(f"File in database and SYNCED with Cloudinary: {file_path_obj.name}")
-                        self.log_message(f"File in database and SYNCED with Cloudinary: {file_path_obj.name}")
-                        # FILE IS SYNCED WITH CLOUDINARY - skip
+                    # Compare UI tags with Cloudinary tags
+                    ui_tags_set = set(ui_tags) if ui_tags else set()
+                    cloudinary_tags_set = set(current_cloudinary_tags) if current_cloudinary_tags else set()
+                    
+                    if ui_tags_set == cloudinary_tags_set:
+                        # Tags match - file is perfectly synced, no action needed
+                        debug_cloudinary(f"File {file_path_obj.name} - tags match, no update needed")
                         self.already_synced_count += 1
+                    else:
+                        # Tags don't match - need tag update only (no reupload)
+                        debug_cloudinary(f"File {file_path_obj.name} - tags differ, needs tag update only")
+                        debug_cloudinary(f"  UI tags: {ui_tags_set}")
+                        debug_cloudinary(f"  Cloudinary tags: {cloudinary_tags_set}")
+                        self.files_for_tag_update_only.append({
+                            'file_path': file_path,
+                            'public_id': cloudinary_public_id,
+                            'ui_tags': ui_tags,
+                            'current_cloudinary_tags': current_cloudinary_tags
+                        })
+                        
                 else:
-                    debug_assessment(f"File NOT in database, needs processing: {file_path_obj.name}")
-                    self.log_message(f"File NOT in database, needs processing: {file_path_obj.name}")
-                    # FILE NOT IN DATABASE - resize now to get size for Cloudinary comparison
-                    files_to_be_resized_in_assessment.append(file_path)
+                    # File is NOT on Cloudinary - needs resize + upload
+                    debug_cloudinary(f"File {file_path_obj.name} - not on Cloudinary, needs resize + upload")
+                    self.files_not_on_cloudinary.append({
+                        'file_path': file_path,
+                        'ui_tags': ui_tags,
+                        'needs_resize_and_upload': True
+                    })
+                    # Estimate upload size (will be resized, so approximate)
+                    self.total_upload_size += int(original_size * 0.7)  # Rough estimate after resize
                 
                 # Update progress
-                progress = int((i + 1) / len(image_files) * 50)  # First phase is 50% of progress
+                progress = int((i + 1) / len(image_files) * 100)
                 self.assessment_progress.emit(progress)
                 
             except Exception as e:
@@ -423,102 +512,107 @@ class ImageAssessment(QObject):
                 self.log_message(f"Failed to assess {file_path}: {e}", "ERROR")
                 continue
         
-        # Phase 2: Process files that need resizing now (original logic)
-        if files_to_be_resized_in_assessment:
-            self.assessment_status.emit(f"Processing {len(files_to_be_resized_in_assessment)} new images...")
-            self.log_message(f"Processing {len(files_to_be_resized_in_assessment)} new images that need resizing")
-            
-            for i, file_path in enumerate(files_to_be_resized_in_assessment):
-                try:
-                    file_path_obj = Path(file_path)
-                    self.assessment_status.emit(f"Processing {file_path_obj.name} ({i+1}/{len(files_to_be_resized_in_assessment)})")
-                    
-                    # Resize the image (CORE CLOUDINARY LOGIC)
-                    resized_buffer = self._resize_image_to_fit(file_path_obj)
-                    if resized_buffer is None:
-                        print(f"[WARNING] Failed to resize {file_path_obj.name}")
-                        continue
-                    
-                    # Save resized file to temp directory
-                    resized_file_path = self.temp_dir / file_path_obj.name
-                    with open(resized_file_path, 'wb') as f:
-                        f.write(resized_buffer.getvalue())
-                    
-                    # Update database with resized size (CORE CLOUDINARY LOGIC)
-                    original_size = file_path_obj.stat().st_size
-                    resized_size = resized_file_path.stat().st_size
-                    filetype = file_path_obj.suffix.lower()
-                    
-                    db_key = (original_size, filetype)
-                    self.database[db_key] = {
-                        'file_name': file_path_obj.name,
-                        'original_size': original_size,
-                        'resized_size': resized_size,
-                        'filetype': filetype
-                    }
-                    
-                    debug_assessment(f"Added to database: {file_path_obj.name}, original: {original_size}, resized: {resized_size}")
-                    
-                    # Check if resized file is already synced with Cloudinary (CORE CLOUDINARY LOGIC)
-                    if not self._is_file_synced(file_path_obj, resized_size):
-                        debug_cloudinary(f"New file NOT synced with Cloudinary: {file_path_obj.name}")
-                        # FILE NOT SYNCED - add to upload queue
-                        self.files_to_upload.append(str(resized_file_path))
-                        self.total_upload_size += resized_size
-                        self.total_original_size += original_size
-                    else:
-                        debug_cloudinary(f"New file already SYNCED with Cloudinary: {file_path_obj.name}")
-                        # FILE ALREADY SYNCED - skip
-                        self.already_synced_count += 1
-                    
-                    # Update progress
-                    progress = 50 + int((i + 1) / len(files_to_be_resized_in_assessment) * 50)
-                    self.assessment_progress.emit(progress)
-                    
-                except Exception as e:
-                    print(f"[ERROR] Failed to process {file_path}: {e}")
-                    continue
+        return self._finalize_assessment_results(image_files)
         
-        # Save updated database
-        self._save_database()
-        self.log_message("Assessment database saved")
-        
-        # Compile final assessment results
+    def _finalize_assessment_results(self, image_files):
+        """Finalize and return assessment results"""
+        # Compile final assessment results with new structure
         assessment_summary = {
-            'total_files': len(valid_files),
-            'files_to_upload': len(self.files_to_upload),
-            'files_to_resize': len(self.files_to_resize),
-            'already_synced': self.already_synced_count,
+            'total_files': len(image_files),
+            'files_for_tag_update_only': self.files_for_tag_update_only,
+            'files_not_on_cloudinary': self.files_not_on_cloudinary,
+            'already_synced_count': self.already_synced_count,
             'total_original_size': self.total_original_size,
-            'total_upload_size': self.total_upload_size,
-            'valid_files': valid_files,
             'temp_directory': str(self.temp_dir),
             'cloudinary_enabled': True
         }
         
-        self.assessment_status.emit("Assessment complete")
+        self.assessment_status.emit("Upload assessment complete")
         self.assessment_progress.emit(100)
         self.assessment_complete.emit(assessment_summary)
         
-        debug_assessment("Assessment complete:")
-        debug_assessment(f"  Total files: {len(valid_files)}")
-        debug_assessment(f"  Already synced: {self.already_synced_count}")
-        debug_assessment(f"  Need upload: {len(self.files_to_upload)}")
-        debug_assessment(f"  Need resize: {len(self.files_to_resize)}")
+        debug_assessment("NEW Upload assessment complete:")
+        debug_assessment(f"  Total files: {len(image_files)}")
+        debug_assessment(f"  Already synced (no action): {self.already_synced_count}")
+        debug_assessment(f"  Tag updates only: {len(self.files_for_tag_update_only)}")
+        debug_assessment(f"  Not on Cloudinary (resize + upload): {len(self.files_not_on_cloudinary)}")
         
         # Log final summary
-        self.log_message("=== ASSESSMENT SUMMARY ===")
-        self.log_message(f"Total files processed: {len(valid_files)}")
-        self.log_message(f"Files already synced: {self.already_synced_count}")
-        self.log_message(f"Files to upload: {len(self.files_to_upload)}")
-        self.log_message(f"Files to resize: {len(self.files_to_resize)}")
+        self.log_message("=== NEW UPLOAD ASSESSMENT SUMMARY ===")
+        self.log_message(f"Total files processed: {len(image_files)}")
+        self.log_message(f"Files already synced (no action): {self.already_synced_count}")
+        self.log_message(f"Files for tag update only: {len(self.files_for_tag_update_only)}")
+        self.log_message(f"Files not on Cloudinary (resize + upload): {len(self.files_not_on_cloudinary)}")
         self.log_message(f"Total original size: {self.total_original_size:,} bytes")
-        self.log_message(f"Total upload size: {self.total_upload_size:,} bytes")
         
         # Close logging
         self.close_logging()
         
         return assessment_summary
+        
+    def _get_cloudinary_public_id_from_metadata(self, file_path):
+        """Extract Cloudinary public_id from image metadata using ExifTool"""
+        try:
+            # Import ExifTool availability from main app if available
+            try:
+                if self.main_app and hasattr(self.main_app, 'persistent_exiftool') and self.main_app.persistent_exiftool:
+                    # Use main app's persistent ExifTool connection
+                    metadata = self.main_app.persistent_exiftool.get_metadata(str(file_path))
+                    
+                    # Check UserComment field where we typically store public_id
+                    user_comment = metadata.get('EXIF:UserComment', '')
+                    if user_comment and 'public_id:' in user_comment:
+                        public_id = user_comment.replace('public_id:', '').strip()
+                        debug_cloudinary(f"Found public_id in UserComment: {public_id}")
+                        return public_id
+                        
+                    # Check other potential fields
+                    description = metadata.get('EXIF:ImageDescription', '')
+                    if description and 'public_id:' in description:
+                        public_id = description.replace('public_id:', '').strip()
+                        debug_cloudinary(f"Found public_id in ImageDescription: {public_id}")
+                        return public_id
+                        
+                else:
+                    # Fallback: Use cloudinary_upload_handler's helper functions
+                    from .cloudinary_upload_handler import get_cloudinary_public_id_from_metadata
+                    public_id = get_cloudinary_public_id_from_metadata(file_path)
+                    if public_id:
+                        debug_cloudinary(f"Found public_id via upload handler: {public_id}")
+                        return public_id
+                        
+            except Exception as e:
+                debug_cloudinary(f"Error reading public_id with ExifTool: {e}")
+            
+            return None
+            
+        except Exception as e:
+            debug_cloudinary(f"Error reading public_id from {file_path}: {e}")
+            return None
+            
+    def _get_cloudinary_tags_for_public_id(self, public_id):
+        """Get current tags for a file on Cloudinary by public_id"""
+        try:
+            if not self.cloudinary_updater:
+                return []
+                
+            # Use CloudinaryUpdater to get resource info
+            import cloudinary.api
+            
+            # Get resource information from Cloudinary
+            resource = cloudinary.api.resource(public_id, tags=True)
+            
+            if 'tags' in resource:
+                tags = resource['tags']
+                debug_cloudinary(f"Retrieved Cloudinary tags for {public_id}: {tags}")
+                return tags
+            else:
+                debug_cloudinary(f"No tags found for {public_id} on Cloudinary")
+                return []
+                
+        except Exception as e:
+            debug_cloudinary(f"Error retrieving Cloudinary tags for {public_id}: {e}")
+            return []
     
     def _initialize_cloudinary_data(self, settings_dialog=None):
         """Initialize database and Cloudinary files data - FIXED to only initialize once per session"""

@@ -1,0 +1,38 @@
+=== HappyTag Assessment Session ===
+Session started: 2025-09-15 23:22:11
+Log file: D:\Python playfolder\happyTag\logs\happytag_assessment_2025-09-15_23-22-11.txt
+==================================================
+
+[2025-09-15 23:22:11] INFO: Starting assessment of 8 images
+[2025-09-15 23:22:11] INFO: Created temporary directory: C:\Users\simon\AppData\Local\Temp\happytag_assessment_7k4p9hjr
+[2025-09-15 23:22:11] INFO: Loaded database from CSV with 0 entries from D:\Python playfolder\happyTag\logs\cloudinary_database.csv
+[2025-09-15 23:22:11] INFO: Using cached Cloudinary files list: 0 files
+[2025-09-15 23:22:11] INFO: Assessing 1.jpg: 2534742 bytes, .jpg
+[2025-09-15 23:22:11] INFO: File NOT in database, needs processing: 1.jpg
+[2025-09-15 23:22:11] INFO: Assessing array_test.jpg: 4178 bytes, .jpg
+[2025-09-15 23:22:11] INFO: File NOT in database, needs processing: array_test.jpg
+[2025-09-15 23:22:11] INFO: Assessing metadata_test.jpg: 4192 bytes, .jpg
+[2025-09-15 23:22:11] INFO: File NOT in database, needs processing: metadata_test.jpg
+[2025-09-15 23:22:11] INFO: Assessing super long file name to be truncated.jpg: 2534774 bytes, .jpg
+[2025-09-15 23:22:11] INFO: File NOT in database, needs processing: super long file name to be truncated.jpg
+[2025-09-15 23:22:11] INFO: Assessing test_final.jpg: 4674 bytes, .jpg
+[2025-09-15 23:22:11] INFO: File NOT in database, needs processing: test_final.jpg
+[2025-09-15 23:22:11] INFO: Assessing test_final.png: 1394 bytes, .png
+[2025-09-15 23:22:11] INFO: File NOT in database, needs processing: test_final.png
+[2025-09-15 23:22:11] INFO: Assessing test_final.tiff: 123390 bytes, .tiff
+[2025-09-15 23:22:11] INFO: File NOT in database, needs processing: test_final.tiff
+[2025-09-15 23:22:11] INFO: Assessing test_finder_tags_demo.jpg: 2262611 bytes, .jpg
+[2025-09-15 23:22:11] INFO: File NOT in database, needs processing: test_finder_tags_demo.jpg
+[2025-09-15 23:22:11] INFO: Processing 8 new images that need resizing
+[2025-09-15 23:22:11] INFO: Assessment database saved
+[2025-09-15 23:22:11] INFO: === ASSESSMENT SUMMARY ===
+[2025-09-15 23:22:11] INFO: Total files processed: 8
+[2025-09-15 23:22:11] INFO: Files already synced: 0
+[2025-09-15 23:22:11] INFO: Files to upload: 8
+[2025-09-15 23:22:11] INFO: Files to resize: 0
+[2025-09-15 23:22:11] INFO: Total original size: 7,469,955 bytes
+[2025-09-15 23:22:11] INFO: Total upload size: 6,878,289 bytes
+
+
+Session ended: 2025-09-15 23:22:11
+==================================================

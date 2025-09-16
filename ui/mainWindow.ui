@@ -69,16 +69,10 @@
       </item>
       <item>
        <widget class="QPushButton" name="sortButton">
-        <property name="text">
-         <string>Sort ⏷</string>
-        </property>
-        <property name="toolTip">
-         <string>Sort images by various criteria</string>
-        </property>
         <property name="minimumSize">
          <size>
           <width>80</width>
-          <height>32</height>
+          <height>23</height>
          </size>
         </property>
         <property name="maximumSize">
@@ -86,6 +80,12 @@
           <width>80</width>
           <height>32</height>
          </size>
+        </property>
+        <property name="toolTip">
+         <string>Sort images by various criteria</string>
+        </property>
+        <property name="text">
+         <string>Sort</string>
         </property>
        </widget>
       </item>

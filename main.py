@@ -718,149 +718,109 @@ class MainWindow(QMainWindow):
         
         return changed
 
-    def write_platform_specific_tags(self, file_path, keywords):
-        """Write platform-specific tags for enhanced OS integration"""
-        import platform
-        
-        current_platform = platform.system().lower()
-        
-        if current_platform == 'darwin':
-            # macOS: Write Finder tags and extended attributes
-            return self.write_macos_finder_tags(file_path, keywords)
-        elif current_platform == 'windows':
-            # Windows: Write Windows Explorer compatible metadata
-            return self.write_windows_explorer_tags(file_path, keywords)
-        else:
-            # Linux or other: No platform-specific handling needed
-            return True, "No platform-specific tags needed"
-
-    def write_windows_explorer_tags(self, file_path, keywords):
-        """Write Windows Explorer compatible tags using ExifTool"""
+    def _cleanup_orphaned_public_id(self, file_path):
+        """
+        Clean up orphaned public_id metadata for files that are no longer on Cloudinary.
+        Returns: 1 if cleanup performed, 0 if no cleanup needed
+        """
         try:
-            if not keywords:
-                return True, "No keywords to write"
+            # Check if Cloudinary is enabled
+            if not (self.cloudinary_connected and hasattr(self, 'cloudinary_updater') and self.cloudinary_updater):
+                return 0  # No cleanup if Cloudinary not available
             
-            if not self.exiftool_available or not self.persistent_exiftool:
-                return False, "ExifTool not available for Windows Explorer tags"
+            # Get public_id from file metadata
+            from utilities.cloudinary_upload_handler import get_cloudinary_public_id_from_metadata
+            local_public_id = get_cloudinary_public_id_from_metadata(file_path)
             
-            debug("tags", f"Writing Windows Explorer tags to {os.path.basename(file_path)}")
+            if not local_public_id:
+                return 0  # No public_id to check
             
-            # Use the persistent ExifTool instance
-            et = self.persistent_exiftool
+            # Check if this public_id exists in Cloudinary
+            cloudinary_files = getattr(self.cloudinary_updater, 'cloudinary_files', [])
+            cloudinary_public_ids = {cf.get('public_id', '') for cf in cloudinary_files}
             
-            # Windows Explorer specifically looks for these metadata fields
-            cmd_args = []
-            
-            # 1. Keywords field (standard for Windows)
-            cmd_args.append('-Keywords=')  # Clear existing
-            if keywords:
-                keywords_str = ';'.join(keywords)
-                cmd_args.append(f'-Keywords={keywords_str}')
-            
-            # 2. Tags field (Windows 10+ specific)
-            cmd_args.append('-Tags=')  # Clear existing
-            if keywords:
-                keywords_str = ';'.join(keywords)
-                cmd_args.append(f'-Tags={keywords_str}')
-            
-            # 3. Subject field (for compatibility)
-            cmd_args.append('-Subject=')  # Clear existing
-            if keywords:
-                keywords_str = ', '.join(keywords)
-                cmd_args.append(f'-Subject={keywords_str}')
-            
-            # Execute the Windows-specific metadata write
-            if cmd_args:
-                cmd_args.extend(['-overwrite_original', file_path])
-                debug("tags", f"Executing Windows Explorer metadata command: {' '.join(cmd_args)}")
-                result = et.execute(*cmd_args)
-                debug("tags", f"Windows Explorer metadata result: {result}")
-            
-            debug("tags", f"Successfully wrote Windows Explorer tags to {os.path.basename(file_path)}")
-            return True, "Success"
+            if local_public_id not in cloudinary_public_ids:
+                # Orphaned public_id - remove it from metadata
+                debug_cloudinary(f"Found orphaned public_id {local_public_id} in {os.path.basename(file_path)} - cleaning up")
                 
+                # Use ExifTool to remove the public_id metadata
+                if self.exiftool_available and self.persistent_exiftool:
+                    try:
+                        # Remove the UserComment field that contains the public_id
+                        self.persistent_exiftool.execute("-UserComment=", file_path, "-overwrite_original")
+                        debug_cloudinary(f"Removed orphaned public_id from {os.path.basename(file_path)}")
+                        return 1
+                    except Exception as e:
+                        debug_cloudinary(f"Failed to remove orphaned public_id from {file_path}: {e}")
+                        return 0
+            
+            return 0  # No cleanup needed
+            
         except Exception as e:
-            debug_errors(f"Error writing Windows Explorer tags: {e}")
-            return False, f"Error: {str(e)}"
+            debug_cloudinary(f"Error during orphaned public_id cleanup for {file_path}: {e}")
+            return 0
 
-    def write_macos_finder_tags(self, file_path, keywords):
-        """Write macOS Finder tags using extended attributes and Spotlight metadata"""
+    def _import_cloudinary_tags_for_file(self, file_path, local_keywords):
+        """
+        Import Cloudinary tags for a single file if public_id matches.
+        Returns: Cloudinary keywords list if found and different, None if no import needed
+        """
         try:
-            if not keywords or os.name != 'posix' or not hasattr(os, 'uname') or os.uname().sysname != 'Darwin':
-                return True, "Not macOS or no keywords"
+            # Get public_id from file metadata
+            from utilities.cloudinary_upload_handler import get_cloudinary_public_id_from_metadata
+            local_public_id = get_cloudinary_public_id_from_metadata(file_path)
             
-            # Method 1: Write Extended Attributes (for Finder display)
-            # Use the EXACT format that macOS Finder uses: simple array of strings
-            # Based on analysis of working macOS-tagged files
-            tag_data = keywords  # Simple list of strings, no color info needed here
+            if not local_public_id:
+                debug_cloudinary(f"No public_id found in {os.path.basename(file_path)} - keeping local tags")
+                return None
             
-            # Convert to binary plist format (same as macOS native)
-            plist_data = plistlib.dumps(tag_data, fmt=plistlib.FMT_BINARY)
+            # Get Cloudinary files data from cache
+            cloudinary_files = getattr(self, 'cloudinary_files_cache', [])
+            if not cloudinary_files:
+                debug_cloudinary(f"No Cloudinary files data available in cache")
+                return None
             
-            # Convert binary data to hex string
-            hex_data = plist_data.hex()
+            # Find matching Cloudinary file by public_id
+            cloudinary_file = None
+            for cf in cloudinary_files:
+                if cf.get('public_id', '') == local_public_id:
+                    cloudinary_file = cf
+                    break
             
-            # Use xattr command with hex data
-            result = subprocess.run([
-                'xattr', '-w', '-x', 'com.apple.metadata:_kMDItemUserTags',
-                hex_data, file_path
-            ], capture_output=True, text=True)
+            if not cloudinary_file:
+                debug_cloudinary(f"No Cloudinary file found for public_id: {local_public_id}")
+                return None
             
-            if result.returncode != 0:
-                debug_errors(f"Failed to write extended attributes: {result.stderr}")
-                return False, f"xattr error: {result.stderr}"
+            # Extract Cloudinary tags
+            cloudinary_tags = cloudinary_file.get('tags', [])
+            if not cloudinary_tags:
+                debug_cloudinary(f"No tags in Cloudinary for {local_public_id} - keeping local tags")
+                return None
             
-            # Method 2: Write Spotlight Metadata (for search and indexing)
-            try:
-                # Use mdimport to write Spotlight-compatible metadata
-                # Create a temporary sidecar file with metadata
-                import tempfile
-                import json
-                
-                # Create metadata in format Spotlight understands
-                spotlight_metadata = {
-                    'kMDItemUserTags': keywords,
-                    'kMDItemKeywords': keywords,
-                    'kMDItemSubject': ', '.join(keywords)
-                }
-                
-                # Write using xattr for Spotlight metadata as well
-                for key, value in spotlight_metadata.items():
-                    if isinstance(value, list):
-                        # For arrays, write as plist
-                        array_plist = plistlib.dumps(value, fmt=plistlib.FMT_BINARY)
-                        array_hex = array_plist.hex()
-                        subprocess.run([
-                            'xattr', '-w', '-x', f'com.apple.metadata:{key}',
-                            array_hex, file_path
-                        ], capture_output=True)
-                    else:
-                        # For strings, write directly
-                        subprocess.run([
-                            'xattr', '-w', f'com.apple.metadata:{key}',
-                            value, file_path
-                        ], capture_output=True)
-                
-                debug("tags", "Successfully wrote Spotlight metadata")
-                
-            except Exception as spotlight_error:
-                debug_errors(f"Spotlight metadata write failed: {spotlight_error}")
-                # Continue anyway, extended attributes are still written
+            # Convert to same format as local keywords (list of strings)
+            cloudinary_keywords = [str(tag).strip() for tag in cloudinary_tags if str(tag).strip()]
             
-            debug("tags", f"Successfully wrote macOS Finder tags to {os.path.basename(file_path)}")
+            # Compare with local keywords to see if import is needed
+            local_set = set(local_keywords) if local_keywords else set()
+            cloudinary_set = set(cloudinary_keywords)
             
-            # Force Spotlight reindex for immediate visibility
-            try:
-                subprocess.run(['mdimport', file_path], capture_output=True, timeout=5)
-                debug("tags", f"Triggered Spotlight reindex for {os.path.basename(file_path)}")
-            except:
-                pass  # Non-critical if reindex fails
+            if local_set == cloudinary_set:
+                debug_cloudinary(f"Cloudinary tags match local tags for {os.path.basename(file_path)} - no import needed")
+                return None
             
-            return True, "Success"
-                
+            debug_cloudinary(f"Importing Cloudinary tags for {os.path.basename(file_path)}: {cloudinary_keywords}")
+            debug_cloudinary(f"  Local tags: {local_keywords}")
+            debug_cloudinary(f"  Cloudinary tags: {cloudinary_keywords}")
+            
+            return cloudinary_keywords
+            
         except Exception as e:
-            debug_errors(f"Error writing macOS Finder tags: {e}")
-            return False, f"Error: {str(e)}"
+            debug_cloudinary(f"Error importing Cloudinary tags for {file_path}: {e}")
+            return None
+
+    # NOTE: Platform-specific tag writing methods removed to prevent duplication
+    # The streamlined metadata strategy in save_keywords_to_image() now handles
+    # cross-platform compatibility without redundant field writing
 
     def save_keywords_to_image(self, file_path, keywords_text):
         """Save keywords to image metadata using ExifTool (with fallback notification)"""
@@ -899,81 +859,45 @@ class MainWindow(QMainWindow):
                     debug("tags", format_msg)
                     return False, format_msg
                 
-                # CROSS-PLATFORM METADATA STRATEGY:
-                # Write to ALL standard metadata fields for maximum compatibility
-                # This ensures tags work on Windows, macOS, and Linux regardless of where they were written
+                # SIMPLIFIED CROSS-PLATFORM METADATA STRATEGY:
+                # Write to key standard fields only to avoid duplication in Windows Explorer
+                # This ensures tags work across platforms without redundant field writing
                 
                 try:
-                    # Build comprehensive command arguments for universal compatibility
+                    # Build streamlined command arguments for universal compatibility
                     cmd_args = []
                     
-                    # === UNIVERSAL FIELDS (All File Types) ===
+                    # === PRIMARY STANDARD FIELDS ===
                     
-                    # 1. IPTC Keywords (Legacy standard - widely supported)
-                    cmd_args.append('-IPTC:Keywords=')  # Clear existing
-                    if keywords:
-                        keywords_str = ';'.join(keywords)
-                        cmd_args.append(f'-IPTC:Keywords={keywords_str}')
-                    
-                    # 2. XMP Keywords (Modern standard)
-                    cmd_args.append('-XMP:Keywords=')  # Clear existing
-                    if keywords:
-                        keywords_str = ';'.join(keywords)
-                        cmd_args.append(f'-XMP:Keywords={keywords_str}')
-                    
-                    # 3. XMP-dc:Subject (Dublin Core standard - macOS Finder compatible)
+                    # 1. XMP-dc:Subject (Dublin Core standard - most universal)
                     cmd_args.append('-XMP-dc:Subject=')  # Clear existing
                     if keywords:
                         for keyword in keywords:
                             cmd_args.append(f'-XMP-dc:Subject={keyword}')
                     
-                    # 4. XMP:Subject (Alternative subject field - Windows Explorer compatible)
-                    cmd_args.append('-XMP:Subject=')  # Clear existing
+                    # 2. IPTC Keywords (Legacy standard for compatibility)
+                    cmd_args.append('-IPTC:Keywords=')  # Clear existing
                     if keywords:
                         for keyword in keywords:
-                            cmd_args.append(f'-XMP:Subject={keyword}')
+                            cmd_args.append(f'-IPTC:Keywords={keyword}')
                     
-                    # === FORMAT-SPECIFIC ADDITIONAL FIELDS ===
-                    
+                    # 3. Format-specific field for platform compatibility
                     if file_ext in ['.jpg', '.jpeg', '.tiff', '.tif']:
-                        # Additional EXIF fields for JPEG/TIFF
-                        
-                        # 5. EXIF Keywords (if supported by format)
-                        cmd_args.append('-EXIF:Keywords=')  # Clear existing
-                        if keywords:
-                            keywords_str = ';'.join(keywords)
-                            cmd_args.append(f'-EXIF:Keywords={keywords_str}')
-                        
-                        # 6. EXIF UserComment (fallback field)
+                        # For JPEG/TIFF: Use EXIF UserComment for public_id storage compatibility
                         if keywords:
                             user_comment = f"Keywords: {', '.join(keywords)}"
                             cmd_args.append(f'-EXIF:UserComment={user_comment}')
+                    else:
+                        # For other formats: Use XMP Keywords
+                        cmd_args.append('-XMP:Keywords=')  # Clear existing
+                        if keywords:
+                            keywords_str = ';'.join(keywords)
+                            cmd_args.append(f'-XMP:Keywords={keywords_str}')
                     
-                    # === WINDOWS-SPECIFIC FIELDS ===
-                    # These help Windows Explorer display tags properly
-                    
-                    # 7. Windows Keywords field
-                    cmd_args.append('-Keywords=')  # Clear existing
-                    if keywords:
-                        keywords_str = ';'.join(keywords)
-                        cmd_args.append(f'-Keywords={keywords_str}')
-                    
-                    # 8. Windows Tags field (Windows 10+)
-                    cmd_args.append('-Tags=')  # Clear existing  
-                    if keywords:
-                        keywords_str = ';'.join(keywords)
-                        cmd_args.append(f'-Tags={keywords_str}')
-                    
-                    # 9. Subject field (generic, cross-platform)
-                    cmd_args.append('-Subject=')  # Clear existing
-                    if keywords:
-                        keywords_str = ', '.join(keywords)
-                        cmd_args.append(f'-Subject={keywords_str}')
-                    
-                    # Execute ALL operations in a SINGLE ExifTool call
+                    # Execute streamlined operations in a SINGLE ExifTool call
                     if cmd_args:
                         cmd_args.extend(['-overwrite_original', file_path])
-                        debug("tags", f"Executing single optimized ExifTool command with {len(cmd_args)-2} tag operations")
+                        debug("tags", f"Executing streamlined ExifTool command with {len(cmd_args)-2} tag operations")
                         debug("tags", f"Full ExifTool command: {' '.join(cmd_args)}")
                         result = et.execute(*cmd_args)
                         debug("tags", f"ExifTool result: {result}")
@@ -981,13 +905,8 @@ class MainWindow(QMainWindow):
                     # Update original keywords after successful save (including year)
                     self.original_keywords[file_path] = keywords.copy()
                     
-                    # Write platform-specific tags for better OS integration
-                    if keywords:  # Only write if there are keywords
-                        platform_success, platform_msg = self.write_platform_specific_tags(file_path, keywords)
-                        if platform_success:
-                            debug("tags", f"Platform-specific tags written successfully: {platform_msg}")
-                        else:
-                            debug("tags", f"Platform-specific tags not written: {platform_msg}")
+                    # NOTE: Removed platform-specific duplicate writing to avoid Windows Explorer duplication
+                    # The streamlined metadata fields above provide cross-platform compatibility
                     
                     # Remove from new files tracking after successful save
                     if hasattr(self, 'new_files_with_year') and file_path in self.new_files_with_year:
@@ -1017,10 +936,11 @@ class MainWindow(QMainWindow):
         if not current_widgets:
             QMessageBox.information(self, "Save Keywords", "No images loaded to save keywords to.")
             return
-        
+
         success_count = 0
         skipped_count = 0
         error_files = []
+        orphaned_cleanup_count = 0
         
         # Show progress bar with saving message
         saving_message = f"Saving tags..."
@@ -1043,6 +963,8 @@ class MainWindow(QMainWindow):
                 
                 if success:
                     success_count += 1
+                    # Check for orphaned public_id cleanup after successful save
+                    orphaned_cleanup_count += self._cleanup_orphaned_public_id(file_path)
                 else:
                     error_files.append((os.path.basename(file_path), error_msg))
         
@@ -1086,15 +1008,21 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Save Keywords - Partial Success", error_message)
         else:
             if total_processed == 0 and skipped_count > 0:
-                QMessageBox.information(self, "Save Keywords", 
-                                      f"No images needed saving - all {skipped_count} images have unchanged keywords!")
+                base_message = f"No images needed saving - all {skipped_count} images have unchanged keywords!"
+                if orphaned_cleanup_count > 0:
+                    base_message += f"\nCleaned up {orphaned_cleanup_count} orphaned Cloudinary references."
+                QMessageBox.information(self, "Save Keywords", base_message)
             elif skipped_count > 0:
-                QMessageBox.information(self, "Save Keywords", 
-                                      f"Successfully saved keywords to {success_count} modified images! "
-                                      f"({skipped_count} images skipped - no changes)")
+                base_message = (f"Successfully saved keywords to {success_count} modified images! "
+                               f"({skipped_count} images skipped - no changes)")
+                if orphaned_cleanup_count > 0:
+                    base_message += f"\nCleaned up {orphaned_cleanup_count} orphaned Cloudinary references."
+                QMessageBox.information(self, "Save Keywords", base_message)
             else:
-                QMessageBox.information(self, "Save Keywords", 
-                                      f"Successfully saved keywords to all {success_count} images!")
+                base_message = f"Successfully saved keywords to all {success_count} images!"
+                if orphaned_cleanup_count > 0:
+                    base_message += f"\nCleaned up {orphaned_cleanup_count} orphaned Cloudinary references."
+                QMessageBox.information(self, "Save Keywords", base_message)
 
     def show_metadata_errors(self):
         """Show accumulated metadata errors to the user"""
@@ -2220,14 +2148,64 @@ class MainWindow(QMainWindow):
             else:
                 print("No image files found in the selected folder")
 
+    def _convert_bmp_files_to_jpeg(self, image_files):
+        """
+        Convert BMP files to JPEG format and update file paths.
+        Returns: (converted_files_list, conversion_count)
+        """
+        converted_files = []
+        conversion_count = 0
+        
+        for file_path in image_files:
+            file_ext = os.path.splitext(file_path)[1].lower()
+            
+            if file_ext == '.bmp':
+                try:
+                    # Create new JPEG filename
+                    jpeg_path = file_path.rsplit('.', 1)[0] + '.jpg'
+                    
+                    # Convert BMP to JPEG
+                    with Image.open(file_path) as img:
+                        # Convert to RGB if necessary (BMP might be in different modes)
+                        if img.mode != 'RGB':
+                            img = img.convert('RGB')
+                        
+                        # Save as JPEG with high quality
+                        img.save(jpeg_path, 'JPEG', quality=95, optimize=True)
+                    
+                    # Add converted file to list
+                    converted_files.append(jpeg_path)
+                    conversion_count += 1
+                    
+                    debug_startup(f"Converted BMP to JPEG: {os.path.basename(file_path)} -> {os.path.basename(jpeg_path)}")
+                    
+                except Exception as e:
+                    print(f"[ERROR] Failed to convert BMP file {file_path}: {e}")
+                    # Keep original file if conversion fails
+                    converted_files.append(file_path)
+            else:
+                # Non-BMP file, keep as is
+                converted_files.append(file_path)
+        
+        if conversion_count > 0:
+            debug_startup(f"BMP conversion complete: {conversion_count} files converted to JPEG")
+        
+        return converted_files, conversion_count
+
     def start_integrated_processing(self, image_files, source, non_image_files=0):
         """Start integrated processing combining Cloudinary assessment with image loading"""
         debug_startup(f"Starting integrated processing for {len(image_files)} valid images (source: {source})")
+        
+        # Convert BMP files to JPEG before processing
+        converted_files, conversion_count = self._convert_bmp_files_to_jpeg(image_files)
+        image_files = converted_files  # Use converted files for processing
         
         # Create detailed progress message
         progress_message = f"Processing {len(image_files)} images"
         if non_image_files > 0:
             progress_message += f"\nSkipping {non_image_files} non-image files"
+        if conversion_count > 0:
+            progress_message += f"\nConverted {conversion_count} BMP files to JPEG"
         
         # Determine if Cloudinary processing should be enabled
         debug_cloudinary("Cloudinary connection check:")
@@ -2269,35 +2247,22 @@ class MainWindow(QMainWindow):
                 # Cloudinary assessment if enabled  
                 if cloudinary_enabled and self.cloudinary_updater:
                     try:
-                        # Create settings dialog instance for configuration access
-                        from utilities.settings_dialog import SettingsDialog
-                        settings_dialog = SettingsDialog(self)
+                        debug_assessment(f"[LIGHTWEIGHT ASSESSMENT] Checking sync status for {os.path.basename(file_path)} - File {i+1}/{len(image_files)}")
                         
-                        debug_assessment(f"[ASSESSMENT] Processing {os.path.basename(file_path)} - File {i+1}/{len(image_files)}")
+                        # Use lightweight assessment that only checks public_id without resizing
+                        is_synced = self.image_assessment.check_cloudinary_sync_status_lightweight(file_path)
                         
-                        # Process single image with full ImageAssessment Cloudinary logic
-                        success, result_data, optimized_file = self.image_assessment.process_single_image_with_cloudinary_logic(
-                            file_path, settings_dialog
-                        )
-                        
-                        if success:
-                            if result_data.get('already_synced'):
-                                debug_cloudinary(f"[ASSESSMENT] {os.path.basename(file_path)} - Already synced with Cloudinary (SKIPPED)")
-                                debug_assessment(f"[ASSESSMENT] {os.path.basename(file_path)} - Status: ALREADY_SYNCED")
-                                cloudinary_sync_status[file_path] = True  # Store sync status
-                            else:
-                                debug_assessment(f"[ASSESSMENT] {os.path.basename(file_path)} - Assessment complete, will be processed for upload")
-                                # Log detailed result data
-                                debug_assessment(f"[ASSESSMENT] {os.path.basename(file_path)} - Result: processed={result_data.get('processed', False)}, uploaded={result_data.get('uploaded', False)}")
-                                debug_assessment(f"[ASSESSMENT] {os.path.basename(file_path)} - Status: NEEDS_PROCESSING")
-                                cloudinary_sync_status[file_path] = False  # Store sync status
+                        if is_synced:
+                            debug_cloudinary(f"[LIGHTWEIGHT ASSESSMENT] {os.path.basename(file_path)} - Already synced with Cloudinary (SKIPPED)")
+                            debug_assessment(f"[LIGHTWEIGHT ASSESSMENT] {os.path.basename(file_path)} - Status: ALREADY_SYNCED")
+                            cloudinary_sync_status[file_path] = True  # Store sync status
                         else:
-                            debug_errors(f"[ASSESSMENT] {os.path.basename(file_path)} - Assessment failed: {result_data.get('error', 'Unknown error')}")
-                            debug_assessment(f"[ASSESSMENT] {os.path.basename(file_path)} - Status: FAILED")
-                            cloudinary_sync_status[file_path] = False  # Default to not synced on failure
+                            debug_assessment(f"[LIGHTWEIGHT ASSESSMENT] {os.path.basename(file_path)} - Not synced, will be processed for upload later")
+                            debug_assessment(f"[LIGHTWEIGHT ASSESSMENT] {os.path.basename(file_path)} - Status: NEEDS_PROCESSING")
+                            cloudinary_sync_status[file_path] = False  # Store sync status
                             
                     except Exception as e:
-                        debug_errors(f"[ASSESSMENT] Cloudinary assessment failed for {os.path.basename(file_path)}: {e}")
+                        debug_errors(f"[LIGHTWEIGHT ASSESSMENT] Cloudinary assessment failed for {os.path.basename(file_path)}: {e}")
                         cloudinary_sync_status[file_path] = False  # Default to not synced on exception
                 else:
                     # Cloudinary not enabled - default to not synced
@@ -2308,6 +2273,13 @@ class MainWindow(QMainWindow):
                     preview = self.create_preview(file_path)
                     if preview:
                         year, keywords = self.get_image_metadata(file_path)
+                        
+                        # CLOUDINARY TAG IMPORT: Replace local tags with Cloudinary tags if public_id matches
+                        if cloudinary_enabled and self.cloudinary_updater:
+                            cloudinary_keywords = self._import_cloudinary_tags_for_file(file_path, keywords)
+                            if cloudinary_keywords is not None:
+                                keywords = cloudinary_keywords
+                                debug_cloudinary(f"Replaced local tags with Cloudinary tags for {os.path.basename(file_path)}")
                         
                         # Store original keywords for change detection
                         self.original_keywords[file_path] = keywords.copy()
@@ -2366,25 +2338,23 @@ class MainWindow(QMainWindow):
         else:
             debug_cloudinary("No Cloudinary sync status data available")
         
-        # ENHANCED DEBUG: Show detailed assessment results if Cloudinary was enabled
-        if cloudinary_enabled and self.cloudinary_updater and hasattr(self, 'image_assessment'):
-            debug_assessment("=== ASSESSMENT PHASE SUMMARY ===")
+        # LIGHTWEIGHT ASSESSMENT DEBUG: Show sync status summary if Cloudinary was enabled
+        if cloudinary_enabled and self.cloudinary_updater:
+            debug_assessment("=== LIGHTWEIGHT ASSESSMENT SUMMARY ===")
             debug_assessment(f"Total files processed: {len(image_files)}")
             
-            if hasattr(self.image_assessment, 'files_to_upload'):
-                debug_assessment(f"Files ready for direct upload: {len(self.image_assessment.files_to_upload)}")
-                for i, file_path in enumerate(self.image_assessment.files_to_upload, 1):
-                    debug_assessment(f"  {i}. {os.path.basename(file_path)} (ready for upload)")
+            if cloudinary_sync_status:
+                synced_count = len([f for f, status in cloudinary_sync_status.items() if status])
+                unsynced_count = len([f for f, status in cloudinary_sync_status.items() if not status])
+                debug_assessment(f"Files already synced (skipped during upload): {synced_count}")
+                debug_assessment(f"Files that will need upload processing: {unsynced_count}")
+            else:
+                debug_assessment("No sync status data available")
             
-            if hasattr(self.image_assessment, 'files_to_resize'):
-                debug_assessment(f"Files that need resizing: {len(self.image_assessment.files_to_resize)}")
-                for i, file_path in enumerate(self.image_assessment.files_to_resize, 1):
-                    debug_assessment(f"  {i}. {os.path.basename(file_path)} (needs resize)")
-            
-            if hasattr(self.image_assessment, 'already_synced_count'):
-                debug_assessment(f"Files already synced (skipped): {self.image_assessment.already_synced_count}")
-            
-            debug_assessment("=== END ASSESSMENT SUMMARY ===")
+            debug_assessment("Note: Resizing and database operations deferred to upload phase for faster loading")
+            debug_assessment("=== END LIGHTWEIGHT ASSESSMENT SUMMARY ===")
+        else:
+            debug_assessment("Cloudinary disabled - all files will be processed locally only")
         
         # Store processed images
         self.image_files = [data['file_path'] for data in processed_data]
@@ -2583,6 +2553,76 @@ class MainWindow(QMainWindow):
             self.upload_handler.upload_preview_signal.connect(self.on_upload_preview)
             debug_upload("Upload handler system connected")
     
+    def run_upload_assessment(self):
+        """
+        Run NEW assessment for upload phase only.
+        This extracts UI tags and generates the new categorized lists needed by upload handler.
+        Called on-demand when user initiates upload, not during loading for faster performance.
+        """
+        debug_upload("Running NEW on-demand assessment for upload phase...")
+        
+        if not self.image_assessment or not self.cloudinary_updater:
+            debug_upload("ERROR: ImageAssessment or CloudinaryUpdater not available")
+            return False
+            
+        if not self.image_files:
+            debug_upload("ERROR: No images loaded for assessment")
+            return False
+        
+        try:
+            # Create settings dialog for assessment configuration
+            from utilities.settings_dialog import SettingsDialog
+            settings_dialog = SettingsDialog(self)
+            
+            # Reset assessment lists for fresh upload assessment
+            self.image_assessment.reset_assessment_lists()
+            
+            # Extract UI tags for each file from the image widgets
+            ui_tag_data = {}
+            if hasattr(self, 'image_flow_manager') and self.image_flow_manager.image_widgets:
+                debug_upload("Extracting tags from UI widgets...")
+                for file_path, widget in self.image_flow_manager.image_widgets.items():
+                    if hasattr(widget, 'get_tags'):
+                        tags = widget.get_tags()
+                        if isinstance(tags, str):
+                            # Split comma-separated string into list
+                            ui_tag_data[file_path] = [tag.strip() for tag in tags.split(',') if tag.strip()]
+                        elif isinstance(tags, list):
+                            ui_tag_data[file_path] = [str(tag).strip() for tag in tags if str(tag).strip()]
+                        else:
+                            ui_tag_data[file_path] = []
+                        debug_upload(f"UI tags for {os.path.basename(file_path)}: {ui_tag_data[file_path]}")
+                    else:
+                        ui_tag_data[file_path] = []
+            else:
+                debug_upload("WARNING: No image widgets found - using empty tag data")
+                for file_path in self.image_files:
+                    ui_tag_data[file_path] = []
+            
+            # Run NEW assessment on all loaded images with UI tag data
+            debug_upload(f"Running NEW assessment on {len(self.image_files)} images with UI tags")
+            assessment_result = self.image_assessment.assess_images_for_upload(
+                self.image_files, ui_tag_data, settings_dialog
+            )
+            
+            if assessment_result:
+                tag_update_count = len(assessment_result.get('files_for_tag_update_only', []))
+                new_upload_count = len(assessment_result.get('files_not_on_cloudinary', []))
+                synced_count = assessment_result.get('already_synced_count', 0)
+                
+                debug_upload(f"NEW upload assessment complete:")
+                debug_upload(f"  Files needing tag updates only: {tag_update_count}")
+                debug_upload(f"  Files not on Cloudinary (resize+upload): {new_upload_count}")
+                debug_upload(f"  Files already synced (no action): {synced_count}")
+                return True
+            else:
+                debug_upload("ERROR: NEW assessment failed during upload preparation")
+                return False
+                
+        except Exception as e:
+            debug_upload(f"ERROR: Exception during NEW upload assessment: {e}")
+            return False
+    
     def start_cloudinary_upload(self):
         """Start the Cloudinary upload phase using the upload handler"""
         debug_upload("Starting Cloudinary upload phase from UI action")
@@ -2590,43 +2630,68 @@ class MainWindow(QMainWindow):
         if not self.upload_handler:
             debug_upload("ERROR: Upload handler not initialized")
             return
-            
-        if not self.image_assessment or (not self.image_assessment.files_to_upload and not self.image_assessment.files_to_resize):
-            debug_upload("ERROR: No assessment results available for upload")
+        
+        # Run on-demand assessment for upload phase
+        debug_upload("Running on-demand assessment for upload...")
+        if not self.run_upload_assessment():
+            debug_upload("ERROR: Upload assessment failed")
             QMessageBox.warning(self, "Upload Error", 
-                              "Please run image assessment first before uploading.")
+                              "Assessment failed. Please check that images are loaded and Cloudinary is configured.")
             return
         
-        # ENHANCED DEBUG: Show assessment data being passed to upload handler
-        debug_upload(f"Assessment data being passed to upload handler:")
-        debug_upload(f"  - files_to_upload: {len(self.image_assessment.files_to_upload)} files")
-        debug_upload(f"  - files_to_resize: {len(self.image_assessment.files_to_resize)} files")
+        # Verify NEW assessment results are now available
+        if not hasattr(self.image_assessment, 'files_for_tag_update_only'):
+            debug_upload("ERROR: NEW assessment structure not available")
+            QMessageBox.warning(self, "Upload Error", 
+                              "Assessment failed. Please check that images are loaded and Cloudinary is configured.")
+            return
+            
+        # Get the latest assessment results
+        files_for_tag_update = getattr(self.image_assessment, 'files_for_tag_update_only', [])
+        files_not_on_cloudinary = getattr(self.image_assessment, 'files_not_on_cloudinary', [])
+        already_synced_count = getattr(self.image_assessment, 'already_synced_count', 0)
         
-        if self.image_assessment.files_to_upload:
-            debug_upload("Files ready for direct upload:")
-            for i, file_path in enumerate(self.image_assessment.files_to_upload, 1):
-                debug_upload(f"  {i}. {os.path.basename(file_path)}")
+        # Check if there's anything to do
+        total_work = len(files_for_tag_update) + len(files_not_on_cloudinary)
+        if total_work == 0:
+            debug_upload("No files need uploading or updating after NEW assessment")
+            message = f"All {already_synced_count} images are already perfectly synced with Cloudinary. No upload needed."
+            QMessageBox.information(self, "Upload Info", message)
+            return
+        
+        # ENHANCED DEBUG: Show NEW assessment data
+        debug_upload(f"NEW assessment data for upload handler:")
+        debug_upload(f"  - Files for tag update only: {len(files_for_tag_update)} files")
+        debug_upload(f"  - Files not on Cloudinary (resize+upload): {len(files_not_on_cloudinary)} files")
+        debug_upload(f"  - Files already synced (no action): {already_synced_count} files")
+        
+        if files_for_tag_update:
+            debug_upload("Files needing tag updates only:")
+            for i, file_data in enumerate(files_for_tag_update, 1):
+                file_path = file_data.get('file_path', 'Unknown')
+                ui_tags = file_data.get('ui_tags', [])
+                public_id = file_data.get('public_id', 'Unknown')
+                debug_upload(f"  {i}. {os.path.basename(file_path)} - Tags: {ui_tags} - ID: {public_id}")
                 
-        if self.image_assessment.files_to_resize:
-            debug_upload("Files that need resizing first:")
-            for i, file_path in enumerate(self.image_assessment.files_to_resize, 1):
-                debug_upload(f"  {i}. {os.path.basename(file_path)}")
+        if files_not_on_cloudinary:
+            debug_upload("Files not on Cloudinary needing full upload:")
+            for i, file_data in enumerate(files_not_on_cloudinary, 1):
+                file_path = file_data.get('file_path', 'Unknown')
+                ui_tags = file_data.get('ui_tags', [])
+                debug_upload(f"  {i}. {os.path.basename(file_path)} - Tags: {ui_tags}")
         
-        # Get tag widgets for metadata extraction
-        tag_widgets = self.get_tag_widgets_for_upload()
-        
-        # Extract source folder name from original image files (not temp files)
+        # Extract source folder name from original image files
         source_folder_name = self._extract_original_folder_name()
         
-        # Prepare assessment data in the format expected by upload handler
-        assessment_data = {
-            'files_to_upload': self.image_assessment.files_to_upload,
-            'files_to_resize': self.image_assessment.files_to_resize
+        # Prepare NEW assessment data in the format expected by upload handler
+        new_assessment_data = {
+            'files_for_tag_update_only': files_for_tag_update,
+            'files_not_on_cloudinary': files_not_on_cloudinary,
+            'already_synced_count': already_synced_count
         }
         
-        # Set assessment data, tag widgets, and source folder name
-        self.upload_handler.set_assessment_data(assessment_data)
-        self.upload_handler.set_tag_widgets(tag_widgets)
+        # Set NEW assessment data and source folder name 
+        self.upload_handler.set_assessment_data(new_assessment_data)
         self.upload_handler.set_source_folder_name(source_folder_name)
         
         # Start the upload process
@@ -2668,17 +2733,45 @@ class MainWindow(QMainWindow):
             return None
     
     def on_upload_complete(self, upload_data):
-        """Handle upload completion"""
-        uploaded_count, error_count = upload_data
-        debug_upload(f"Upload complete: {uploaded_count} uploaded, {error_count} errors")
-        
-        # Show completion message
-        if error_count == 0:
-            QMessageBox.information(self, "Upload Complete", 
-                                  f"Successfully uploaded {uploaded_count} files to Cloudinary!")
+        """Handle upload completion with enhanced metadata failure reporting"""
+        # Handle both old format (2 values) and new format (3 values)
+        if len(upload_data) == 2:
+            uploaded_count, error_count = upload_data
+            metadata_failures = 0
         else:
-            QMessageBox.warning(self, "Upload Complete with Errors", 
-                              f"Uploaded {uploaded_count} files with {error_count} errors. Check logs for details.")
+            uploaded_count, error_count, metadata_failures = upload_data
+        
+        debug_upload(f"Upload complete: {uploaded_count} uploaded, {error_count} errors, {metadata_failures} metadata failures")
+        
+        # Check for metadata write failures and show detailed warning if needed
+        metadata_failure_summary = None
+        if hasattr(self, 'upload_handler') and self.upload_handler:
+            metadata_failure_summary = self.upload_handler.get_metadata_failure_summary()
+        
+        # Show completion message with metadata warnings if applicable
+        if error_count == 0 and metadata_failures == 0:
+            QMessageBox.information(self, "Upload Complete", 
+                                  f"Successfully uploaded {uploaded_count} files to Cloudinary!\n"
+                                  f"All metadata (tags and public IDs) saved successfully.")
+        elif error_count == 0 and metadata_failures > 0:
+            # Successful upload but metadata issues
+            message = f"Successfully uploaded {uploaded_count} files to Cloudinary!\n\n"
+            message += f"⚠️ Warning: {metadata_failures} files had metadata writing issues.\n"
+            message += "Files are uploaded but may not have persistent metadata.\n\n"
+            
+            if metadata_failure_summary:
+                message += f"Reason: {metadata_failure_summary['reasons'][0] if metadata_failure_summary['reasons'] else 'Unknown'}\n\n"
+                message += metadata_failure_summary['recommendation']
+            
+            QMessageBox.warning(self, "Upload Complete with Metadata Warnings", message)
+        else:
+            # Upload errors (possibly with metadata issues too)
+            message = f"Uploaded {uploaded_count} files with {error_count} upload errors."
+            if metadata_failures > 0:
+                message += f"\nAdditionally, {metadata_failures} files had metadata writing issues."
+            message += "\nCheck logs for details."
+            
+            QMessageBox.warning(self, "Upload Complete with Errors", message)
     
     def on_upload_preview(self, file_path):
         """Handle upload preview updates"""

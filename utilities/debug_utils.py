@@ -38,7 +38,8 @@ DEBUG_CONFIG: Dict[str, bool] = {
 
     # External services
     'cloudinary': False,      # Cloudinary API calls, sync operations, uploads
-    'assessment': False,      # Image assessment, database operations
+        # Analysis and processing
+    'assessment': False,      # Image assessment, Cloudinary sync status
     'upload': False,          # Cloudinary upload phase, file transfers
 
     # Performance and resources
@@ -47,7 +48,8 @@ DEBUG_CONFIG: Dict[str, bool] = {
 
     # User interactions
     'ui_events': False,       # Mouse clicks, selections, user actions
-    'file_ops': False,        # File operations, loading, saving
+        # Application workflow
+    'file_ops': False,        # File operations, processing workflow
 
     # System level
     'startup': True,          # Application initialization
