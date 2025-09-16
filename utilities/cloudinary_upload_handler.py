@@ -41,6 +41,9 @@ from utilities.exiftool_utils import (
     EXIFTOOL_PATH
 )
 
+# Import filename sanitization utilities
+from utilities.filename_sanitizer import sanitize_filename_for_cloudinary, create_cloudinary_public_id
+
 
 
 def check_file_cloudinary_status_by_metadata(file_path):
@@ -636,24 +639,30 @@ class CloudinaryUploadHandler(QObject):
             file_path_obj = Path(file_path)
             debug_upload(f"Uploading to Cloudinary: {file_path_obj.name}")
             
-            # Generate folder name and public_id based on original filename
+            # Generate folder name and public_id based on original filename with sanitization
             folder = self._generate_folder_name()
             
-            # Create public_id based on original filename (WITH extension for uniqueness)
+            # Get original filename and sanitize it for Cloudinary compatibility
             original_filename = file_path_obj.stem  # Gets filename without extension
             original_extension = file_path_obj.suffix  # Gets the extension (.jpg, .png, etc.)
             full_filename = f"{original_filename}{original_extension}"  # Complete filename with extension
             
-            debug_upload(f"Upload parameters - folder: {folder}, filename: {full_filename}, tags: {upload_tags}")
+            # Sanitize the filename to avoid encoding issues with special characters
+            sanitized_filename = sanitize_filename_for_cloudinary(full_filename)
             
-            # Upload to Cloudinary with folder structure AND filename preservation
+            debug_upload(f"Upload parameters - folder: {folder}")
+            debug_upload(f"  Original filename: {full_filename}")
+            debug_upload(f"  Sanitized filename: {sanitized_filename}")
+            debug_upload(f"  Tags: {upload_tags}")
+            
+            # Upload to Cloudinary with folder structure AND sanitized filename
             response = cloudinary.uploader.upload(
                 str(file_path),
                 folder=folder,                    # This creates the folder structure
-                public_id=full_filename,          # This preserves the complete filename with extension
+                public_id=sanitized_filename,     # Use sanitized filename to avoid encoding issues
                 resource_type='image',
                 tags=upload_tags if upload_tags else [],
-                unique_filename=False,            # Don't add suffix since we're using full filename
+                unique_filename=False,            # Don't add suffix since we're using sanitized filename
                 use_filename=True                 # Use the filename as basis for public_id
             )
             

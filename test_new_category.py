@@ -25,7 +25,7 @@ def test_new_category_functionality():
     ]
     
     dialog = AddKeywordDialog(
-        spreadsheet_path="/Volumes/Marketing/06. Databases/TAGs final.ods",
+        spreadsheet_path="test_tags.ods",  # Use a test file instead of hardcoded path
         parent=None,
         tags_data=test_tags_data
     )

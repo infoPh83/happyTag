@@ -26,8 +26,9 @@ import time
 # Constants
 # MAX_FILE_SIZE = 3.2 * 1024 * 1024  # 3.5MB in bytes
 MAX_DIMENSION = 4000  # Maximum dimension on the longest side
-VALID_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp'}
-SUPPORTED_FORMATS = {'JPEG', 'PNG', 'GIF', 'BMP', 'TIFF', 'WEBP'}
+VALID_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.tiff', '.tif', '.webp'}
+SUPPORTED_FORMATS = {'JPEG', 'PNG', 'GIF', 'TIFF', 'WEBP'}
+UNSUPPORTED_EXTENSIONS = {'.bmp', '.psd'}  # Known image formats not currently supported
 # LOG_FILE_PATH = "/Volumes/Marketing/2024 Branding/ Photography + Art Direction/Photography/Cloudinary logs"
 # LOG_FILE_PATH = "C:/Users/simon/Desktop/langham/myApp/log"
 CLOUDINARY_FOLDER_PREFIX = "Uploaded"

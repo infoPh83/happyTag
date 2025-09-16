@@ -83,7 +83,11 @@ class HappyTagImageManager:
             _, ext = os.path.splitext(file_path.lower())
             if ext == '.psd':
                 print(f"Warning: PSD files are not currently supported for preview: {file_path}")
-                self.unsupported_files.append((file_path, "PSD format not supported"))
+                self.unsupported_files.append((file_path, "PSD format not currently supported"))
+                return None
+            elif ext == '.bmp':
+                print(f"Warning: BMP files are not currently supported for preview: {file_path}")
+                self.unsupported_files.append((file_path, "BMP format not currently supported"))
                 return None
             
             # Use PIL to get actual dimensions (matching existing logic)

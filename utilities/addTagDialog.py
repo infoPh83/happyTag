@@ -82,19 +82,26 @@ class AddKeywordDialog(QDialog):
     # Signal emitted when a new tag is successfully added
     tagAdded = pyqtSignal(str, str, str)  # text, color, category
     
-    def __init__(self, spreadsheet_path=None, parent=None, tags_data=None):
+    def __init__(self, spreadsheet_path=None, parent=None, tags_data=None, initial_tag_text=""):
         super().__init__(parent)
         self.spreadsheet_path = spreadsheet_path
         self.existing_categories = []
         self.category_colors = {}  # Store category colors
         self.tags_data = tags_data  # Accept pre-parsed tags data
+        self.initial_tag_text = initial_tag_text  # Store initial tag text
+        
+        # Require tags_data since button should only be enabled when available
+        if not self.tags_data:
+            raise ValueError("tags_data is required - AddKeywordDialog should only be opened when tags are loaded")
+        
         self.init_ui()
         
-        # Load categories from provided data or parse from file
-        if self.tags_data:
-            self.load_categories_from_data()
-        else:
-            self.load_existing_categories()
+        # Load categories from provided data
+        self.load_categories_from_data()
+        
+        # Set initial tag text if provided
+        if self.initial_tag_text.strip():
+            self.tag_text_input.setText(self.initial_tag_text.strip())
     
     def init_ui(self):
         """Initialize the user interface"""
@@ -222,7 +229,7 @@ class AddKeywordDialog(QDialog):
         
         try:
             # Extract categories and colors from the tags data structure
-            # Structure: [(category_name, category_color, [(tag_name, tag_color), ...]), ...]
+            # New structure: [(category_name, category_color, [tag_name, tag_name, ...]), ...]
             for category_name, category_color, tags_in_category in self.tags_data:
                 if category_name and category_name.strip():
                     clean_category = category_name.strip()
@@ -250,99 +257,232 @@ class AddKeywordDialog(QDialog):
                 print(f"[DEBUG] Category combo populated with {len(self.existing_categories)} categories + NEW option")
                 
         except Exception as e:
-            print(f"[ERROR] Error loading categories from tags data: {e}")
+            print(f"[ERROR] Error in pandas update: {e}")
             import traceback
             traceback.print_exc()
-
-    def load_existing_categories(self):
-        """Load existing categories and their colors from the spreadsheet"""
-        print(f"[DEBUG] Loading categories from spreadsheet: {self.spreadsheet_path}")
-        
-        if not self.spreadsheet_path or not os.path.exists(self.spreadsheet_path):
-            print("[DEBUG] No spreadsheet file found, using default categories")
-            # Add some default categories if no spreadsheet is available
-            default_categories = ["General", "Business", "Locations", "Colors", "Activities"]
-            self.existing_categories = default_categories
+            return False
             
-            if hasattr(self, 'category_combo'):
-                self.category_combo.clear()
-                self.category_combo.addItems(default_categories)
-                self.category_combo.addItem("NEW")
-                
-                # Style the NEW option
-                model = self.category_combo.model()
-                item = model.item(len(default_categories))
-                item.setBackground(QColor("#E6F3FF"))
-            return
-        
+    def _update_ods_targeted(self, tag_text, category, color, is_new_category):
+        """Simplified precise cell update using pandas .at accessor to avoid format duplication"""
         try:
-            # Determine file type and engine
-            file_extension = os.path.splitext(self.spreadsheet_path)[1].lower().lstrip('.')
-            print(f"[DEBUG] File extension: {file_extension}")
+            import pandas as pd
             
-            if file_extension == 'ods':
-                engine = 'odf'
-            elif file_extension in ['xlsx', 'xlsm']:
-                engine = 'openpyxl'
-            elif file_extension == 'xls':
-                engine = 'xlrd'
-            else:
-                engine = 'odf'
+            print(f"[DEBUG] Using simplified precise update for tag '{tag_text}' in category '{category}'")
             
-            print(f"[DEBUG] Using engine: {engine}")
+            # Read the spreadsheet data only (no formatting)
+            df = pd.read_excel(self.spreadsheet_path, sheet_name='TAGs', engine='odf', header=None)
+            print(f"[DEBUG] Loaded {len(df)} rows from spreadsheet")
             
-            # Read the TAGs sheet
-            df = pd.read_excel(self.spreadsheet_path, sheet_name='TAGs', engine=engine)
-            print(f"[DEBUG] Loaded spreadsheet with {len(df)} rows")
+            # Find category row (skip header row 0)
+            category_row_index = None
+            for index in range(1, len(df)):  # Start from 1 to skip header
+                if index < len(df) and len(df.columns) > 1:
+                    cell_value = df.iloc[index, 1]  # Column B (category)
+                    if pd.notna(cell_value) and str(cell_value).strip().lower() == category.lower():
+                        category_row_index = index
+                        print(f"[DEBUG] Found category at row {index}")
+                        break
             
-            # Extract unique categories from column B (index 1) and colors from column A (index 0)
-            categories = []
-            self.category_colors = {}  # Store category colors
+            if category_row_index is None:
+                print(f"[ERROR] Category '{category}' not found")
+                return False
             
-            for index, row in df.iterrows():
-                if pd.notna(row.iloc[1]) and str(row.iloc[1]).strip():
-                    category_name = str(row.iloc[1]).strip()
-                    if category_name not in categories:
-                        categories.append(category_name)
-                        # Get color from column A (index 0)
-                        if len(row) > 0 and pd.notna(row.iloc[0]):
-                            color_value = str(row.iloc[0]).strip()
-                            # Validate it looks like a color (starts with # and has 6 hex digits)
-                            if color_value.startswith('#') and len(color_value) == 7:
-                                self.category_colors[category_name] = color_value
-                            else:
-                                self.category_colors[category_name] = "#DDA0DD"  # Default lavender
-                        else:
-                            self.category_colors[category_name] = "#DDA0DD"  # Default lavender
+            # Check for duplicates and find target column
+            existing_tags = []
+            target_column = None
             
-            self.existing_categories = sorted(categories)
-            print(f"[DEBUG] Found {len(self.existing_categories)} categories in spreadsheet")
-            for cat in self.existing_categories:
-                print(f"[DEBUG]   - {cat}: {self.category_colors.get(cat, 'N/A')}")
+            for col_idx in range(3, len(df.columns)):  # Start from column D (index 3)
+                cell_value = df.iloc[category_row_index, col_idx]
+                if pd.notna(cell_value) and str(cell_value).strip():
+                    existing_tags.append(str(cell_value).strip().lower())
+                elif target_column is None:
+                    target_column = col_idx
+                    break
             
-            if hasattr(self, 'category_combo'):
-                self.category_combo.clear()
-                self.category_combo.addItems(self.existing_categories)
-                self.category_combo.addItem("NEW")
-                
-                # Style the NEW option
-                model = self.category_combo.model()
-                item = model.item(len(self.existing_categories))
-                item.setBackground(QColor("#E6F3FF"))
+            # Check for duplicate
+            if tag_text.lower() in existing_tags:
+                print(f"[ERROR] Tag '{tag_text}' already exists")
+                return False
+            
+            if target_column is None:
+                print("[ERROR] No empty cells found")
+                return False
+            
+            print(f"[DEBUG] Will add '{tag_text}' at row {category_row_index}, column {target_column}")
+            
+            # Use .at accessor for precise single-cell assignment (should avoid format propagation)
+            df.at[category_row_index, target_column] = tag_text
+            
+            print(f"[DEBUG] Added tag to cell [{category_row_index}, {target_column}]")
+            
+            # Write back with minimal disturbance
+            with pd.ExcelWriter(self.spreadsheet_path, engine='odf', mode='w') as writer:
+                df.to_excel(writer, sheet_name='TAGs', index=False, header=False)
+            
+            print(f"[DEBUG] Updated file successfully")
+            return True
             
         except Exception as e:
-            print(f"[ERROR] Error loading categories from spreadsheet: {e}")
+            print(f"[ERROR] Error in simplified update: {e}")
             import traceback
             traceback.print_exc()
-            # Fallback to default categories
-            default_categories = ["General", "Business", "Locations", "Colors", "Activities"]
-            self.existing_categories = default_categories
-            self.category_colors = {}
-            if hasattr(self, 'category_combo'):
-                self.category_combo.clear()
-                self.category_combo.addItems(default_categories)
-                self.category_combo.addItem("NEW")
-    
+            return False
+            
+    def _update_xlsx_targeted(self, tag_text, category, color, is_new_category):
+        """XLSX-specific update using openpyxl for precise cell updates without formatting issues"""
+        try:
+            from openpyxl import load_workbook
+            from openpyxl.styles import PatternFill
+            
+            print(f"[DEBUG] Using openpyxl for XLSX tag '{tag_text}' in category '{category}'")
+            
+            # Load workbook with openpyxl for precise cell control
+            workbook = load_workbook(self.spreadsheet_path)
+            
+            # Get the TAGs worksheet
+            if 'TAGs' not in workbook.sheetnames:
+                print("[ERROR] TAGs sheet not found in workbook")
+                return False
+                
+            worksheet = workbook['TAGs']
+            
+            # Find category row (skip header row 1)
+            category_row_index = None
+            max_row = worksheet.max_row
+            
+            for row_idx in range(2, max_row + 1):  # Start from row 2 (skip header)
+                category_cell = worksheet.cell(row=row_idx, column=2)  # Column B
+                if category_cell.value and str(category_cell.value).strip().lower() == category.lower():
+                    category_row_index = row_idx
+                    print(f"[DEBUG] Found category at row {row_idx}")
+                    break
+            
+            if category_row_index is None:
+                if not is_new_category:
+                    print(f"[ERROR] Category '{category}' not found")
+                    return False
+                else:
+                    # Create new category row with proper spacing and formatting
+                    print(f"[DEBUG] Creating new category '{category}' with color '{color}'")
+                    
+                    # Find the next available row, then add one more for spacing
+                    new_row_index = worksheet.max_row + 2  # +2 for spacing
+                    
+                    # Convert color to openpyxl PatternFill
+                    if color.startswith('#'):
+                        color_rgb = color[1:]  # Remove # prefix
+                    else:
+                        color_rgb = color
+                    
+                    # Create fill pattern for background color
+                    fill = PatternFill(start_color=color_rgb, end_color=color_rgb, fill_type="solid")
+                    
+                    # Set category data: Column A = empty (no color text), Column B = category name, Column D = first tag
+                    # Column A: Empty cell with background color (no text value)
+                    color_cell = worksheet.cell(row=new_row_index, column=1)
+                    color_cell.value = None  # No text value for color
+                    color_cell.fill = fill
+                    
+                    # Column B: Category name with background color
+                    category_cell = worksheet.cell(row=new_row_index, column=2)
+                    category_cell.value = category
+                    category_cell.fill = fill
+                    
+                    # Column C: Empty with background color for consistency
+                    empty_cell = worksheet.cell(row=new_row_index, column=3)
+                    empty_cell.fill = fill
+                    
+                    # Column D: First tag with background color
+                    tag_cell = worksheet.cell(row=new_row_index, column=4)
+                    tag_cell.value = tag_text
+                    tag_cell.fill = fill
+                    
+                    # Apply background color to the entire row (up to reasonable column limit)
+                    max_columns = worksheet.max_column + 10  # Extend beyond current max for future use
+                    for col_idx in range(5, max_columns + 1):  # Start from column E onwards
+                        cell = worksheet.cell(row=new_row_index, column=col_idx)
+                        cell.fill = fill
+                    
+                    print(f"[DEBUG] Created new category row {new_row_index} with background color and tag '{tag_text}'")
+                    
+                    # Save the workbook
+                    workbook.save(self.spreadsheet_path)
+                    workbook.close()
+                    
+                    print(f"[DEBUG] New category and tag added successfully")
+                    return True
+            
+            # Check for duplicates and find target column
+            existing_tags = []
+            target_column = None
+            max_col = worksheet.max_column
+            
+            for col_idx in range(4, max_col + 2):  # Start from column D (4), check beyond max_col
+                cell = worksheet.cell(row=category_row_index, column=col_idx)
+                if cell.value and str(cell.value).strip():
+                    existing_tags.append(str(cell.value).strip().lower())
+                elif target_column is None:
+                    target_column = col_idx
+                    break
+            
+            # Check for duplicate
+            if tag_text.lower() in existing_tags:
+                print(f"[ERROR] Tag '{tag_text}' already exists")
+                return False
+            
+            if target_column is None:
+                print("[ERROR] No empty cells found")
+                return False
+            
+            print(f"[DEBUG] Will add '{tag_text}' at row {category_row_index}, column {target_column}")
+            
+            # Get the target cell
+            target_cell = worksheet.cell(row=category_row_index, column=target_column)
+            
+            # Preserve existing formatting by copying from adjacent cell
+            if target_column > 4:  # If not the first tag column
+                source_cell = worksheet.cell(row=category_row_index, column=target_column - 1)
+                if hasattr(source_cell, 'fill') and source_cell.fill:
+                    try:
+                        # Create a new PatternFill with the same parameters
+                        from openpyxl.styles import PatternFill
+                        if hasattr(source_cell.fill, 'start_color') and source_cell.fill.start_color:
+                            fill_color = source_cell.fill.start_color.rgb if hasattr(source_cell.fill.start_color, 'rgb') else None
+                            if fill_color and fill_color != '00000000':  # Skip default/transparent fills
+                                target_cell.fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+                    except Exception as fill_error:
+                        print(f"[DEBUG] Could not copy fill formatting: {fill_error}")
+            else:
+                # Copy formatting from category cell (column B) for consistency
+                category_cell = worksheet.cell(row=category_row_index, column=2)
+                if hasattr(category_cell, 'fill') and category_cell.fill:
+                    try:
+                        from openpyxl.styles import PatternFill
+                        if hasattr(category_cell.fill, 'start_color') and category_cell.fill.start_color:
+                            fill_color = category_cell.fill.start_color.rgb if hasattr(category_cell.fill.start_color, 'rgb') else None
+                            if fill_color and fill_color != '00000000':  # Skip default/transparent fills
+                                target_cell.fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+                    except Exception as fill_error:
+                        print(f"[DEBUG] Could not copy category fill formatting: {fill_error}")
+            
+            # Set the value in the specific cell
+            target_cell.value = tag_text
+            
+            print(f"[DEBUG] Added tag to cell [{category_row_index}, {target_column}] with preserved formatting")
+            
+            # Save the workbook
+            workbook.save(self.spreadsheet_path)
+            workbook.close()
+            
+            print(f"[DEBUG] XLSX file updated successfully")
+            return True
+            
+        except Exception as e:
+            print(f"[ERROR] Error in XLSX update: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
     def add_tag(self):
         """Add the new tag to the spreadsheet"""
         print("[DEBUG] === ADD TAG FUNCTION CALLED ===")
@@ -395,7 +535,9 @@ class AddKeywordDialog(QDialog):
         
         # Try to update the spreadsheet
         print("[DEBUG] Attempting to update spreadsheet...")
-        if self.update_spreadsheet(tag_text, category, category_color, is_new_category):
+        update_result = self.update_spreadsheet(tag_text, category, category_color, is_new_category)
+        
+        if update_result is True:
             print("[SUCCESS] Tag added successfully")
             # Emit signal that tag was added
             self.tagAdded.emit(tag_text, category_color, category)
@@ -410,12 +552,22 @@ class AddKeywordDialog(QDialog):
             
             # Close dialog
             self.accept()
+        elif update_result is False:
+            # Specific case for duplicate tags or cell capacity issues
+            print(f"[ERROR] Tag addition failed: '{tag_text}' in category '{category}'")
+            QMessageBox.warning(self, "Cannot Add Tag", 
+                              f"Cannot add tag '{tag_text}' to category '{category}'.\n\n"
+                              f"This may be because:\n"
+                              f"• The tag already exists in this category\n"
+                              f"• No empty cells are available in the spreadsheet row\n"
+                              f"• The spreadsheet structure is corrupted\n\n"
+                              f"Try manually adding columns in LibreOffice or check for duplicate tags.")
         else:
             print("[ERROR] Failed to update spreadsheet")
             QMessageBox.critical(self, "Error", "Failed to add tag to spreadsheet.")
     
     def update_spreadsheet(self, tag_text, category, color, is_new_category):
-        """Update the spreadsheet with the new tag"""
+        """Update the spreadsheet with the new tag while preserving formatting"""
         print(f"[DEBUG] === UPDATE SPREADSHEET FUNCTION ===")
         print(f"[DEBUG] Spreadsheet path: {self.spreadsheet_path}")
         print(f"[DEBUG] Tag: '{tag_text}', Category: '{category}', Color: '{color}', Is New: {is_new_category}")
@@ -425,14 +577,148 @@ class AddKeywordDialog(QDialog):
             return False
         
         try:
+            # Try to use ODF method first to preserve formatting
+            if self.spreadsheet_path.lower().endswith('.ods'):
+                return self._update_ods_preserving_format(tag_text, category, color, is_new_category)
+            else:
+                # Fall back to pandas for non-ODS files
+                return self._update_with_pandas(tag_text, category, color, is_new_category)
+                
+        except Exception as e:
+            print(f"[ERROR] Error updating spreadsheet: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def _update_ods_preserving_format(self, tag_text, category, color, is_new_category):
+        """Update ODS file while preserving cell formatting"""
+        try:
+            from odf.opendocument import load
+            from odf.table import Table, TableRow, TableCell
+            from odf.text import P
+            
+            print("[DEBUG] Using ODF method to preserve formatting...")
+            print(f"[DEBUG] Looking for category '{category}' in spreadsheet")
+            
+            # Load the existing document
+            doc = load(self.spreadsheet_path)
+            
+            # Find the TAGs sheet
+            tags_sheet = None
+            for table in doc.getElementsByType(Table):
+                if table.getAttribute('name') == 'TAGs':
+                    tags_sheet = table
+                    break
+            
+            if not tags_sheet:
+                print("[ERROR] TAGs sheet not found")
+                return False
+            
+            # Get all rows
+            rows = tags_sheet.getElementsByType(TableRow)
+            category_row = None
+            category_row_index = None
+            
+            # Find the category row
+            for row_index, row in enumerate(rows):
+                cells = row.getElementsByType(TableCell)
+                if len(cells) > 1:
+                    # Get text from the second cell (category column)
+                    category_cell = cells[1]
+                    category_text = ""
+                    for p in category_cell.getElementsByType(P):
+                        if p.firstChild:
+                            category_text += str(p.firstChild)
+                    
+                    if category_text.strip().lower() == category.lower():
+                        category_row = row
+                        category_row_index = row_index
+                        print(f"[DEBUG] Found category '{category}' at row {row_index}")
+                        break
+            
+            if is_new_category:
+                print("[ERROR] New category creation with ODF not implemented yet")
+                # Fall back to pandas for new categories
+                return self._update_with_pandas(tag_text, category, color, is_new_category)
+            
+            if category_row is None:
+                print(f"[ERROR] Category '{category}' not found in file")
+                return False
+            
+            # Find the first empty cell starting from column D (index 3)
+            cells = category_row.getElementsByType(TableCell)
+            tag_added = False
+            
+            # First, check if the tag already exists in this category
+            existing_tags = []
+            for cell_index in range(3, len(cells)):
+                cell = cells[cell_index]
+                cell_text = ""
+                for p in cell.getElementsByType(P):
+                    if p.firstChild:
+                        cell_text += str(p.firstChild)
+                
+                if cell_text.strip():
+                    existing_tags.append(cell_text.strip().lower())
+            
+            # Check for duplicate
+            if tag_text.lower() in existing_tags:
+                print(f"[ERROR] Tag '{tag_text}' already exists in category '{category}'")
+                return False
+            
+            # Now find an empty cell to add the new tag
+            for cell_index in range(3, len(cells)):
+                cell = cells[cell_index]
+                # Check if cell is empty
+                cell_text = ""
+                for p in cell.getElementsByType(P):
+                    if p.firstChild:
+                        cell_text += str(p.firstChild)
+                
+                if not cell_text.strip():
+                    # Found empty cell, add the tag
+                    # Clear existing content
+                    for p in cell.getElementsByType(P):
+                        cell.removeChild(p)
+                    
+                    # Add new text
+                    new_p = P()
+                    new_p.addText(tag_text)
+                    cell.appendChild(new_p)
+                    
+                    print(f"[DEBUG] Added tag '{tag_text}' to cell at column {cell_index}")
+                    tag_added = True
+                    break
+            
+            if not tag_added:
+                print("[DEBUG] No empty cell found in existing row structure")
+                print(f"[ERROR] Cannot add tag '{tag_text}' to category '{category}' - all available cells are occupied")
+                print("[INFO] Please manually add more columns to the spreadsheet or remove unused tags first")
+                return False
+            
+            # Save the document
+            doc.save(self.spreadsheet_path)
+            print("[SUCCESS] ODS file updated while preserving formatting")
+            return True
+            
+        except Exception as e:
+            print(f"[ERROR] ODF method failed: {e}")
+            print(f"[ERROR] Cannot add tag '{tag_text}' - ODF operation failed and pandas fallback disabled to prevent formatting loss")
+            return False
+    
+    def _update_with_pandas(self, tag_text, category, color, is_new_category):
+        """Update spreadsheet using precise cell targeting to avoid format-based duplication"""
+        try:
             # Determine file type and engine
             file_extension = os.path.splitext(self.spreadsheet_path)[1].lower().lstrip('.')
             print(f"[DEBUG] File extension: {file_extension}")
             
             if file_extension == 'ods':
-                engine = 'odf'
+                # For ODS files, use a hybrid approach to avoid format-based duplication
+                return self._update_ods_targeted(tag_text, category, color, is_new_category)
             elif file_extension in ['xlsx', 'xlsm']:
-                engine = 'openpyxl'
+                # For Excel files, use openpyxl for precise cell updates
+                return self._update_xlsx_targeted(tag_text, category, color, is_new_category)
             elif file_extension == 'xls':
                 engine = 'xlrd'
             else:
@@ -440,19 +726,23 @@ class AddKeywordDialog(QDialog):
             
             print(f"[DEBUG] Using engine: {engine}")
             
-            # Read the existing spreadsheet
+            # Read the existing spreadsheet - IMPORTANT: Use header=None for files without header row
             if os.path.exists(self.spreadsheet_path):
                 print("[DEBUG] Reading existing spreadsheet...")
-                df = pd.read_excel(self.spreadsheet_path, sheet_name='TAGs', engine=engine)
+                df = pd.read_excel(self.spreadsheet_path, sheet_name='TAGs', engine=engine, header=None)
                 print(f"[DEBUG] Loaded {len(df)} rows from spreadsheet")
             else:
                 print("[DEBUG] Creating new dataframe (file doesn't exist)")
                 # Create new dataframe if file doesn't exist
                 df = pd.DataFrame()
             
-            # Find if category already exists
+            # Find if category already exists (skip row 0 which is the header row)
             category_row_index = None
             for index, row in df.iterrows():
+                # Skip the header row (index 0)
+                if index == 0:
+                    continue
+                    
                 if pd.notna(row.iloc[1]) and str(row.iloc[1]).strip().lower() == category.lower():
                     category_row_index = index
                     print(f"[DEBUG] Found existing category at row {index}")
@@ -462,6 +752,18 @@ class AddKeywordDialog(QDialog):
                 print("[DEBUG] Adding tag to existing category")
                 # Category exists - add tag to the end of existing tags
                 row = df.iloc[category_row_index]
+                
+                # First, check if the tag already exists in this category
+                existing_tags = []
+                for col_idx in range(3, len(df.columns)):
+                    cell_value = row.iloc[col_idx]
+                    if pd.notna(cell_value) and str(cell_value).strip():
+                        existing_tags.append(str(cell_value).strip().lower())
+                
+                # Check for duplicate
+                if tag_text.lower() in existing_tags:
+                    print(f"[ERROR] Tag '{tag_text}' already exists in category '{category}'")
+                    return False
                 
                 # Find the first empty column starting from column D (index 3)
                 tag_added = False
@@ -499,8 +801,24 @@ class AddKeywordDialog(QDialog):
             
             # Write back to file
             print(f"[DEBUG] Writing spreadsheet back to {self.spreadsheet_path}")
+            
+            # Ensure the directory exists before writing
+            directory = os.path.dirname(self.spreadsheet_path)
+            if directory and not os.path.exists(directory):
+                print(f"[DEBUG] Creating directory: {directory}")
+                try:
+                    os.makedirs(directory, exist_ok=True)
+                except OSError as dir_error:
+                    print(f"[ERROR] Cannot create directory {directory}: {dir_error}")
+                    # Fall back to local data directory
+                    local_data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
+                    os.makedirs(local_data_dir, exist_ok=True)
+                    fallback_path = os.path.join(local_data_dir, os.path.basename(self.spreadsheet_path))
+                    print(f"[DEBUG] Using fallback path: {fallback_path}")
+                    self.spreadsheet_path = fallback_path
+            
             with pd.ExcelWriter(self.spreadsheet_path, engine=engine) as writer:
-                df.to_excel(writer, sheet_name='TAGs', index=False)
+                df.to_excel(writer, sheet_name='TAGs', index=False, header=False)
             
             print(f"[SUCCESS] Successfully added tag '{tag_text}' to category '{category}' in spreadsheet")
             return True

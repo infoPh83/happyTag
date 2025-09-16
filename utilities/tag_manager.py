@@ -146,13 +146,33 @@ class TagManager(QDialog):
             print("openAddKeywordDialogButton not found in TagManager")
     
     def open_add_keyword_dialog(self):
-        """Open the Add Keyword dialog"""
+        """Open the Add Keyword dialog using the configured spreadsheet path"""
         try:
             from .addTagDialog import AddKeywordDialog
             
-            # Get the spreadsheet path - hardcoded for now
-            spreadsheet_path = "/Volumes/Marketing/06. Databases/TAGs final.ods"
-            print(f"[DEBUG] Using spreadsheet path: {spreadsheet_path}")
+            # Get the spreadsheet path from settings (same as used by populate_tags_list)
+            settings = SettingsDialog.get_saved_settings()
+            spreadsheet_path = settings.get('cloudinary_tags_path', '')
+            
+            # Check if the file exists and is configured
+            if not spreadsheet_path or not os.path.exists(spreadsheet_path):
+                print(f"[ERROR] Cloudinary tags file not found or not configured: {spreadsheet_path}")
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.warning(
+                    self, 
+                    "Tags File Not Found", 
+                    "The Cloudinary tags file is not configured or doesn't exist.\n\n"
+                    "Please go to File → Settings and set the path to your tags spreadsheet file."
+                )
+                return
+            
+            print(f"[DEBUG] Using configured spreadsheet path: {spreadsheet_path}")
+            
+            # Get the current search text from the tags input field
+            initial_tag_text = ""
+            if hasattr(self, 'tagsInput') and self.tagsInput:
+                initial_tag_text = self.tagsInput.toPlainText().strip()
+                print(f"[DEBUG] Transferring search text to new tag dialog: '{initial_tag_text}'")
             
             # Use the tags data from this TagManager instance
             tags_data = self.original_tags_data if hasattr(self, 'original_tags_data') else None
@@ -161,8 +181,8 @@ class TagManager(QDialog):
             else:
                 print("[DEBUG] No tags data available in TagManager")
             
-            # Create and show the add keyword dialog
-            add_dialog = AddKeywordDialog(spreadsheet_path, self, tags_data)
+            # Create and show the add keyword dialog with initial tag text
+            add_dialog = AddKeywordDialog(spreadsheet_path, self, tags_data, initial_tag_text)
             
             # Connect signal to handle when a tag is added
             add_dialog.tagAdded.connect(self.on_tag_added)
@@ -306,10 +326,20 @@ class TagManager(QDialog):
             self.tagsList.clear()
             item = QListWidgetItem("Cloudinary tags.ods needed. Please load file in File -> Settings")
             self.tagsList.addItem(item)
+            
+            # Disable the Add Keyword button when file is not available
+            if hasattr(self, 'openAddKeywordDialogButton'):
+                self.openAddKeywordDialogButton.setEnabled(False)
+                self.openAddKeywordDialogButton.setToolTip("Configure Cloudinary tags file in Settings first")
         else:
             # File exists, show the flow layout with tags
             self.show_tags_flow_layout()
             self.load_tags_from_file(cloudinary_path)
+            
+            # Enable the Add Keyword button when file is available
+            if hasattr(self, 'openAddKeywordDialogButton'):
+                self.openAddKeywordDialogButton.setEnabled(True)
+                self.openAddKeywordDialogButton.setToolTip("Add a new keyword to the tags file")
             
     def show_tags_list_widget(self):
         """Show the QListWidget for tags (for error messages)"""
@@ -618,7 +648,8 @@ class TagManager(QDialog):
         filtered_data = []
         for category_name, category_color, tags in self.original_tags_data:
             # Filter tags that contain the search text
-            filtered_tags = [(tag_name, tag_color) for tag_name, tag_color in tags 
+            # In new structure, tags is a list of strings, not tuples
+            filtered_tags = [tag_name for tag_name in tags 
                            if search_text in tag_name.lower()]
             
             # Only include the category if it has matching tags
@@ -759,14 +790,142 @@ class TagManager(QDialog):
         self.display_streets(filtered_data)
                 
     def read_tags_from_ods(self, file_path):
-        """Read tags and colors from the TAGs sheet in the ODS file"""
+        """Read tags and colors from the TAGs sheet (supports both ODS and XLSX files)"""
         try:
-            # Use the ODF method directly for better color support
-            return self.read_tags_from_ods_alternative(file_path)
+            # Determine file type based on extension
+            file_extension = os.path.splitext(file_path)[1].lower()
+            
+            if file_extension in ['.xlsx', '.xlsm']:
+                # Use pandas with openpyxl for XLSX files
+                return self.read_tags_from_xlsx(file_path)
+            else:
+                # Use the ODF method for ODS files
+                return self.read_tags_from_ods_alternative(file_path)
         except Exception as e:
-            print(f"Error reading ODS file with odfpy: {e}")
+            print(f"Error reading file with primary method: {e}")
             # Fallback to pandas method with default colors
             return self.read_tags_from_ods_pandas(file_path)
+            
+    def read_tags_from_xlsx(self, file_path):
+        """Read tags from XLSX file using openpyxl"""
+        try:
+            from openpyxl import load_workbook
+            from openpyxl.styles import PatternFill
+            
+            print(f"[DEBUG] Reading XLSX file: {file_path}")
+            
+            workbook = load_workbook(file_path)
+            
+            if 'TAGs' not in workbook.sheetnames:
+                print("[ERROR] TAGs sheet not found in XLSX file")
+                return []
+                
+            worksheet = workbook['TAGs']
+            categories_data = []
+            
+            # Iterate through rows, skipping the first row (header)
+            for row_idx in range(2, worksheet.max_row + 1):
+                # Check if column B (category) has content
+                category_cell = worksheet.cell(row=row_idx, column=2)
+                if not category_cell.value or not str(category_cell.value).strip():
+                    continue
+                    
+                category_name = str(category_cell.value).strip()
+                
+                # Get category color from column A or use default
+                color_cell = worksheet.cell(row=row_idx, column=1)
+                category_color = "#DDA0DD"  # Default color
+                
+                # Define category-specific default colors
+                category_colors_map = {
+                    'season': '#98FB98',           # Light green
+                    'weather': '#87CEEB',          # Sky blue  
+                    'people': '#FFB6C1',           # Light pink
+                    'lighting': '#F0E68C',         # Khaki
+                    'building/street features': '#DDA0DD',  # Plum
+                    'photo quality': '#FFA07A',    # Light salmon
+                    'year / stock': '#D3D3D3',     # Light gray
+                    'food & drink': '#FFB6C1',     # Light pink
+                    'culture': '#98FB98',          # Light green
+                    'shopping': '#87CEEB',         # Sky blue
+                    'wellbeing': '#DDA0DD'         # Plum
+                }
+                
+                # Try to extract color from Excel cell formatting
+                try:
+                    color_found = False
+                    
+                    # Method 1: Check cell background fill color
+                    if (color_cell.fill and 
+                        hasattr(color_cell.fill, 'fgColor') and 
+                        hasattr(color_cell.fill.fgColor, 'rgb') and 
+                        color_cell.fill.fgColor.rgb):
+                        
+                        argb = color_cell.fill.fgColor.rgb
+                        if isinstance(argb, str):
+                            # Skip transparent/black colors (00000000, 000000)
+                            if argb not in ['00000000', '000000', 'FF000000']:
+                                if len(argb) == 8:  # ARGB format (FF123456)
+                                    category_color = f"#{argb[2:]}"  # Remove alpha channel
+                                    color_found = True
+                                    print(f"[DEBUG] Extracted ARGB color: {category_color}")
+                                elif len(argb) == 6:  # RGB format (123456)
+                                    category_color = f"#{argb}"
+                                    color_found = True
+                                    print(f"[DEBUG] Extracted RGB color: {category_color}")
+                    
+                    # Method 2: Check if color is stored as cell value
+                    if not color_found and color_cell.value and isinstance(color_cell.value, str):
+                        cell_value = str(color_cell.value).strip()
+                        if cell_value.startswith('#') and len(cell_value) in [7, 9]:  # #RRGGBB or #AARRGGBB
+                            category_color = cell_value[:7]  # Take only #RRGGBB part
+                            color_found = True
+                            print(f"[DEBUG] Using color from cell value: {category_color}")
+                    
+                    # Method 3: Use category-specific default if no color found
+                    if not color_found:
+                        category_lower = category_name.lower()
+                        for key, default_color in category_colors_map.items():
+                            if key.lower() in category_lower or category_lower in key.lower():
+                                category_color = default_color
+                                color_found = True
+                                print(f"[DEBUG] Using category-specific default color: {category_color}")
+                                break
+                        
+                        if not color_found:
+                            print(f"[DEBUG] Using fallback default color: {category_color}")
+                
+                except Exception as color_error:
+                    print(f"[DEBUG] Error extracting color: {color_error}")
+                    # Use category-specific default on error
+                    category_lower = category_name.lower()
+                    for key, default_color in category_colors_map.items():
+                        if key.lower() in category_lower:
+                            category_color = default_color
+                            break
+                
+                print(f"[DEBUG] Final category color for '{category_name}': {category_color}")
+                
+                # Collect tags from columns D onwards
+                tags_in_category = []
+                for col_idx in range(4, worksheet.max_column + 1):
+                    tag_cell = worksheet.cell(row=row_idx, column=col_idx)
+                    if tag_cell.value and str(tag_cell.value).strip():
+                        tags_in_category.append(str(tag_cell.value).strip())
+                
+                if tags_in_category:  # Only add if there are tags
+                    categories_data.append((category_name, category_color, tags_in_category))
+                    print(f"[DEBUG] XLSX: Found category '{category_name}' with {len(tags_in_category)} tags")
+            
+            workbook.close()
+            print(f"[DEBUG] Successfully loaded {len(categories_data)} categories from XLSX")
+            return categories_data
+            
+        except Exception as e:
+            print(f"[ERROR] Error reading XLSX file: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
     def read_tags_from_ods_pandas(self, file_path):
         """Fallback method using pandas - provides basic functionality with default colors"""
         try:
@@ -840,8 +999,14 @@ class TagManager(QDialog):
                 
             categories_data = []
             
-            # Iterate through rows
+            # Iterate through rows, skipping the first row (header row)
+            row_index = 0
             for row in tags_sheet.getElementsByType(TableRow):
+                row_index += 1
+                # Skip the first row as it contains headers ("Category & Colours" / "Tags")
+                if row_index == 1:
+                    continue
+                    
                 cells = row.getElementsByType(TableCell)
                 
                 # Skip if we don't have enough cells or category (column B) is empty
@@ -859,7 +1024,9 @@ class TagManager(QDialog):
                     continue
                     
                 category_name = category_text.strip()
-                category_color = self.extract_cell_background_color(category_cell, doc)
+                # Extract background color from column A (index 0), not from the category cell
+                color_cell = cells[0]
+                category_color = self.extract_cell_background_color(color_cell, doc)
                 
                 tags_in_category = []
                 
@@ -873,9 +1040,9 @@ class TagManager(QDialog):
                             
                     if cell_text.strip():
                         tag_name = cell_text.strip()
-                        # Extract background color from the cell
-                        tag_color = self.extract_cell_background_color(cell, doc)
-                        tags_in_category.append((tag_name, tag_color))
+                        # In new structure, tags don't have individual colors
+                        # All tags in a category use the category color
+                        tags_in_category.append(tag_name)
                 
                 if tags_in_category:  # Only add category if it has tags
                     categories_data.append((category_name, category_color, tags_in_category))
@@ -957,8 +1124,9 @@ class TagManager(QDialog):
         tags_flow_layout = FlowLayout(tags_widget, margin=3, spacing=3)  # Reduced from 5
         
         # Create tag buttons for this category
-        for tag_name, tag_color in tags:
-            tag_button = TagButton(tag_name, tag_color)
+        # In new structure, all tags in a category use the category color
+        for tag_name in tags:
+            tag_button = TagButton(tag_name, category_color)
             tag_button.clicked.connect(lambda checked, t=tag_name: self.on_tag_clicked(t))
             tags_flow_layout.addWidget(tag_button)
         
@@ -973,9 +1141,11 @@ class TagManager(QDialog):
         from PyQt5.QtCore import Qt
         
         header = QLabel(category_name)
+        # Use light grey for category labels as requested
+        header_color = "#D3D3D3"  # Light grey
         header.setStyleSheet(f"""
             QLabel {{
-                background-color: {category_color};
+                background-color: {header_color};
                 border: none;
                 border-radius: 12px;
                 padding: 6px 12px;

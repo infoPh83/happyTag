@@ -103,22 +103,49 @@ def write_cloudinary_metadata_to_file(file_path, public_id, tags=None):
         }
     
     try:
-        # Write public_id to UserComment field first
+        # Write public_id to UserComment field first with UTF-8 encoding support
         public_id_commands = [
             EXIFTOOL_PATH,
             '-overwrite_original_in_place',  # Preserves extended attributes including Finder tags
+            '-charset', 'UTF8',  # Explicit UTF-8 charset for special characters
+            '-codedcharacterset=UTF8',  # For IPTC fields
             f'-UserComment=cloudinary_public_id:{public_id}',
             str(file_path)
         ]
         
         debug_upload(f"Writing public_id with command: {' '.join(public_id_commands)}")
-        result = subprocess.run(public_id_commands, capture_output=True, text=True, timeout=30)
+        
+        # On Windows, handle Unicode filenames properly
+        if os.name == 'nt':  # Windows
+            # Use CREATE_NO_WINDOW to hide console window and handle Unicode properly
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            
+            result = subprocess.run(
+                public_id_commands, 
+                capture_output=True, 
+                text=False,  # Use binary mode to avoid encoding issues
+                timeout=30,
+                startupinfo=startupinfo
+            )
+        else:  # Unix-like systems
+            result = subprocess.run(
+                public_id_commands, 
+                capture_output=True, 
+                text=False,  # Use binary mode to avoid encoding issues
+                timeout=30
+            )
+        
+        # Decode the output safely
+        stdout = result.stdout.decode('utf-8', errors='replace') if result.stdout else ''
+        stderr = result.stderr.decode('utf-8', errors='replace') if result.stderr else ''
         
         if result.returncode != 0:
             return {
                 'success': False,
-                'message': f'ExifTool error writing public_id: {result.stderr}',
-                'details': {'returncode': result.returncode, 'stderr': result.stderr}
+                'message': f'ExifTool error writing public_id: {stderr}',
+                'details': {'returncode': result.returncode, 'stderr': stderr}
             }
         
         # NOTE: Tags are no longer written here to avoid duplication with main app's tag writing system
@@ -162,16 +189,45 @@ def get_cloudinary_public_id_from_metadata(file_path):
         return None
         
     try:
-        # Use ExifTool to read UserComment field which stores our public_id
-        result = subprocess.run([
+        # Use ExifTool to read UserComment field with better encoding handling
+        read_commands = [
             EXIFTOOL_PATH,
+            '-charset', 'UTF8',  # Explicit UTF-8 charset for special characters
             '-UserComment',
             '-s3',  # Short format, no tag names
             str(file_path)
-        ], capture_output=True, text=True, timeout=30)
+        ]
         
-        if result.returncode == 0 and result.stdout.strip():
-            user_comment = result.stdout.strip()
+        # On Windows, handle Unicode filenames properly
+        if os.name == 'nt':  # Windows
+            # Use CREATE_NO_WINDOW to hide console window and handle Unicode properly
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            
+            result = subprocess.run(
+                read_commands, 
+                capture_output=True, 
+                text=False, 
+                timeout=30,
+                startupinfo=startupinfo
+            )
+        else:  # Unix-like systems
+            result = subprocess.run(
+                read_commands, 
+                capture_output=True, 
+                text=False, 
+                timeout=30
+            )
+        
+        if result.returncode == 0 and result.stdout:
+            try:
+                # Try to decode as UTF-8, with fallback handling
+                user_comment = result.stdout.decode('utf-8', errors='replace').strip()
+            except UnicodeDecodeError:
+                # Fallback to latin-1 which never fails
+                user_comment = result.stdout.decode('latin-1', errors='replace').strip()
+            
             # Check if it contains our cloudinary public_id marker
             if user_comment.startswith('cloudinary_public_id:'):
                 public_id = user_comment.replace('cloudinary_public_id:', '', 1)

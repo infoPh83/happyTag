@@ -25,8 +25,9 @@ from .debug_utils import (
 
 # Constants from Cloudinary system
 MAX_DIMENSION = 4000  # Maximum dimension on the longest side
-VALID_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp'}
-SUPPORTED_FORMATS = {'JPEG', 'PNG', 'GIF', 'BMP', 'TIFF', 'WEBP'}
+VALID_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.tiff', '.tif', '.webp'}
+SUPPORTED_FORMATS = {'JPEG', 'PNG', 'GIF', 'TIFF', 'WEBP'}
+UNSUPPORTED_EXTENSIONS = {'.bmp', '.psd'}  # Known image formats not currently supported
 RESIZING_TIME_LIMIT = 20  # Set time limit in seconds
 DATABASE_FILE_NAME = "cloudinary_database.csv"
 LOG_NAME_PREFIX = "happytag_assessment_"

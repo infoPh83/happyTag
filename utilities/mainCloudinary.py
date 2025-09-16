@@ -704,7 +704,7 @@ class MyApp(QDialog, Ui_CloudinaryMainDialog):
         self.synch_mode = FILES_MODE
         file_dialog = QFileDialog(self)
         file_dialog.setFileMode(QFileDialog.ExistingFiles)
-        file_dialog.setNameFilter("Images (*.jpg *.jpeg *.tiff *.tif *.png, *.gif *.bmp *.webp)")
+        file_dialog.setNameFilter("Images (*.jpg *.jpeg *.tiff *.tif *.png *.gif *.webp)")
         file_dialog.setViewMode(QFileDialog.Detail)
 
         if file_dialog.exec():

@@ -25,7 +25,8 @@ import csv
 CLOUDINARY_FOLDER_PREFIX = "your_folder_prefix"  # Adjust as needed
 # MAX_FILE_SIZE = 3.2 * 1024 * 1024  # 3.5MB in bytes
 MAX_DIMENSION = 4000  # Maximum dimension on the longest side
-VALID_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp'}
+VALID_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.tiff', '.tif', '.webp'}
+UNSUPPORTED_EXTENSIONS = {'.bmp', '.psd'}  # Known image formats not currently supported
 
 # LOG_FILE_PATH = "/Volumes/Marketing/2024 Branding/ Photography + Art Direction/Photography/Cloudinary logs"
 # LOG_FILE_PATH = "C:/Users/simon/Desktop/langham/myApp/log"
@@ -37,7 +38,8 @@ QUOTA = 25 * 1024 * 1024 * 1024  # 25GB in bytes
 DATABASE_FILE_NAME = "cloudinary_database.csv"
 
 # The constants for folder assessment, based on filetype and size thresholds
-fileTypeFilters = {'.jpg': 30, '.jpeg': 30, '.png': 250, '.gif': 100, '.bmp': 400, '.tiff': 400, '.tif': 400, '.webp': 10}
+fileTypeFilters = {'.jpg': 30, '.jpeg': 30, '.png': 250, '.gif': 100, '.tiff': 400, '.tif': 400, '.webp': 10}
+# Removed BMP from file type filters as it's no longer supported
 localDirectoryFolderExcludeList = {"processed images", "Assets", "Final Selects", "resized", "Photography + Videography", ".tmp", "__MACOSX", "Version", "versions", "previews", "Preview"}
 
 CLIENT_FOLDER_PREFIX = "happyTag"

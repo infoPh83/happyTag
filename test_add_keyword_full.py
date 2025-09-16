@@ -13,7 +13,7 @@ def test_add_keyword_dialog_full():
     
     try:
         # Create dialog with a test spreadsheet path
-        spreadsheet_path = "/Volumes/Marketing/06. Databases/TAGs final.ods"
+        spreadsheet_path = "test_tags.ods"  # Use a test file instead of hardcoded path
         dialog = AddKeywordDialog(spreadsheet_path)
         
         print("✅ AddKeywordDialog created successfully")

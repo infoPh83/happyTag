@@ -1278,7 +1278,8 @@ class MainWindow(QMainWindow):
             filename = os.path.basename(file_path)
             error_message += f"• {filename}: {reason}\n"
         
-        error_message += "\nSupported formats: JPG, PNG, TIFF, BMP, GIF, WEBP"
+        error_message += "\nSupported formats: JPG, JPEG, PNG, TIFF, TIF, GIF, WEBP\n"
+        error_message += "Unsupported formats: BMP, PSD (planned for future updates)"
         QMessageBox.information(self, "Unsupported Files", error_message)
         self.unsupported_files.clear()  # Clear after showing
 
@@ -1505,7 +1506,11 @@ class MainWindow(QMainWindow):
             _, ext = os.path.splitext(file_path.lower())
             if ext == '.psd':
                 print(f"Warning: PSD files are not currently supported for preview: {file_path}")
-                self.unsupported_files.append((file_path, "PSD format not supported"))
+                self.unsupported_files.append((file_path, "PSD format not currently supported"))
+                return None
+            elif ext == '.bmp':
+                print(f"Warning: BMP files are not currently supported for preview: {file_path}")
+                self.unsupported_files.append((file_path, "BMP format not currently supported"))
                 return None
             
             with Image.open(file_path) as img:
@@ -2308,7 +2313,7 @@ class MainWindow(QMainWindow):
             self,
             "Select Images",
             "",
-            "Images (*.png *.xpm *.jpg *.bmp *.gif, *.tiff *.tif, *.webp, *.psd)"
+            "Images (*.png *.xpm *.jpg *.jpeg *.gif *.tiff *.tif *.webp)"
         )
         
         print(f"Selected files: {files}")
@@ -2345,11 +2350,14 @@ class MainWindow(QMainWindow):
         
         if folder_path:
             # Define supported image extensions (excluding XMP which are metadata sidecar files)
-            image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff', '.tif', '.webp'}
+            image_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.tiff', '.tif', '.webp'}
+            # Define unsupported image formats that we recognize but can't process
+            unsupported_image_extensions = {'.bmp', '.psd'}
             
             # Find all image files in the folder and count different file types
             image_files = []
             non_image_files = 0
+            unsupported_image_files = []
             total_files = 0
             
             for filename in os.listdir(folder_path):
@@ -2359,17 +2367,24 @@ class MainWindow(QMainWindow):
                     _, ext = os.path.splitext(filename.lower())
                     if ext in image_extensions:
                         image_files.append(file_path)
+                    elif ext in unsupported_image_extensions:
+                        unsupported_image_files.append(file_path)
+                        # Add to unsupported list with appropriate message
+                        format_name = "BMP" if ext == '.bmp' else "PSD"
+                        self.unsupported_files.append((file_path, f"{format_name} format not currently supported"))
                     else:
                         non_image_files += 1
             
             print(f"Found {len(image_files)} image files in folder")
+            if len(unsupported_image_files) > 0:
+                print(f"Found {len(unsupported_image_files)} unsupported image files (BMP/PSD)")
             if non_image_files > 0:
                 print(f"Skipping {non_image_files} non-image files")
             
             if image_files:
-                # Clear previous metadata errors and data
+                # Clear previous metadata errors and data (but keep unsupported_files for reporting)
                 self.metadata_errors.clear()
-                self.unsupported_files.clear()
+                # Don't clear self.unsupported_files here - we need it for messaging
                 
                 # Clear existing data - initialize empty lists
                 self.image_files = []
@@ -2380,8 +2395,8 @@ class MainWindow(QMainWindow):
                     widget.setParent(None)
                 self.image_widgets.clear()
                 
-                # Start complete integrated processing (new approach)
-                self.start_integrated_processing(image_files, "folder", non_image_files)
+                # Start complete integrated processing (new approach) with unsupported file info
+                self.start_integrated_processing(image_files, "folder", non_image_files, len(unsupported_image_files))
             else:
                 print("No image files found in the selected folder")
 
@@ -2429,20 +2444,16 @@ class MainWindow(QMainWindow):
         
         return converted_files, conversion_count
 
-    def start_integrated_processing(self, image_files, source, non_image_files=0):
+    def start_integrated_processing(self, image_files, source, non_image_files=0, unsupported_image_files=0):
         """Start integrated processing combining Cloudinary assessment with image loading"""
         debug_startup(f"Starting integrated processing for {len(image_files)} valid images (source: {source})")
         
-        # Convert BMP files to JPEG before processing
-        converted_files, conversion_count = self._convert_bmp_files_to_jpeg(image_files)
-        image_files = converted_files  # Use converted files for processing
-        
         # Create detailed progress message
         progress_message = f"Processing {len(image_files)} images"
+        if unsupported_image_files > 0:
+            progress_message += f"\nSkipping {unsupported_image_files} unsupported image files (BMP/PSD)"
         if non_image_files > 0:
             progress_message += f"\nSkipping {non_image_files} non-image files"
-        if conversion_count > 0:
-            progress_message += f"\nConverted {conversion_count} BMP files to JPEG"
         
         # Determine if Cloudinary processing should be enabled
         debug_cloudinary("Cloudinary connection check:")
@@ -2615,6 +2626,10 @@ class MainWindow(QMainWindow):
             
             # Update status bar after a brief delay to ensure widgets are fully created
             QTimer.singleShot(100, self.update_status_bar)
+            
+            # Show unsupported files dialog if any were found
+            if self.unsupported_files:
+                QTimer.singleShot(500, self.show_unsupported_files)  # Small delay after UI updates
             
             # Auto-hide progress after 2 seconds
             QTimer.singleShot(2000, self.hide_progress)

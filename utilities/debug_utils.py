@@ -133,7 +133,7 @@ def parse_env_configuration():
         _log_file_path = log_path
         _open_log_file_if_needed()
         if _log_file_handle:
-            debug_print('startup', f"File logging enabled: {_log_file_path}", force=True)
+            print(f"[STARTUP] File logging enabled: {_log_file_path}")  # Simple print to avoid circular dependency
 
 parse_env_configuration()
 
