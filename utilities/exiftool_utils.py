@@ -106,7 +106,7 @@ def write_cloudinary_metadata_to_file(file_path, public_id, tags=None):
         # Write public_id to UserComment field first
         public_id_commands = [
             EXIFTOOL_PATH,
-            '-overwrite_original',
+            '-overwrite_original_in_place',  # Preserves extended attributes including Finder tags
             f'-UserComment=cloudinary_public_id:{public_id}',
             str(file_path)
         ]

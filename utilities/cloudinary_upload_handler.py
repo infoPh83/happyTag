@@ -230,8 +230,8 @@ class CloudinaryUploadHandler(QObject):
             return
             
         debug_upload("Starting NEW Cloudinary upload phase")
-        self.upload_status_signal.emit("Starting Cloudinary upload...")
-        
+        self.upload_status_signal.emit("Uploading on Cloudinary...")
+
         try:
             # Extract data from NEW assessment structure
             files_for_tag_update = self.assessment_data.get('files_for_tag_update_only', [])

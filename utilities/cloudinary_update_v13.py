@@ -505,6 +505,104 @@ class CloudinaryUpdater(QObject):
             print(f"Warning: Could not load database: {e}")
 
 
+def get_actual_resource_count(cloudinary_updater_instance):
+    """Get the actual count of resources by fetching and counting them ourselves."""
+    try:
+        print(f"[DEBUG] Getting actual resource count by fetching all assets...")
+        
+        total_assets = 0
+        
+        # Method 1: Count all assets by actually fetching them (most reliable)
+        try:
+            print(f"[DEBUG] Fetching all resources to count them...")
+            next_cursor = None
+            batch_count = 0
+            
+            while True:
+                # Fetch resources in batches
+                if next_cursor:
+                    resources_response = cloudinary.api.resources(
+                        max_results=100, 
+                        next_cursor=next_cursor
+                    )
+                else:
+                    resources_response = cloudinary.api.resources(max_results=100)
+                
+                # Count assets in this batch
+                assets_in_batch = len(resources_response.get('resources', []))
+                total_assets += assets_in_batch
+                batch_count += 1
+                
+                print(f"[DEBUG] Batch {batch_count}: {assets_in_batch} assets (total so far: {total_assets})")
+                
+                # Check if there are more pages
+                next_cursor = resources_response.get('next_cursor')
+                if not next_cursor:
+                    break
+                
+                # Safety limit to prevent infinite loops
+                if batch_count > 100:  # Max 10,000 assets
+                    print(f"[DEBUG] Safety limit reached after {batch_count} batches")
+                    break
+            
+            print(f"[DEBUG] Method 1 - Counted {total_assets} assets by fetching all resources")
+            
+        except Exception as e:
+            print(f"[DEBUG] Method 1 (fetch count) failed: {e}")
+            total_assets = 0
+        
+        # Method 2: Fallback to total_count from a single API call
+        if total_assets == 0:
+            try:
+                resources_response = cloudinary.api.resources(max_results=1)
+                total_assets = resources_response.get('total_count', 0)
+                print(f"[DEBUG] Method 2 - Using total_count from API: {total_assets}")
+            except Exception as e:
+                print(f"[DEBUG] Method 2 (total_count) failed: {e}")
+                total_assets = 0
+        
+        # Method 3: Try specific resource types if general count failed
+        if total_assets == 0:
+            try:
+                image_count = 0
+                raw_count = 0
+                video_count = 0
+                
+                # Count images
+                try:
+                    image_resources = cloudinary.api.resources(resource_type="image", max_results=1)
+                    image_count = image_resources.get('total_count', 0)
+                except:
+                    pass
+                
+                # Count raw files
+                try:
+                    raw_resources = cloudinary.api.resources(resource_type="raw", max_results=1)
+                    raw_count = raw_resources.get('total_count', 0)
+                except:
+                    pass
+                
+                # Count videos
+                try:
+                    video_resources = cloudinary.api.resources(resource_type="video", max_results=1)
+                    video_count = video_resources.get('total_count', 0)
+                except:
+                    pass
+                
+                total_assets = image_count + raw_count + video_count
+                print(f"[DEBUG] Method 3 - By resource types: {total_assets} (images: {image_count}, raw: {raw_count}, video: {video_count})")
+                
+            except Exception as e:
+                print(f"[DEBUG] Method 3 (by type) failed: {e}")
+                total_assets = 0
+        
+        print(f"[DEBUG] Final counted resource count: {total_assets}")
+        return total_assets if total_assets > 0 else None
+        
+    except Exception as e:
+        print(f"[DEBUG] Error getting actual resource count: {e}")
+        return None
+
 def get_cloudinary_status(cloudinary_updater_instance):
     """Get Cloudinary usage details."""
     try:
@@ -542,7 +640,16 @@ def get_cloudinary_status(cloudinary_updater_instance):
         remainingCredits = CREDITS_MAX - usedCredits
         remainingStorage = (remainingCredits) * 1024 * 1024 * 1024  
         
-        num_files = result.get('resources', 0)
+        # Get actual resource count from resources API (more accurate)
+        actual_resource_count = get_actual_resource_count(cloudinary_updater_instance)
+        if actual_resource_count is not None and actual_resource_count > 0:
+            num_files = actual_resource_count
+            print(f"[DEBUG] Using actual resource count: {num_files}")
+        else:
+            # Fallback to usage API count (this is actually more reliable for billing)
+            num_files = result.get('resources', 0)
+            print(f"[DEBUG] Using usage API resource count (this is the authoritative count for billing): {num_files}")
+        
         average_file_size = 0
         if num_files > 0:
             average_file_size = storageBytes / num_files

@@ -551,39 +551,16 @@ class ImageAssessment(QObject):
         return assessment_summary
         
     def _get_cloudinary_public_id_from_metadata(self, file_path):
-        """Extract Cloudinary public_id from image metadata using ExifTool"""
+        """Extract Cloudinary public_id from image metadata using the working utility function"""
         try:
-            # Import ExifTool availability from main app if available
-            try:
-                if self.main_app and hasattr(self.main_app, 'persistent_exiftool') and self.main_app.persistent_exiftool:
-                    # Use main app's persistent ExifTool connection
-                    metadata = self.main_app.persistent_exiftool.get_metadata(str(file_path))
-                    
-                    # Check UserComment field where we typically store public_id
-                    user_comment = metadata.get('EXIF:UserComment', '')
-                    if user_comment and 'public_id:' in user_comment:
-                        public_id = user_comment.replace('public_id:', '').strip()
-                        debug_cloudinary(f"Found public_id in UserComment: {public_id}")
-                        return public_id
-                        
-                    # Check other potential fields
-                    description = metadata.get('EXIF:ImageDescription', '')
-                    if description and 'public_id:' in description:
-                        public_id = description.replace('public_id:', '').strip()
-                        debug_cloudinary(f"Found public_id in ImageDescription: {public_id}")
-                        return public_id
-                        
-                else:
-                    # Fallback: Use cloudinary_upload_handler's helper functions
-                    from .cloudinary_upload_handler import get_cloudinary_public_id_from_metadata
-                    public_id = get_cloudinary_public_id_from_metadata(file_path)
-                    if public_id:
-                        debug_cloudinary(f"Found public_id via upload handler: {public_id}")
-                        return public_id
-                        
-            except Exception as e:
-                debug_cloudinary(f"Error reading public_id with ExifTool: {e}")
+            # Use the proven working utility function instead of trying to access ExifTool directly
+            from .exiftool_utils import get_cloudinary_public_id_from_metadata
+            public_id = get_cloudinary_public_id_from_metadata(file_path)
+            if public_id:
+                debug_cloudinary(f"Found public_id via utility function: {public_id}")
+                return public_id
             
+            debug_cloudinary(f"No public_id found in {os.path.basename(file_path)}")
             return None
             
         except Exception as e:

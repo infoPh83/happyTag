@@ -134,6 +134,54 @@ class TagManager(QDialog):
         self.pending_street_search = None
         self.pending_tags_search = None
         
+        # Connect the Add Keyword button if it exists
+        self.setup_add_keyword_button()
+        
+    def setup_add_keyword_button(self):
+        """Setup the Add Keyword Dialog button if it exists in the UI"""
+        if hasattr(self, 'openAddKeywordDialogButton'):
+            print("Found openAddKeywordDialogButton in TagManager, connecting...")
+            self.openAddKeywordDialogButton.clicked.connect(self.open_add_keyword_dialog)
+        else:
+            print("openAddKeywordDialogButton not found in TagManager")
+    
+    def open_add_keyword_dialog(self):
+        """Open the Add Keyword dialog"""
+        try:
+            from .addTagDialog import AddKeywordDialog
+            
+            # Get the spreadsheet path - hardcoded for now
+            spreadsheet_path = "/Volumes/Marketing/06. Databases/TAGs final.ods"
+            print(f"[DEBUG] Using spreadsheet path: {spreadsheet_path}")
+            
+            # Use the tags data from this TagManager instance
+            tags_data = self.original_tags_data if hasattr(self, 'original_tags_data') else None
+            if tags_data:
+                print(f"[DEBUG] Using {len(tags_data)} categories from TagManager's memory")
+            else:
+                print("[DEBUG] No tags data available in TagManager")
+            
+            # Create and show the add keyword dialog
+            add_dialog = AddKeywordDialog(spreadsheet_path, self, tags_data)
+            
+            # Connect signal to handle when a tag is added
+            add_dialog.tagAdded.connect(self.on_tag_added)
+            
+            # Show dialog
+            add_dialog.exec_()
+            
+        except Exception as e:
+            print(f"[ERROR] Error opening add keyword dialog: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def on_tag_added(self, text, color, category):
+        """Handle when a new tag is added"""
+        print(f"New tag added: '{text}' with color '{color}' in category '{category}'")
+        
+        # Refresh the tags display to include the new tag
+        self.populate_tags_list()
+        
     def showEvent(self, a0):
         """Override showEvent to refresh content every time dialog is shown"""
         super().showEvent(a0)

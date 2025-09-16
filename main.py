@@ -292,10 +292,10 @@ class MainWindow(QMainWindow):
         
         # Initialize widget width slider with 5 discrete size steps
         # Maps slider positions (1-5) to specific pixel widths for modular sizing
-        self.size_steps = {1: 280, 2: 360, 3: 460, 4: 560, 5: 700}  # 5 distinct size options
+        self.size_steps = {1: 280, 2: 360, 3: 460, 4: 560, 5: 700, 6:1000}  # 5 distinct size options
         self.horizontalSlider.setMinimum(1)     # Step 1 (smallest)
-        self.horizontalSlider.setMaximum(5)     # Step 5 (largest) 
-        self.horizontalSlider.setValue(3)       # Step 3 (medium, 200px default)
+        self.horizontalSlider.setMaximum(6)     # Step 5 (largest) 
+        self.horizontalSlider.setValue(1)       # Step 3 (medium, 200px default)
         self.horizontalSlider.setTickPosition(self.horizontalSlider.TicksBelow)
         self.horizontalSlider.setTickInterval(1)  # Show tick marks for each step
         
@@ -701,6 +701,9 @@ class MainWindow(QMainWindow):
         # Get original keywords (including year)
         original_keywords = self.original_keywords.get(file_path, [])
         
+        # Check if this file has imported Cloudinary tags that differ from local
+        has_cloudinary_import = hasattr(self, 'cloudinary_imported_files') and file_path in self.cloudinary_imported_files
+        
         # Check if this is a new file that had the year automatically added
         is_new_file_with_year = hasattr(self, 'new_files_with_year') and file_path in self.new_files_with_year
         
@@ -708,11 +711,13 @@ class MainWindow(QMainWindow):
         current_set = set(current_keywords)
         original_set = set(original_keywords)
         
-        changed = current_set != original_set
+        changed = current_set != original_set or has_cloudinary_import
         if changed:
             debug("tags", f"Keywords changed for {os.path.basename(file_path)}")
             debug("tags", f"  Original: {sorted(original_set)}")
             debug("tags", f"  Current:  {sorted(current_set)}")
+            if has_cloudinary_import:
+                debug("tags", f"  ✅ Cloudinary import detected - flagged for saving")
         else:
             debug("tags", f"Keywords unchanged for {os.path.basename(file_path)}")
         
@@ -736,10 +741,17 @@ class MainWindow(QMainWindow):
                 return 0  # No public_id to check
             
             # Check if this public_id exists in Cloudinary
-            cloudinary_files = getattr(self.cloudinary_updater, 'cloudinary_files', [])
+            cloudinary_files = getattr(self, 'cloudinary_files_cache', [])
             cloudinary_public_ids = {cf.get('public_id', '') for cf in cloudinary_files}
             
+            debug_cloudinary(f"Checking orphaned status for {local_public_id}")
+            debug_cloudinary(f"  Cloudinary cache has {len(cloudinary_files)} files")
+            debug_cloudinary(f"  Looking for public_id: '{local_public_id}'")
+            
             if local_public_id not in cloudinary_public_ids:
+                debug_cloudinary(f"  ❌ Public_id not found in cache - marking as orphaned")
+                debug_cloudinary(f"  Available public_ids: {list(cloudinary_public_ids)[:5]}")  # Show first 5 for debugging
+                
                 # Orphaned public_id - remove it from metadata
                 debug_cloudinary(f"Found orphaned public_id {local_public_id} in {os.path.basename(file_path)} - cleaning up")
                 
@@ -753,6 +765,8 @@ class MainWindow(QMainWindow):
                     except Exception as e:
                         debug_cloudinary(f"Failed to remove orphaned public_id from {file_path}: {e}")
                         return 0
+            else:
+                debug_cloudinary(f"  ✅ Public_id found in cache - not orphaned")
             
             return 0  # No cleanup needed
             
@@ -774,21 +788,30 @@ class MainWindow(QMainWindow):
                 debug_cloudinary(f"No public_id found in {os.path.basename(file_path)} - keeping local tags")
                 return None
             
-            # Get Cloudinary files data from cache
+            # Get Cloudinary files data from main app cache
             cloudinary_files = getattr(self, 'cloudinary_files_cache', [])
             if not cloudinary_files:
-                debug_cloudinary(f"No Cloudinary files data available in cache")
+                debug_cloudinary(f"No Cloudinary files data available in main app cache")
                 return None
+            
+            debug_cloudinary(f"Searching for public_id '{local_public_id}' in {len(cloudinary_files)} Cloudinary files")
+            
+            # Debug: Show what we're looking for vs what's available
+            debug_cloudinary(f"Target public_id: '{local_public_id}'")
             
             # Find matching Cloudinary file by public_id
             cloudinary_file = None
-            for cf in cloudinary_files:
-                if cf.get('public_id', '') == local_public_id:
+            for i, cf in enumerate(cloudinary_files):
+                cf_public_id = cf.get('public_id', '')
+                debug_cloudinary(f"  File {i+1}: public_id='{cf_public_id}', tags={cf.get('tags', [])} (type: {type(cf.get('tags', []))})")
+                if cf_public_id == local_public_id:
                     cloudinary_file = cf
+                    debug_cloudinary(f"Found matching Cloudinary file for public_id: {local_public_id}")
                     break
             
             if not cloudinary_file:
                 debug_cloudinary(f"No Cloudinary file found for public_id: {local_public_id}")
+                debug_cloudinary(f"Available public_ids: {[cf.get('public_id', 'NO_ID') for cf in cloudinary_files[:5]]}")  # Show first 5 for debugging
                 return None
             
             # Extract Cloudinary tags
@@ -796,6 +819,8 @@ class MainWindow(QMainWindow):
             if not cloudinary_tags:
                 debug_cloudinary(f"No tags in Cloudinary for {local_public_id} - keeping local tags")
                 return None
+            
+            debug_cloudinary(f"Found {len(cloudinary_tags)} tags in Cloudinary for {local_public_id}: {cloudinary_tags}")
             
             # Convert to same format as local keywords (list of strings)
             cloudinary_keywords = [str(tag).strip() for tag in cloudinary_tags if str(tag).strip()]
@@ -821,6 +846,176 @@ class MainWindow(QMainWindow):
     # NOTE: Platform-specific tag writing methods removed to prevent duplication
     # The streamlined metadata strategy in save_keywords_to_image() now handles
     # cross-platform compatibility without redundant field writing
+
+    def write_platform_specific_tags(self, file_path, keywords):
+        """Write platform-specific tags for enhanced OS integration"""
+        import platform
+        
+        current_platform = platform.system().lower()
+        
+        if current_platform == 'darwin':
+            # macOS: Write Finder tags and extended attributes
+            return self.write_macos_finder_tags(file_path, keywords)
+        elif current_platform == 'windows':
+            # Windows: Write Windows Explorer compatible metadata
+            return self.write_windows_explorer_tags(file_path, keywords)
+        else:
+            # Linux or other: No platform-specific handling needed
+            return True, "No platform-specific tags needed"
+
+    def write_windows_explorer_tags(self, file_path, keywords):
+        """Write Windows Explorer compatible tags using ExifTool (avoiding duplication with standard fields)"""
+        try:
+            if not keywords:
+                return True, "No keywords to write"
+            
+            if not self.exiftool_available or not self.persistent_exiftool:
+                return False, "ExifTool not available for Windows Explorer tags"
+            
+            debug("tags", f"Writing Windows Explorer tags to {os.path.basename(file_path)}")
+            
+            # Use the persistent ExifTool instance
+            et = self.persistent_exiftool
+            
+            # Windows Explorer-specific fields that DON'T overlap with standard metadata
+            # Note: We avoid Subject and Keywords to prevent duplication with XMP-dc:Subject and IPTC:Keywords
+            cmd_args = []
+            
+            # 1. Windows Tags field (Windows 10+ specific - separate from standard fields)
+            cmd_args.append('-Tags=')  # Clear existing
+            if keywords:
+                keywords_str = ';'.join(keywords)
+                cmd_args.append(f'-Tags={keywords_str}')
+            
+            # 2. XMP-microsoft:Category (Windows-specific category field)
+            cmd_args.append('-XMP-microsoft:Category=')  # Clear existing
+            if keywords:
+                for keyword in keywords:
+                    cmd_args.append(f'-XMP-microsoft:Category={keyword}')
+            
+            # 3. Write to Windows File Properties via XMP
+            cmd_args.append('-XMP-xmp:Label=')  # Clear existing
+            if keywords:
+                # Use first keyword as label (Windows file properties)
+                cmd_args.append(f'-XMP-xmp:Label={keywords[0]}')
+            
+            # Execute the Windows-specific metadata write
+            if cmd_args:
+                cmd_args.extend(['-overwrite_original', file_path])
+                debug("tags", f"Executing Windows Explorer metadata command: {' '.join(cmd_args)}")
+                result = et.execute(*cmd_args)
+                debug("tags", f"Windows Explorer metadata result: {result}")
+            
+            debug("tags", f"Successfully wrote Windows Explorer tags to {os.path.basename(file_path)}")
+            return True, "Success"
+                
+        except Exception as e:
+            debug_errors(f"Error writing Windows Explorer tags: {e}")
+            return False, f"Error: {str(e)}"
+
+    def write_macos_finder_tags(self, file_path, keywords):
+        """Write macOS Finder tags using extended attributes and Spotlight metadata"""
+        import subprocess
+        import plistlib
+        import os
+        
+        try:
+            if not keywords or os.name != 'posix' or not hasattr(os, 'uname') or os.uname().sysname != 'Darwin':
+                return True, "Not macOS or no keywords"
+            
+            debug("tags", f"Writing macOS Finder tags to {os.path.basename(file_path)}: {keywords}")
+            
+            # Method 1: Write Extended Attributes (for Finder display)
+            # Use the EXACT format that macOS Finder uses: simple array of strings
+            # Based on analysis of working macOS-tagged files
+            tag_data = keywords  # Simple list of strings, no color info needed here
+            
+            # Convert to binary plist format (same as macOS native)
+            debug("tags", f"Creating binary plist for {len(keywords)} keywords")
+            plist_data = plistlib.dumps(tag_data, fmt=plistlib.FMT_BINARY)
+            debug("tags", f"Binary plist created: {len(plist_data)} bytes")
+            
+            # Convert binary data to hex string
+            hex_data = plist_data.hex()
+            debug("tags", f"Hex data created: {len(hex_data)} characters")
+            
+            # Use xattr command with hex data
+            xattr_cmd = [
+                'xattr', '-w', '-x', 'com.apple.metadata:_kMDItemUserTags',
+                hex_data, file_path
+            ]
+            debug("tags", f"Executing xattr command: {' '.join(xattr_cmd[:4])} [hex_data] {file_path}")
+            
+            result = subprocess.run(xattr_cmd, capture_output=True, text=True)
+            
+            debug("tags", f"xattr return code: {result.returncode}")
+            if result.stdout:
+                debug("tags", f"xattr stdout: {result.stdout}")
+            if result.stderr:
+                debug("tags", f"xattr stderr: {result.stderr}")
+            
+            if result.returncode != 0:
+                debug_errors(f"Failed to write extended attributes: {result.stderr}")
+                return False, f"xattr error: {result.stderr}"
+            
+            # Verify the write was successful
+            try:
+                verify_result = subprocess.run(['xattr', '-p', '-x', 'com.apple.metadata:_kMDItemUserTags', file_path], capture_output=True, text=True)
+                if verify_result.returncode == 0:
+                    debug("tags", f"✅ Verification: Extended attributes successfully written and readable")
+                else:
+                    debug("tags", f"⚠️ Verification failed: Cannot read back extended attributes")
+            except Exception as verify_e:
+                debug("tags", f"⚠️ Verification error: {verify_e}")
+            
+            debug("tags", f"Successfully wrote Finder extended attributes for {os.path.basename(file_path)}")
+            
+            # Method 2: Write Spotlight Metadata (for search and indexing)
+            try:
+                # Create metadata in format Spotlight understands
+                spotlight_metadata = {
+                    'kMDItemUserTags': keywords,
+                    'kMDItemKeywords': keywords,
+                    'kMDItemSubject': ', '.join(keywords)
+                }
+                
+                # Write using xattr for Spotlight metadata as well
+                for key, value in spotlight_metadata.items():
+                    if isinstance(value, list):
+                        # For arrays, write as plist
+                        array_plist = plistlib.dumps(value, fmt=plistlib.FMT_BINARY)
+                        array_hex = array_plist.hex()
+                        subprocess.run([
+                            'xattr', '-w', '-x', f'com.apple.metadata:{key}',
+                            array_hex, file_path
+                        ], capture_output=True)
+                    else:
+                        # For strings, write directly
+                        subprocess.run([
+                            'xattr', '-w', f'com.apple.metadata:{key}',
+                            value, file_path
+                        ], capture_output=True)
+                
+                debug("tags", "Successfully wrote Spotlight metadata")
+                
+            except Exception as spotlight_error:
+                debug_errors(f"Spotlight metadata write failed: {spotlight_error}")
+                # Continue anyway, extended attributes are still written
+            
+            debug("tags", f"Successfully wrote macOS Finder tags to {os.path.basename(file_path)}")
+            
+            # Force Spotlight reindex for immediate visibility
+            try:
+                subprocess.run(['mdimport', file_path], capture_output=True, timeout=5)
+                debug("tags", f"Triggered Spotlight reindex for {os.path.basename(file_path)}")
+            except:
+                pass  # Non-critical if reindex fails
+            
+            return True, "Success"
+                
+        except Exception as e:
+            debug_errors(f"Error writing macOS Finder tags: {e}")
+            return False, f"Error: {str(e)}"
 
     def save_keywords_to_image(self, file_path, keywords_text):
         """Save keywords to image metadata using ExifTool (with fallback notification)"""
@@ -859,42 +1054,65 @@ class MainWindow(QMainWindow):
                     debug("tags", format_msg)
                     return False, format_msg
                 
-                # SIMPLIFIED CROSS-PLATFORM METADATA STRATEGY:
-                # Write to key standard fields only to avoid duplication in Windows Explorer
-                # This ensures tags work across platforms without redundant field writing
+                # OPTIMIZED CROSS-PLATFORM METADATA STRATEGY:
+                # Write to core standard fields that work universally without causing duplicates
+                # Each field serves a specific purpose and doesn't overlap
                 
                 try:
-                    # Build streamlined command arguments for universal compatibility
+                    # IMPORTANT: Preserve Cloudinary public_id if it exists
+                    # Check if there's a Cloudinary public_id in UserComment before writing
+                    existing_public_id = None
+                    try:
+                        user_comment_result = et.execute('-UserComment', file_path)
+                        if user_comment_result and not user_comment_result.startswith('Warning'):
+                            for line in user_comment_result.strip().split('\n'):
+                                if 'usercomment' in line.lower() and ':' in line:
+                                    comment_value = line.split(':', 1)[1].strip()
+                                    if comment_value.startswith('cloudinary_public_id:'):
+                                        existing_public_id = comment_value
+                                        debug("tags", f"Found existing Cloudinary public_id in UserComment: {existing_public_id}")
+                                        break
+                    except Exception as e:
+                        debug("tags", f"Could not check existing UserComment: {e}")
+                    
+                    # Build optimized command arguments for universal compatibility
                     cmd_args = []
                     
-                    # === PRIMARY STANDARD FIELDS ===
+                    # === CORE STANDARD FIELDS (No Platform Overlap) ===
                     
-                    # 1. XMP-dc:Subject (Dublin Core standard - most universal)
+                    # 1. XMP-dc:Subject (Dublin Core standard - most universal, read by all platforms)
                     cmd_args.append('-XMP-dc:Subject=')  # Clear existing
                     if keywords:
                         for keyword in keywords:
                             cmd_args.append(f'-XMP-dc:Subject={keyword}')
                     
-                    # 2. IPTC Keywords (Legacy standard for compatibility)
+                    # 2. IPTC:Keywords (Legacy IPTC standard - widely supported)
                     cmd_args.append('-IPTC:Keywords=')  # Clear existing
                     if keywords:
                         for keyword in keywords:
                             cmd_args.append(f'-IPTC:Keywords={keyword}')
                     
-                    # 3. Format-specific field for platform compatibility
-                    if file_ext in ['.jpg', '.jpeg', '.tiff', '.tif']:
-                        # For JPEG/TIFF: Use EXIF UserComment for public_id storage compatibility
-                        if keywords:
-                            user_comment = f"Keywords: {', '.join(keywords)}"
-                            cmd_args.append(f'-EXIF:UserComment={user_comment}')
-                    else:
-                        # For other formats: Use XMP Keywords
-                        cmd_args.append('-XMP:Keywords=')  # Clear existing
-                        if keywords:
-                            keywords_str = ';'.join(keywords)
-                            cmd_args.append(f'-XMP:Keywords={keywords_str}')
+                    # 3. XMP:Keywords (XMP Keywords field - different from XMP-dc:Subject)
+                    cmd_args.append('-XMP:Keywords=')  # Clear existing
+                    if keywords:
+                        keywords_str = ';'.join(keywords)
+                        cmd_args.append(f'-XMP:Keywords={keywords_str}')
                     
-                    # Execute streamlined operations in a SINGLE ExifTool call
+                    # 4. Format-specific optimization (PRESERVE UserComment for Cloudinary public_id)
+                    if file_ext in ['.jpg', '.jpeg', '.tiff', '.tif']:
+                        # For JPEG/TIFF: Use EXIF ImageDescription for tag description
+                        if keywords:
+                            description = f"Keywords: {', '.join(keywords)}"
+                            cmd_args.append(f'-EXIF:ImageDescription={description}')
+                        
+                        # PRESERVE OR RESTORE Cloudinary public_id in UserComment
+                        if existing_public_id:
+                            # Restore the existing Cloudinary public_id
+                            cmd_args.append(f'-UserComment={existing_public_id}')
+                            debug("tags", f"Preserving Cloudinary public_id in UserComment")
+                        # If no existing public_id, leave UserComment alone (don't overwrite)
+                    
+                    # Execute optimized operations in a SINGLE ExifTool call
                     if cmd_args:
                         cmd_args.extend(['-overwrite_original', file_path])
                         debug("tags", f"Executing streamlined ExifTool command with {len(cmd_args)-2} tag operations")
@@ -905,8 +1123,14 @@ class MainWindow(QMainWindow):
                     # Update original keywords after successful save (including year)
                     self.original_keywords[file_path] = keywords.copy()
                     
-                    # NOTE: Removed platform-specific duplicate writing to avoid Windows Explorer duplication
-                    # The streamlined metadata fields above provide cross-platform compatibility
+                    # PLATFORM-SPECIFIC TAGS: Write OS-specific tags for Finder/Explorer integration
+                    # This is essential for macOS Finder and Windows Explorer to display tags
+                    if keywords:  # Only write if there are keywords
+                        platform_success, platform_msg = self.write_platform_specific_tags(file_path, keywords)
+                        if platform_success:
+                            debug("tags", f"Platform-specific tags written successfully: {platform_msg}")
+                        else:
+                            debug("tags", f"Platform-specific tags failed: {platform_msg}")
                     
                     # Remove from new files tracking after successful save
                     if hasattr(self, 'new_files_with_year') and file_path in self.new_files_with_year:
@@ -965,6 +1189,10 @@ class MainWindow(QMainWindow):
                     success_count += 1
                     # Check for orphaned public_id cleanup after successful save
                     orphaned_cleanup_count += self._cleanup_orphaned_public_id(file_path)
+                    # Clear the cloudinary imported flag after successful save
+                    if hasattr(self, 'cloudinary_imported_files') and file_path in self.cloudinary_imported_files:
+                        self.cloudinary_imported_files.remove(file_path)
+                        debug_cloudinary(f"Cleared Cloudinary import flag for {os.path.basename(file_path)} after successful save")
                 else:
                     error_files.append((os.path.basename(file_path), error_msg))
         
@@ -1167,9 +1395,18 @@ class MainWindow(QMainWindow):
         self.progress_overlay.raise_()
     
     def update_progress(self, current_file):
-        """Update progress bar"""
+        """Update progress bar with file count"""
         if self.progress_bar:
             self.progress_bar.setValue(current_file)
+            QApplication.processEvents()  # Force UI update
+    
+    def update_upload_progress(self, percentage):
+        """Update progress bar with percentage (0-100) for uploads"""
+        if self.progress_bar:
+            # Convert percentage to file count based on total range
+            total_files = self.progress_bar.maximum()
+            current_value = int((percentage / 100.0) * total_files)
+            self.progress_bar.setValue(current_value)
             QApplication.processEvents()  # Force UI update
     
     def hide_progress(self):
@@ -2272,17 +2509,25 @@ class MainWindow(QMainWindow):
                 try:
                     preview = self.create_preview(file_path)
                     if preview:
-                        year, keywords = self.get_image_metadata(file_path)
+                        year, local_keywords = self.get_image_metadata(file_path)
+                        
+                        # Store ACTUAL local keywords as original for proper change detection
+                        self.original_keywords[file_path] = local_keywords.copy()
+                        
+                        # Start with local keywords
+                        keywords = local_keywords.copy()
                         
                         # CLOUDINARY TAG IMPORT: Replace local tags with Cloudinary tags if public_id matches
                         if cloudinary_enabled and self.cloudinary_updater:
-                            cloudinary_keywords = self._import_cloudinary_tags_for_file(file_path, keywords)
+                            cloudinary_keywords = self._import_cloudinary_tags_for_file(file_path, local_keywords)
                             if cloudinary_keywords is not None:
                                 keywords = cloudinary_keywords
                                 debug_cloudinary(f"Replaced local tags with Cloudinary tags for {os.path.basename(file_path)}")
-                        
-                        # Store original keywords for change detection
-                        self.original_keywords[file_path] = keywords.copy()
+                                # Mark this file as having imported changes that need saving
+                                if not hasattr(self, 'cloudinary_imported_files'):
+                                    self.cloudinary_imported_files = set()
+                                self.cloudinary_imported_files.add(file_path)
+                                debug_cloudinary(f"Marked {os.path.basename(file_path)} as having imported Cloudinary changes")
                         
                         # Prepare image data
                         image_data = {
@@ -2547,7 +2792,7 @@ class MainWindow(QMainWindow):
         """Setup connections for the upload handler system"""
         if self.upload_handler:
             # Connect upload progress signals
-            self.upload_handler.upload_progress_signal.connect(self.update_progress)
+            self.upload_handler.upload_progress_signal.connect(self.update_upload_progress)
             self.upload_handler.upload_status_signal.connect(self.update_progress_label)
             self.upload_handler.upload_complete_signal.connect(self.on_upload_complete)
             self.upload_handler.upload_preview_signal.connect(self.on_upload_preview)
@@ -2659,6 +2904,10 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Upload Info", message)
             return
         
+        # Show progress bar for upload phase
+        upload_message = f"Uploading to Cloudinary...\n{total_work} files to process"
+        self.show_progress(total_work, upload_message)
+        
         # ENHANCED DEBUG: Show NEW assessment data
         debug_upload(f"NEW assessment data for upload handler:")
         debug_upload(f"  - Files for tag update only: {len(files_for_tag_update)} files")
@@ -2734,6 +2983,9 @@ class MainWindow(QMainWindow):
     
     def on_upload_complete(self, upload_data):
         """Handle upload completion with enhanced metadata failure reporting"""
+        # Hide the progress bar first
+        self.hide_progress()
+        
         # Handle both old format (2 values) and new format (3 values)
         if len(upload_data) == 2:
             uploaded_count, error_count = upload_data
@@ -2742,6 +2994,17 @@ class MainWindow(QMainWindow):
             uploaded_count, error_count, metadata_failures = upload_data
         
         debug_upload(f"Upload complete: {uploaded_count} uploaded, {error_count} errors, {metadata_failures} metadata failures")
+        
+        # Refresh Cloudinary status to update the asset count in the credits bar
+        if uploaded_count > 0 and hasattr(self, 'cloudinary_updater') and self.cloudinary_updater:
+            print(f"[UPLOAD REFRESH] Refreshing Cloudinary status after {uploaded_count} successful uploads...")
+            try:
+                self.cloudinary_updater.cloud_status()
+                print(f"[UPLOAD REFRESH] Cloudinary status refresh triggered successfully")
+            except Exception as e:
+                print(f"[UPLOAD REFRESH] Warning: Failed to refresh Cloudinary status after upload: {e}")
+        else:
+            print(f"[UPLOAD REFRESH] Skipping refresh - uploaded_count: {uploaded_count}, has_cloudinary_updater: {hasattr(self, 'cloudinary_updater')}")
         
         # Check for metadata write failures and show detailed warning if needed
         metadata_failure_summary = None
@@ -2786,6 +3049,7 @@ class MainWindow(QMainWindow):
     
     def on_cloudinary_status_received(self, data):
         """Handle Cloudinary status data received from cloud_status"""
+        print(f"[UPLOAD REFRESH] on_cloudinary_status_received called with data length: {len(data) if data else 0}")
         debug_cloudinary(f" Cloudinary status received: {data}")
         if data and len(data) > 0:
             if data[0] == True:  # Status retrieval successful
@@ -2801,13 +3065,15 @@ class MainWindow(QMainWindow):
                     bandwidth = data[10] if len(data) > 10 else "Unknown"
                     debug_cloudinary(f"📊 Account Usage - Storage: {storage_credits}, Transformations: {transformations}, Bandwidth: {bandwidth}")
                     
-                    # Use the correct percentage values from the data (indices 5, 6, 7)
-                    storage_percent = data[5] if len(data) > 5 else 0
-                    transformations_percent = data[6] if len(data) > 6 else 0
-                    bandwidth_percent = data[7] if len(data) > 7 else 0
+                    # Use the correct percentage values from the data - FIXED: Correct mapping
+                    storage_percent = data[6] if len(data) > 6 else 0          # Storage % is at index 6
+                    transformations_percent = data[5] if len(data) > 5 else 0  # Transformations % is at index 5
+                    bandwidth_percent = data[7] if len(data) > 7 else 0        # Bandwidth % is at index 7
                     
                     # Update the CloudinaryCreditsBar if it exists
-                    self.update_credits_bar(storage_percent, transformations_percent, bandwidth_percent)
+                    resources_count = data[4] if len(data) > 4 else 0  # Get number of files from index 4
+                    print(f"[UPLOAD REFRESH] Calling update_credits_bar with resources_count: {resources_count}")
+                    self.update_credits_bar(storage_percent, transformations_percent, bandwidth_percent, resources_count)
             else:
                 debug_cloudinary(f"❌ Cloudinary connection failed: {data}")
                 self._update_cloudinary_ui_status(False, "Connection failed")
@@ -2827,7 +3093,7 @@ class MainWindow(QMainWindow):
             
             while True:
                 resources = cloudinary.api.resources(
-                    type="upload", max_results=100, next_cursor=next_cursor
+                    type="upload", max_results=100, next_cursor=next_cursor, tags=True
                 )
                 all_files.extend(resources['resources'])
                 next_cursor = resources.get('next_cursor')
@@ -2841,12 +3107,18 @@ class MainWindow(QMainWindow):
             print(f"[WARNING] Could not retrieve Cloudinary files for cache: {e}")
             self.cloudinary_files_cache = []
     
-    def update_credits_bar(self, storage_percent, transformations_percent, bandwidth_percent):
-        """Update the CloudinaryCreditsBar with usage data"""
+    def create_colored_label_text(self, color, label_text, percentage):
+        """Create HTML text with a colored square and percentage for credit labels"""
+        return f'<span style="background-color: {color}; color: {color}; border: 1px solid #ccc;">██</span> {label_text} {percentage:.1f}%'
+    
+    def update_credits_bar(self, storage_percent, transformations_percent, bandwidth_percent, resources_count=0):
+        """Update the CloudinaryCreditsBar with usage data and resources count"""
+        print(f"[UPLOAD REFRESH] update_credits_bar called with resources_count: {resources_count}")
         debug_cloudinary(f"main.py update_credits_bar() called with:")
         print(f"  Storage: {storage_percent} (type: {type(storage_percent)})")
         print(f"  Transformations: {transformations_percent} (type: {type(transformations_percent)})")
         print(f"  Bandwidth: {bandwidth_percent} (type: {type(bandwidth_percent)})")
+        print(f"  Resources: {resources_count} (type: {type(resources_count)})")
         
         # Only update if Cloudinary is connected
         if not self.cloudinary_connected:
@@ -2854,7 +3126,8 @@ class MainWindow(QMainWindow):
             return
             
         # Check if this is a duplicate update (same values as last time)
-        current_values = (storage_percent, transformations_percent, bandwidth_percent)
+        # Include resources_count in the comparison to ensure overlay text updates
+        current_values = (storage_percent, transformations_percent, bandwidth_percent, resources_count)
         if hasattr(self, '_last_credits_values') and self._last_credits_values == current_values:
             debug_cloudinary("Credits bar values unchanged - skipping unnecessary update")
             return
@@ -2871,6 +3144,7 @@ class MainWindow(QMainWindow):
                     break
             
             if credits_bar is not None:
+                print(f"[UPLOAD REFRESH] Credits bar found, updating...")
                 # Define colors matching the original Cloudinary app
                 STORAGE_COLOUR = "#b83232"      # Red
                 TRANSFORMATIONS_COLOUR = "#32a4ba"  # Blue  
@@ -2893,12 +3167,42 @@ class MainWindow(QMainWindow):
                 debug_tags(f"Calling setPercentages on credits bar")
                 credits_bar.setPercentages(storage_perc, transformations_perc, bandwidth_perc)
                 
+                # Set the overlay text with resources count
+                if resources_count > 0:
+                    overlay_text = f"{resources_count} online images"
+                    print(f"[UPLOAD REFRESH] Setting overlay text to: '{overlay_text}'")
+                    debug_cloudinary(f"Setting overlay text: '{overlay_text}'")
+                    credits_bar.setOverlayText(overlay_text)
+                else:
+                    print(f"[UPLOAD REFRESH] No overlay text set (resources_count: {resources_count})")
+                    credits_bar.setOverlayText("")  # Clear overlay if no resources
+                
+                # Update the colored legend labels
+                try:
+                    if hasattr(self, 'storageLabel'):
+                        storage_text = self.create_colored_label_text(STORAGE_COLOUR, "Storage", storage_perc)
+                        self.storageLabel.setText(storage_text)
+                        debug_cloudinary(f"Updated storageLabel: {storage_text}")
+                    
+                    if hasattr(self, 'transformationsLabel'):
+                        transformations_text = self.create_colored_label_text(TRANSFORMATIONS_COLOUR, "Transformations", transformations_perc)
+                        self.transformationsLabel.setText(transformations_text)
+                        debug_cloudinary(f"Updated transformationsLabel: {transformations_text}")
+                    
+                    if hasattr(self, 'bandwidthLabel'):
+                        bandwidth_text = self.create_colored_label_text(BANDWIDTH_COLOUR, "Bandwidth", bandwidth_perc)
+                        self.bandwidthLabel.setText(bandwidth_text)
+                        debug_cloudinary(f"Updated bandwidthLabel: {bandwidth_text}")
+                except Exception as label_error:
+                    debug_cloudinary(f"Error updating legend labels: {label_error}")
+                
                 # Store values to prevent duplicate updates
                 self._last_credits_values = current_values
                 
                 debug_cloudinary(f"📊 Credits bar updated - Storage: {storage_perc:.2f}%, Transformations: {transformations_perc:.2f}%, Bandwidth: {bandwidth_perc:.2f}%")
                 
             else:
+                print(f"[UPLOAD REFRESH] Credits bar widget not found!")
                 debug_cloudinary(f"⚠️ Credits bar widget not found in main window")
                 # List all widget attributes for debugging
                 widget_attrs = [attr for attr in dir(self) if not attr.startswith('_') and hasattr(getattr(self, attr, None), 'setVisible')]
