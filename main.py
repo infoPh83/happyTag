@@ -331,7 +331,7 @@ class MainWindow(QMainWindow):
         self.horizontalSlider.setTickPosition(self.horizontalSlider.TicksBelow)
         self.horizontalSlider.setTickInterval(1)  # Show tick marks for each step
         
-        self.MAX_PREVIEW_SIZE = 1200  # Increased from 800 to support larger widget sizes
+        self.MAX_PREVIEW_SIZE = 800  # Optimized preview size for better memory usage and performance
         self.selected_images = set()
         
         # Create progress bar overlay (initially hidden)
@@ -871,13 +871,18 @@ class MainWindow(QMainWindow):
             if et is not None:
                 debug_metadata(f"Reading metadata with ExifTool from: {filename}")
                 
-                # Read date/time fields for year extraction
+                # OPTIMIZATION: Single ExifTool call to get all metadata at once
                 try:
-                    # Try DateTimeOriginal first (when photo was taken)
-                    date_original = et.execute('-DateTimeOriginal', file_path)
-                    if date_original and not date_original.startswith('Warning') and date_original.strip():
-                        for line in date_original.strip().split('\n'):
-                            if 'original' in line.lower() and ':' in line:
+                    # Get all needed metadata in one call
+                    metadata_output = et.execute('-DateTimeOriginal', '-CreateDate', '-IPTC:Keywords', '-XMP:Keywords', '-XMP:Subject', file_path)
+                    
+                    if metadata_output and not metadata_output.startswith('Warning') and metadata_output.strip():
+                        lines = metadata_output.strip().split('\n')
+                        
+                        # Parse year from date fields
+                        for line in lines:
+                            line_lower = line.lower()
+                            if ('original' in line_lower or 'create' in line_lower) and ':' in line:
                                 # Split on the first colon after the field name
                                 parts = line.split(':', 2)  # Split into at most 3 parts
                                 if len(parts) >= 3:
@@ -890,119 +895,40 @@ class MainWindow(QMainWindow):
                                         else:
                                             # Standard format: 2025:08:03 19:09:13
                                             year = datetime.strptime(date_str, '%Y:%m:%d %H:%M:%S').year
-                                        debug_metadata(f"Found DateTimeOriginal year: {year}")
+                                        debug_metadata(f"Found year for {filename}: {year}")
                                         break
                                     except ValueError:
                                         continue
-                    
-                    # Fallback to CreateDate if DateTimeOriginal not found
-                    if not year:
-                        create_date = et.execute('-CreateDate', file_path)
-                        if create_date and not create_date.startswith('Warning') and create_date.strip():
-                            for line in create_date.strip().split('\n'):
-                                if 'create' in line.lower() and ':' in line:
-                                    # Split on the first colon after the field name
-                                    parts = line.split(':', 2)  # Split into at most 3 parts
-                                    if len(parts) >= 3:
-                                        date_str = f"{parts[1]}:{parts[2]}".strip()  # Rejoin the time part
-                                        try:
-                                            # Try parsing with fractional seconds first
-                                            if '.' in date_str and date_str.count(':') == 5:
-                                                # Format: 2025:08:03 19:09:13.67
-                                                year = datetime.strptime(date_str.split('.')[0], '%Y:%m:%d %H:%M:%S').year
-                                            else:
-                                                # Standard format: 2025:08:03 19:09:13
-                                                year = datetime.strptime(date_str, '%Y:%m:%d %H:%M:%S').year
-                                            debug_metadata(f"Found CreateDate year: {year}")
-                                            break
-                                        except ValueError:
-                                            continue
+                        
+                        # Parse keywords from all keyword fields
+                        if self.enable_metadata_reading:
+                            for line in lines:
+                                line_lower = line.lower()
+                                if ('keywords' in line_lower or 'subject' in line_lower) and ':' in line:
+                                    keyword_values = line.split(':', 1)[1].strip()
+                                    
+                                    # Skip empty values
+                                    if not keyword_values or keyword_values == '-':
+                                        continue
                                         
+                                    # Try semicolon separator first, then comma separator
+                                    if ';' in keyword_values:
+                                        split_keywords = [k.strip() for k in keyword_values.split(';') if k.strip()]
+                                        keywords.extend(split_keywords)
+                                    elif ',' in keyword_values:
+                                        split_keywords = [k.strip() for k in keyword_values.split(',') if k.strip()]
+                                        keywords.extend(split_keywords)
+                                    else:
+                                        keywords.append(keyword_values.strip())
+                        
+                        debug_metadata(f"Found keywords for {filename}: {keywords}")
+                        
                 except Exception as e:
-                    debug_errors(f"Date extraction failed: {e}")
-                
-                # Read keywords (existing logic)
-                if self.enable_metadata_reading:
-                    try:
-                        # Try to get IPTC Keywords
-                        iptc_keywords = et.execute('-IPTC:Keywords', file_path)
-                        if iptc_keywords and not iptc_keywords.startswith('Warning') and iptc_keywords.strip():
-                            for line in iptc_keywords.strip().split('\n'):
-                                if 'keywords' in line.lower() and ':' in line:
-                                    keyword_values = line.split(':', 1)[1].strip()
-                                    
-                                    # Try semicolon separator first, then comma separator
-                                    if ';' in keyword_values:
-                                        split_keywords = [k.strip() for k in keyword_values.split(';') if k.strip()]
-                                        keywords.extend(split_keywords)
-                                    elif ',' in keyword_values:
-                                        split_keywords = [k.strip() for k in keyword_values.split(',') if k.strip()]
-                                        keywords.extend(split_keywords)
-                                    else:
-                                        keywords.append(keyword_values.strip())
-                    except Exception as e:
-                        debug_errors(f"IPTC Keywords read failed: {e}")
-                    
-                    try:
-                        # Try to get XMP Keywords  
-                        xmp_keywords = et.execute('-XMP:Keywords', file_path)
-                        if xmp_keywords and not xmp_keywords.startswith('Warning') and xmp_keywords.strip():
-                            for line in xmp_keywords.strip().split('\n'):
-                                if 'keywords' in line.lower() and ':' in line:
-                                    keyword_values = line.split(':', 1)[1].strip()
-                                    
-                                    # Try semicolon separator first, then comma separator
-                                    if ';' in keyword_values:
-                                        split_keywords = [k.strip() for k in keyword_values.split(';') if k.strip()]
-                                        keywords.extend(split_keywords)
-                                    elif ',' in keyword_values:
-                                        split_keywords = [k.strip() for k in keyword_values.split(',') if k.strip()]
-                                        keywords.extend(split_keywords)
-                                    else:
-                                        keywords.append(keyword_values.strip())
-                    except Exception as e:
-                        debug_errors(f"XMP Keywords read failed: {e}")
-                    
-                    try:
-                        # Try to get XMP Subject (Dublin Core - for Windows/cross-platform compatibility)
-                        xmp_subject = et.execute('-XMP:Subject', file_path)
-                        if xmp_subject and not xmp_subject.startswith('Warning') and xmp_subject.strip():
-                            for line in xmp_subject.strip().split('\n'):
-                                if 'subject' in line.lower() and ':' in line:
-                                    keyword_values = line.split(':', 1)[1].strip()
-                                    
-                                    # Try semicolon separator first, then comma separator
-                                    if ';' in keyword_values:
-                                        split_keywords = [k.strip() for k in keyword_values.split(';') if k.strip()]
-                                        keywords.extend(split_keywords)
-                                    elif ',' in keyword_values:
-                                        split_keywords = [k.strip() for k in keyword_values.split(',') if k.strip()]
-                                        keywords.extend(split_keywords)
-                                    else:
-                                        keywords.append(keyword_values.strip())
-                    except Exception as e:
-                        debug_errors(f"XMP Subject read failed: {e}")
-                    
-                    try:
-                        # Try to get XMP-dc:Subject (Dublin Core Subject - for macOS Finder compatibility)
-                        xmp_dc_subject = et.execute('-XMP-dc:Subject', file_path)
-                        if xmp_dc_subject and not xmp_dc_subject.startswith('Warning') and xmp_dc_subject.strip():
-                            for line in xmp_dc_subject.strip().split('\n'):
-                                if 'subject' in line.lower() and ':' in line:
-                                    keyword_values = line.split(':', 1)[1].strip()
-                                    
-                                    # Try semicolon separator first, then comma separator
-                                    if ';' in keyword_values:
-                                        split_keywords = [k.strip() for k in keyword_values.split(';') if k.strip()]
-                                        keywords.extend(split_keywords)
-                                    elif ',' in keyword_values:
-                                        split_keywords = [k.strip() for k in keyword_values.split(',') if k.strip()]
-                                        keywords.extend(split_keywords)
-                                    else:
-                                        keywords.append(keyword_values.strip())
-                    except Exception as e:
-                        debug_errors(f"XMP-dc:Subject read failed: {e}")
-                
+                    debug_errors(f"Single ExifTool call failed for {filename}: {e}")
+                    # Fall back to old method if single call fails
+                    debug_metadata(f"Falling back to individual ExifTool calls for {filename}")
+                    year, keywords = self._get_metadata_fallback(file_path)
+            
             # Fallback to PIL for date if ExifTool not available or didn't find year
             if not year:
                 debug_metadata(f"Using PIL fallback for date extraction: {filename}")
@@ -1010,15 +936,18 @@ class MainWindow(QMainWindow):
                     with Image.open(file_path) as img:
                         # Try to get EXIF data for JPEG files
                         try:
-                            exif = img._getexif()
+                            exif = img.getexif()
                             if exif:
-                                for tag_id in exif:
-                                    tag = TAGS.get(tag_id, tag_id)
-                                    if tag == 'DateTimeOriginal':
-                                        date_str = exif[tag_id]
-                                        year = datetime.strptime(date_str, '%Y:%m:%d %H:%M:%S').year
-                                        break
-                        except (AttributeError, TypeError):
+                                # Look for DateTimeOriginal tag (36867), DateTime (306), or DateTimeDigitized (36868)
+                                datetime_original = exif.get(36867)  # DateTimeOriginal
+                                if not datetime_original:
+                                    datetime_original = exif.get(306)  # DateTime
+                                if not datetime_original:
+                                    datetime_original = exif.get(36868)  # DateTimeDigitized
+                                    
+                                if datetime_original:
+                                    year = datetime.strptime(datetime_original, '%Y:%m:%d %H:%M:%S').year
+                        except (AttributeError, TypeError, ValueError):
                             pass
                         
                         # Try reading XMP metadata directly from TIFF files for date
@@ -1096,6 +1025,108 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
                 
+            return year, []
+
+    def _get_metadata_fallback(self, file_path):
+        """Fallback method using individual ExifTool calls if combined call fails"""
+        try:
+            year = None
+            keywords = []
+            
+            # Get creation date using individual calls
+            creation_date = None
+            for date_tag in ['-DateTimeOriginal', '-CreateDate']:
+                try:
+                    result = self.et.execute(date_tag, file_path)
+                    if result and len(result) > 0:
+                        creation_date = result[0].get(date_tag.replace('-', ''))
+                        if creation_date and creation_date != '-':
+                            break
+                except Exception:
+                    continue
+            
+            # Extract year from creation date
+            if creation_date and creation_date != '-':
+                try:
+                    year = int(creation_date[:4])
+                except (ValueError, TypeError):
+                    pass
+            
+            # Get keywords using individual calls
+            for keyword_tag in ['-IPTC:Keywords', '-XMP:Keywords', '-XMP:Subject']:
+                try:
+                    result = self.et.execute(keyword_tag, file_path)
+                    if result and len(result) > 0:
+                        tag_name = keyword_tag.replace('-', '').replace(':', '.')
+                        keyword_data = result[0].get(tag_name)
+                        if keyword_data:
+                            if isinstance(keyword_data, list):
+                                keywords.extend(keyword_data)
+                            else:
+                                keywords.append(keyword_data)
+                except Exception:
+                    continue
+            
+            # Remove duplicates and clean keywords
+            keywords = list(set([k.strip() for k in keywords if k and k.strip()]))
+            
+            # Fallback to PIL for date extraction if no metadata date found
+            if year is None:
+                debug("metadata", f"Using PIL fallback for date extraction: {os.path.basename(file_path)}")
+                try:
+                    with Image.open(file_path) as img:
+                        # Try to get EXIF data for JPEG files
+                        try:
+                            exif = img.getexif()
+                            if exif:
+                                # Look for DateTimeOriginal tag (36867), DateTime (306), or DateTimeDigitized (36868)
+                                datetime_original = exif.get(36867)  # DateTimeOriginal
+                                if not datetime_original:
+                                    datetime_original = exif.get(306)  # DateTime
+                                if not datetime_original:
+                                    datetime_original = exif.get(36868)  # DateTimeDigitized
+                                    
+                                if datetime_original:
+                                    year = datetime.strptime(datetime_original, '%Y:%m:%d %H:%M:%S').year
+                        except (AttributeError, TypeError, ValueError):
+                            pass
+                        
+                        # Try reading XMP metadata directly from TIFF files for date
+                        if not year and file_path.lower().endswith(('.tif', '.tiff')):
+                            try:
+                                with open(file_path, 'rb') as f:
+                                    content = f.read()
+                                    content_str = content.decode('utf-8', errors='ignore')
+                                    
+                                    create_date_match = re.search(r'<xmp:CreateDate>([^<]+)</xmp:CreateDate>', content_str)
+                                    if create_date_match:
+                                        date_str = create_date_match.group(1)
+                                        if 'T' in date_str:
+                                            date_part = date_str.split('T')[0]
+                                            year = datetime.strptime(date_part, '%Y-%m-%d').year
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+            
+            # Final fallback to file creation date if no metadata date found
+            if year is None:
+                try:
+                    timestamp = os.path.getctime(file_path)
+                    year = datetime.fromtimestamp(timestamp).year
+                except Exception:
+                    pass
+                    
+            return year, keywords
+            
+        except Exception as e:
+            debug("exiftool", f"Fallback metadata extraction failed for {os.path.basename(file_path)}: {e}")
+            # Final fallback to file creation date
+            try:
+                timestamp = os.path.getctime(file_path)
+                year = datetime.fromtimestamp(timestamp).year
+            except Exception:
+                pass
             return year, []
 
     def has_keywords_changed(self, file_path, current_keywords_text):
@@ -1965,19 +1996,41 @@ class MainWindow(QMainWindow):
                     except AttributeError:
                         resample_filter = 1  # LANCZOS constant value
                     
+                    # Handle ICC color profiles that might cause Qt conversion issues
+                    if 'icc_profile' in img.info:
+                        print(f"Image has ICC profile ({len(img.info['icc_profile'])} bytes), removing for Qt compatibility...")
+                        # Clear any cached preview for this image since we're fixing a color profile issue
+                        if file_path in self.image_previews:
+                            print(f"Clearing cached preview for {os.path.basename(file_path)} due to ICC profile fix")
+                            del self.image_previews[file_path]
+                        
+                        img = img.copy()
+                        del img.info['icc_profile']
+                    
                     resized_img = img.resize((width, height), resample_filter)
                     
                     # Convert PIL image to QPixmap based on image mode
                     if resized_img.mode == 'RGBA':
                         qimage = QImage(resized_img.tobytes(), resized_img.width, resized_img.height, QImage.Format_RGBA8888)
+                        pixmap = QPixmap.fromImage(qimage)
                     elif resized_img.mode == 'RGB':
-                        qimage = QImage(resized_img.tobytes(), resized_img.width, resized_img.height, QImage.Format_RGB888)
+                        # Ensure proper RGB byte order for Qt with ICC profile handling
+                        rgb_data = resized_img.tobytes('raw', 'RGB')
+                        qimage = QImage(rgb_data, resized_img.width, resized_img.height, QImage.Format_RGB888)
+                        
+                        # Verify QImage is not null and create QPixmap
+                        if qimage.isNull():
+                            print("ERROR: QImage is null, falling back to QPixmap")
+                            pixmap = QPixmap(file_path)
+                        else:
+                            pixmap = QPixmap.fromImage(qimage)
                     else:
                         # Convert other modes to RGB first
                         resized_img = resized_img.convert('RGB')
-                        qimage = QImage(resized_img.tobytes(), resized_img.width, resized_img.height, QImage.Format_RGB888)
-                    pixmap = QPixmap.fromImage(qimage)
-                    print(f"Used PIL optimization for large image: {orig_width}x{orig_height} -> {width}x{height}")
+                        rgb_data = resized_img.tobytes('raw', 'RGB')
+                        qimage = QImage(rgb_data, resized_img.width, resized_img.height, QImage.Format_RGB888)
+                        pixmap = QPixmap.fromImage(qimage)
+                    print(f"Used PIL optimization for large image: {orig_width}x{orig_height} -> {resized_img.width}x{resized_img.height}")
                 else:
                     # For small images, use the original QPixmap method
                     pixmap = QPixmap(file_path)
