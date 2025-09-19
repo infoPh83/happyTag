@@ -379,14 +379,31 @@ class ImageAssessment(QObject):
                 
                 if not cloudinary_resources:
                     debug_assessment(f"[LIGHTWEIGHT] No Cloudinary resources available")
-                    return False
+                    # Don't return early - we need to cleanup orphaned public_ids when Cloudinary is empty!
+                    debug_cloudinary(f"[LIGHTWEIGHT] Cloudinary cache is EMPTY - treating public_id '{public_id}' as orphaned")
+                else:
+                    # Check if public_id exists in cache
+                    for resource in cloudinary_resources:
+                        if resource.get('public_id') == public_id:
+                            debug_cloudinary(f"[LIGHTWEIGHT] File {os.path.basename(file_path)} is SYNCED (public_id: {public_id})")
+                            return True
+                    
+                    debug_cloudinary(f"[LIGHTWEIGHT] File {os.path.basename(file_path)} has orphaned public_id: {public_id}")
+                    debug_cloudinary(f"[LIGHTWEIGHT] Cache contains {len(cloudinary_resources)} files")
+                    debug_cloudinary(f"[LIGHTWEIGHT] First few public_ids in cache: {[r.get('public_id', 'NO_ID') for r in cloudinary_resources[:3]]}")
                 
-                for resource in cloudinary_resources:
-                    if resource.get('public_id') == public_id:
-                        debug_cloudinary(f"[LIGHTWEIGHT] File {os.path.basename(file_path)} is SYNCED (public_id: {public_id})")
-                        return True
+                # If we reach here, the public_id is orphaned (either cache is empty or public_id not found)
+                debug_cloudinary(f"[LIGHTWEIGHT] About to attempt cleanup for orphaned public_id: {public_id}")
+                if hasattr(self, 'main_app') and self.main_app and hasattr(self.main_app, '_cleanup_orphaned_public_id'):
+                    debug_cloudinary(f"[LIGHTWEIGHT] Cleaning up orphaned public_id: {public_id}")
+                    cleanup_result = self.main_app._cleanup_orphaned_public_id(file_path)
+                    if cleanup_result:
+                        debug_cloudinary(f"[LIGHTWEIGHT] ✅ Successfully cleared orphaned public_id from {os.path.basename(file_path)}")
+                    else:
+                        debug_cloudinary(f"[LIGHTWEIGHT] ❌ Failed to clear orphaned public_id from {os.path.basename(file_path)}")
+                else:
+                    debug_cloudinary(f"[LIGHTWEIGHT] ❌ Cannot access main_app cleanup method")
                 
-                debug_cloudinary(f"[LIGHTWEIGHT] File {os.path.basename(file_path)} has orphaned public_id: {public_id}")
                 return False
                 
             except Exception as e:
@@ -397,7 +414,7 @@ class ImageAssessment(QObject):
             debug_errors(f"[LIGHTWEIGHT] General error for {os.path.basename(file_path)}: {e}")
             return False
 
-    def assess_images_for_upload(self, image_files, ui_tag_data, settings_dialog=None):
+    def assess_images_for_upload(self, image_files, ui_tag_data, settings_dialog=None, metadata_cache=None):
         """
         NEW: Assess images for upload based on UI tag data and Cloudinary sync status.
         This replaces the old assess_images method with redesigned logic.
@@ -406,6 +423,7 @@ class ImageAssessment(QObject):
             image_files: List of file paths to assess
             ui_tag_data: Dict mapping file_path -> list of tags from UI widgets
             settings_dialog: Settings dialog for configuration
+            metadata_cache: Optional dict mapping file_path -> cached metadata (including public_id)
             
         Returns:
             dict: Assessment results with new categorization
@@ -463,34 +481,64 @@ class ImageAssessment(QObject):
                 debug_assessment(f"Analyzing {file_path_obj.name} with UI tags: {ui_tags}")
                 self.log_message(f"Analyzing {file_path_obj.name} with UI tags: {ui_tags}")
                 
-                # Check if file has public_id (already on Cloudinary)
-                cloudinary_public_id = self._get_cloudinary_public_id_from_metadata(file_path)
+                # Check if file has public_id (already on Cloudinary) - use cache first for optimization
+                cloudinary_public_id = None
+                if metadata_cache and file_path in metadata_cache:
+                    # Use cached public_id to avoid redundant ExifTool calls
+                    cloudinary_public_id = metadata_cache[file_path].get('cloudinary_public_id')
+                    debug_assessment(f"Using cached public_id for {file_path_obj.name}: {cloudinary_public_id}")
+                else:
+                    # Fallback to reading metadata if cache not available
+                    cloudinary_public_id = self._get_cloudinary_public_id_from_metadata(file_path)
+                    debug_assessment(f"Read public_id from metadata for {file_path_obj.name}: {cloudinary_public_id}")
                 
                 if cloudinary_public_id:
-                    # File is already on Cloudinary - check if tags match for update-only
+                    # File claims to be on Cloudinary - verify it actually exists
                     debug_cloudinary(f"File {file_path_obj.name} has public_id: {cloudinary_public_id}")
                     
-                    # Get current Cloudinary tags for this file
-                    current_cloudinary_tags = self._get_cloudinary_tags_for_public_id(cloudinary_public_id)
+                    # Get current Cloudinary tags and existence status for this file
+                    cloudinary_result = self._get_cloudinary_tags_for_public_id(cloudinary_public_id)
                     
-                    # Compare UI tags with Cloudinary tags
-                    ui_tags_set = set(ui_tags) if ui_tags else set()
-                    cloudinary_tags_set = set(current_cloudinary_tags) if current_cloudinary_tags else set()
-                    
-                    if ui_tags_set == cloudinary_tags_set:
-                        # Tags match - file is perfectly synced, no action needed
-                        debug_cloudinary(f"File {file_path_obj.name} - tags match, no update needed")
-                        self.already_synced_count += 1
+                    if cloudinary_result['exists']:
+                        # File actually exists on Cloudinary - check if tags match for update-only
+                        current_cloudinary_tags = cloudinary_result['tags']
+                        
+                        # Compare UI tags with Cloudinary tags
+                        ui_tags_set = set(ui_tags) if ui_tags else set()
+                        cloudinary_tags_set = set(current_cloudinary_tags) if current_cloudinary_tags else set()
+                        
+                        if ui_tags_set == cloudinary_tags_set:
+                            # Tags match - file is perfectly synced, no action needed
+                            debug_cloudinary(f"File {file_path_obj.name} - tags match, no update needed")
+                            self.already_synced_count += 1
+                        else:
+                            # Tags don't match - need tag update only (no reupload)
+                            debug_cloudinary(f"File {file_path_obj.name} - tags differ, needs tag update only")
+                            debug_cloudinary(f"  UI tags: {ui_tags_set}")
+                            debug_cloudinary(f"  Cloudinary tags: {cloudinary_tags_set}")
+                            self.files_for_tag_update_only.append({
+                                'file_path': file_path,
+                                'public_id': cloudinary_public_id,
+                                'ui_tags': ui_tags,
+                                'current_cloudinary_tags': current_cloudinary_tags
+                            })
                     else:
-                        # Tags don't match - need tag update only (no reupload)
-                        debug_cloudinary(f"File {file_path_obj.name} - tags differ, needs tag update only")
-                        debug_cloudinary(f"  UI tags: {ui_tags_set}")
-                        debug_cloudinary(f"  Cloudinary tags: {cloudinary_tags_set}")
-                        self.files_for_tag_update_only.append({
+                        # File has public_id but doesn't exist on Cloudinary (404) - clear metadata and re-upload
+                        debug_cloudinary(f"File {file_path_obj.name} - public_id exists but file not found on Cloudinary, clearing metadata and re-uploading")
+                        
+                        # Clear the stale public_id from metadata using main app's cleanup method
+                        if hasattr(self, 'main_app') and self.main_app and hasattr(self.main_app, '_cleanup_orphaned_public_id'):
+                            cleanup_result = self.main_app._cleanup_orphaned_public_id(file_path)
+                            if cleanup_result:
+                                debug_cloudinary(f"Successfully cleared orphaned public_id from {file_path_obj.name}")
+                            else:
+                                debug_cloudinary(f"Failed to clear orphaned public_id from {file_path_obj.name}")
+                        
+                        # Treat as new upload
+                        self.files_not_on_cloudinary.append({
                             'file_path': file_path,
-                            'public_id': cloudinary_public_id,
                             'ui_tags': ui_tags,
-                            'current_cloudinary_tags': current_cloudinary_tags
+                            'original_size': original_size
                         })
                         
                 else:
@@ -569,29 +617,52 @@ class ImageAssessment(QObject):
             return None
             
     def _get_cloudinary_tags_for_public_id(self, public_id):
-        """Get current tags for a file on Cloudinary by public_id"""
+        """
+        Get current tags for a file on Cloudinary by public_id using cached data.
+        This avoids individual API calls by using the pre-loaded Cloudinary files cache.
+        
+        Returns:
+            dict: {'exists': bool, 'tags': list}
+                - exists: True if resource exists on Cloudinary, False if not found in cache
+                - tags: list of tags (empty if no tags or if resource doesn't exist)
+        """
         try:
-            if not self.cloudinary_updater:
-                return []
-                
-            # Use CloudinaryUpdater to get resource info
-            import cloudinary.api
-            
-            # Get resource information from Cloudinary
-            resource = cloudinary.api.resource(public_id, tags=True)
-            
-            if 'tags' in resource:
-                tags = resource['tags']
-                debug_cloudinary(f"Retrieved Cloudinary tags for {public_id}: {tags}")
-                return tags
+            # Use cached Cloudinary files data instead of making individual API calls
+            # This data should already be loaded from the initial bulk API call
+            if hasattr(self, 'cloudinary_files') and self.cloudinary_files:
+                cloudinary_files = self.cloudinary_files
+            elif hasattr(self, 'main_app') and self.main_app and hasattr(self.main_app, 'cloudinary_files_cache'):
+                cloudinary_files = self.main_app.cloudinary_files_cache
+            elif self.cloudinary_updater and hasattr(self.cloudinary_updater, 'cloudinary_files'):
+                cloudinary_files = self.cloudinary_updater.cloudinary_files
             else:
-                debug_cloudinary(f"No tags found for {public_id} on Cloudinary")
-                return []
+                debug_cloudinary(f"No cached Cloudinary files data available - cannot check {public_id}")
+                return {'exists': False, 'tags': []}
+            
+            if not cloudinary_files:
+                debug_cloudinary(f"Cloudinary files cache is empty - cannot check {public_id}")
+                return {'exists': False, 'tags': []}
+            
+            debug_cloudinary(f"Searching cached data for public_id: {public_id} (cache has {len(cloudinary_files)} files)")
+            
+            # Search through cached files for matching public_id
+            for cloudinary_file in cloudinary_files:
+                file_public_id = cloudinary_file.get('public_id', '')
+                if file_public_id == public_id:
+                    # Found the file in cache
+                    tags = cloudinary_file.get('tags', [])
+                    debug_cloudinary(f"Found {public_id} in cache with {len(tags)} tags: {tags}")
+                    return {'exists': True, 'tags': tags}
+            
+            # Not found in cache - file doesn't exist on Cloudinary
+            debug_cloudinary(f"Public_id {public_id} not found in cached Cloudinary files - file doesn't exist")
+            return {'exists': False, 'tags': []}
                 
         except Exception as e:
-            debug_cloudinary(f"Error retrieving Cloudinary tags for {public_id}: {e}")
-            return []
-    
+            debug_cloudinary(f"Error checking cached Cloudinary data for {public_id}: {e}")
+            # On error, assume file doesn't exist to be safe
+            return {'exists': False, 'tags': []}
+                
     def _initialize_cloudinary_data(self, settings_dialog=None):
         """Initialize database and Cloudinary files data - FIXED to only initialize once per session"""
         

@@ -123,8 +123,21 @@ class HappyTagImageManager:
                     print(f"Preview size: {pixmap.width()}x{pixmap.height()}")
                     self.image_previews[file_path] = pixmap
                     
-                    # Read metadata during preview creation (matching existing logic)
-                    year, keywords = self.main_window.get_image_metadata(file_path)
+                    # Check if metadata already exists to avoid duplicate reading
+                    if hasattr(self.main_window, 'image_metadata') and file_path in self.main_window.image_metadata:
+                        year = self.main_window.image_metadata[file_path]['year']
+                        keywords = self.main_window.image_metadata[file_path]['keywords']
+                    else:
+                        # Read metadata during preview creation (matching existing logic)
+                        year, keywords = self.main_window.get_image_metadata(file_path)
+                        
+                        # Store metadata in main window's cache for later use
+                        if not hasattr(self.main_window, 'image_metadata'):
+                            self.main_window.image_metadata = {}
+                        self.main_window.image_metadata[file_path] = {
+                            'year': year,
+                            'keywords': keywords
+                        }
                     
                     # Store metadata (matching existing structure)
                     self.image_metadata[file_path] = {

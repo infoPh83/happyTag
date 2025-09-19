@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (QMainWindow, QApplication, QFileDialog,
                            QWidget, QLabel, QTextEdit, QMessageBox,
                            QVBoxLayout, QGridLayout, QSizePolicy, QProgressBar, QRubberBand, QDialog)
 from PyQt5.QtCore import Qt, QTimer, QSize, QRect, QPoint, QEvent
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtGui import QPixmap, QImage
 from PyQt5 import uic
 from utilities.tag_manager import TagManager
 from utilities.settings_dialog import SettingsDialog
@@ -193,6 +193,28 @@ class MainWindow(QMainWindow):
         uic.loadUi(ui_path, self)
         debug_startup("UI loaded successfully")
         
+        # === CORE UI SETUP (Essential for showing window) ===
+        self._setup_core_ui()
+        
+        # === INITIALIZE BASIC STATE ===
+        self._initialize_basic_state()
+        
+        # === SHOW WINDOW EARLY ===
+        debug_startup("Core UI setup complete - showing window")
+        
+        # === DEFERRED INITIALIZATION (Heavy components loaded in background) ===
+        # Use QTimer to initialize heavy components after window is shown
+        self.initialization_timer = QTimer(self)
+        self.initialization_timer.setSingleShot(True)
+        self.initialization_timer.timeout.connect(self._initialize_heavy_components)
+        self.initialization_timer.start(100)  # Start heavy initialization after 100ms
+        
+        debug_startup("Basic initialization complete - window ready to show")
+
+    def _setup_core_ui(self):
+        """Setup essential UI components needed for window display"""
+        debug_startup("Setting up core UI components...")
+        
         # Initialize resize timer
         self.resize_timer = QTimer(self)
         self.resize_timer.setSingleShot(True)
@@ -225,7 +247,7 @@ class MainWindow(QMainWindow):
             # Delete the old layout
             old_layout.setParent(None)
         
-        # Connect signals
+        # Connect essential signals
         self.actionOpenFiles.triggered.connect(self.open_files)
         self.actionOpen_Folder.triggered.connect(self.open_folder)
         self.horizontalSlider.valueChanged.connect(self.update_layout)
@@ -238,12 +260,22 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'actionSettings'):
             self.actionSettings.triggered.connect(self.show_settings)
         
-        # Connect Cloudinary Sync action
+        # Connect Cloudinary Sync action (will be enabled after initialization)
         if hasattr(self, 'actionSynch_with_Cloudinary'):
             self.actionSynch_with_Cloudinary.triggered.connect(self.start_cloudinary_upload)
+            self.actionSynch_with_Cloudinary.setEnabled(False)  # Disable until Cloudinary is ready
+        
+        # Hide Cloudinary UI area initially (shows placeholder text and confusing values)
+        self._hide_cloudinary_ui_area()
         
         # Setup sort button menu (button is now defined in UI file)
         self.setup_sort_menu()
+        
+        debug_startup("Core UI components setup complete")
+
+    def _initialize_basic_state(self):
+        """Initialize basic application state"""
+        debug_startup("Initializing basic application state...")
         
         # Create the Tags Window action if it doesn't exist
         if not hasattr(self, 'actionTags_Window'):
@@ -251,7 +283,7 @@ class MainWindow(QMainWindow):
             self.actionTags_Window = QAction("Show Tags Window", self)
             self.menuWindow.addAction(self.actionTags_Window)
         
-        # Initialize tag manager as None
+        # Initialize tag manager as None (will be created when needed)
         self.tag_manager = None
         
         # Connect Tags Window action
@@ -306,42 +338,386 @@ class MainWindow(QMainWindow):
         self.progress_overlay = None
         self.progress_bar = None
         
-        # Cloudinary connection status
+        # Initialize component flags
         self.cloudinary_connected = False
-        self.credits_bar_initialized = False  # Flag to track if credits bar has been set up
+        self.cloudinary_cache_populated = False  # Track if we've attempted to populate cache
+        self.credits_bar_initialized = False
+        self.exiftool_available = False
+        self.components_initialized = False
         
-        # Initialize Cloudinary integration
-        self.initialize_cloudinary()
-        
-        # Initialize Image Assessment System (after Cloudinary setup)
-        self.image_assessment = ImageAssessment(cloudinary_updater=self.cloudinary_updater, main_app=self)
-        self.setup_image_assessment_connections()
-        
-        # Initialize Cloudinary Upload Handler (after Cloudinary and Assessment setup)
-        self.upload_handler = CloudinaryUploadHandler(
-            cloudinary_updater=self.cloudinary_updater,
-            image_assessment=self.image_assessment
-        )
-        self.setup_upload_handler_connections()
+        # Initialize placeholders for heavy components (will be created later)
+        self.cloudinary_updater = None
+        self.image_assessment = None
+        self.upload_handler = None
+        self.persistent_exiftool = None
         
         # Track metadata errors for reporting
         self.metadata_errors = []
-        self.unsupported_files = []  # Track files that couldn't be loaded due to unsupported format
-        
-        # Flag to enable/disable metadata reading (can be toggled if causing issues)
+        self.unsupported_files = []
+        self.problematic_files = set()
         self.enable_metadata_reading = True
         
-        # Track files that caused metadata reading issues
-        self.problematic_files = set()
+        debug_startup("Basic application state initialized")
+
+    def _hide_cloudinary_ui_area(self):
+        """Hide Cloudinary UI elements to prevent showing placeholder text during initialization"""
+        try:
+            # Hide secondary widgets but keep the main label visible for status
+            secondary_widgets = [
+                getattr(self, 'storageLabel', None),
+                getattr(self, 'transformationsLabel', None), 
+                getattr(self, 'bandwidthLabel', None),
+                getattr(self, 'creditsBar', None)
+            ]
+            
+            for widget in secondary_widgets:
+                if widget:
+                    widget.setVisible(False)
+            
+            # Show main label with "Connecting..." status
+            if hasattr(self, 'label') and self.label:
+                self.label.setVisible(True)
+                self.label.setText("Connecting to Cloudinary...")
+            
+            debug_startup("Cloudinary secondary widgets hidden, main label shows 'Connecting...'")
+        except Exception as e:
+            debug_errors(f"Error hiding Cloudinary UI area: {e}")
+
+    def _show_cloudinary_ui_area(self):
+        """Show Cloudinary UI elements after successful initialization"""
+        try:
+            # Show individual widgets in the Cloudinary UI area
+            cloudinary_widgets = [
+                ('storageLabel', getattr(self, 'storageLabel', None)),
+                ('transformationsLabel', getattr(self, 'transformationsLabel', None)), 
+                ('bandwidthLabel', getattr(self, 'bandwidthLabel', None)),
+                ('creditsBar', getattr(self, 'creditsBar', None)),
+                ('label', getattr(self, 'label', None))  # "Current Credits Usage" label
+            ]
+            
+            shown_widgets = []
+            for widget_name, widget in cloudinary_widgets:
+                if widget:
+                    widget.setVisible(True)
+                    shown_widgets.append(widget_name)
+                    debug_startup(f"Made {widget_name} visible")
+                else:
+                    debug_startup(f"Widget {widget_name} not found")
+            
+            debug_startup(f"Shown Cloudinary widgets: {shown_widgets}")
+            
+            # Set proper text for the labels after making them visible
+            self._update_cloudinary_label_text()
+            
+            # Force layout update to recalculate size after widgets become visible
+            # Use a timer to ensure the visibility changes are processed first
+            QTimer.singleShot(50, self._refresh_ui_layout)
+            
+            debug_startup("Cloudinary UI widgets shown after initialization")
+        except Exception as e:
+            debug_errors(f"Error showing Cloudinary UI area: {e}")
+
+    def _update_cloudinary_label_text(self):
+        """Update Cloudinary labels with proper text instead of 'TextLabel'"""
+        try:
+            if hasattr(self, 'storageLabel') and self.storageLabel:
+                self.storageLabel.setText("Storage: 0.0%")
+                debug_startup("Updated storageLabel text")
+            
+            if hasattr(self, 'transformationsLabel') and self.transformationsLabel:
+                self.transformationsLabel.setText("Transformations: 4.9%")
+                debug_startup("Updated transformationsLabel text")
+                
+            if hasattr(self, 'bandwidthLabel') and self.bandwidthLabel:
+                self.bandwidthLabel.setText("Bandwidth: 0.0%")
+                debug_startup("Updated bandwidthLabel text")
+        except Exception as e:
+            debug_errors(f"Error updating Cloudinary label text: {e}")
+
+    def _refresh_ui_layout(self):
+        """Force refresh of UI layout to accommodate newly visible widgets"""
+        try:
+            debug_startup("Starting UI layout refresh...")
+            
+            # Force the parent container to recalculate its layout
+            if hasattr(self, 'centralwidget'):
+                self.centralwidget.adjustSize()
+                self.centralwidget.updateGeometry()
+                self.centralwidget.update()
+                debug_startup("Updated centralwidget")
+            
+            # Update the main window
+            self.adjustSize()
+            self.updateGeometry()
+            self.update()
+            debug_startup("Updated main window")
+            
+            # Force immediate layout processing on the grid layout
+            if hasattr(self, 'gridLayout'):
+                self.gridLayout.invalidate()
+                self.gridLayout.activate()
+                debug_startup("Refreshed gridLayout")
+                
+            # Force a repaint to ensure visual updates
+            self.repaint()
+            
+            debug_startup("UI layout refreshed after Cloudinary widgets shown")
+        except Exception as e:
+            debug_errors(f"Error refreshing UI layout: {e}")
+
+    def _force_layout_refresh_after_visibility_change(self):
+        """Force layout refresh specifically after widget visibility changes"""
+        try:
+            print("[LAYOUT FIX] Starting forced layout refresh...")
+            
+            # Store current window size before refresh to prevent shrinking
+            original_size = self.size()
+            print(f"[LAYOUT FIX] Storing original window size: {original_size.width()}x{original_size.height()}")
+            
+            # Update the central widget's layout
+            if hasattr(self, 'centralwidget'):
+                self.centralwidget.adjustSize()
+                self.centralwidget.updateGeometry()
+                print("[LAYOUT FIX] Updated central widget geometry")
+            
+            # Force the grid layout to recalculate without changing main window size
+            if hasattr(self, 'gridLayout'):
+                self.gridLayout.invalidate()
+                self.gridLayout.activate()
+                print("[LAYOUT FIX] Invalidated and activated grid layout")
+            
+            # Update main window geometry but preserve size
+            self.updateGeometry()
+            print("[LAYOUT FIX] Updated main window geometry")
+            
+            # Restore the original window size to prevent shrinking
+            self.resize(original_size)
+            print(f"[LAYOUT FIX] Restored window size to: {original_size.width()}x{original_size.height()}")
+            
+            # Force immediate repaint
+            self.repaint()
+            print("[LAYOUT FIX] Layout refresh completed")
+            
+        except Exception as e:
+            print(f"[LAYOUT FIX] Error in forced layout refresh: {e}")
+            debug_errors(f"Error in forced layout refresh: {e}")
+
+    def _update_cloudinary_ui_status(self, connected, status_message=""):
+        """Update Cloudinary UI status and visibility"""
+        try:
+            debug_startup(f"_update_cloudinary_ui_status called: connected={connected}, message='{status_message}'")
+            
+            # Always show the main label (for status feedback)
+            if hasattr(self, 'label') and self.label:
+                self.label.setVisible(True)
+            
+            if connected:
+                debug_startup("Connection successful - showing all Cloudinary UI elements")
+                
+                # Show all Cloudinary widgets for successful connection
+                cloudinary_widgets = [
+                    ('storageLabel', getattr(self, 'storageLabel', None)),
+                    ('transformationsLabel', getattr(self, 'transformationsLabel', None)), 
+                    ('bandwidthLabel', getattr(self, 'bandwidthLabel', None)),
+                    ('creditsBar', getattr(self, 'creditsBar', None))
+                ]
+                
+                for widget_name, widget in cloudinary_widgets:
+                    if widget:
+                        widget.setVisible(True)
+                        print(f"[LAYOUT FIX] Made {widget_name} visible")
+                
+                # Set main label text for successful connection
+                if hasattr(self, 'label') and self.label:
+                    self.label.setText("Current Credits Usage")
+                
+                # NOTE: Do NOT update the other labels here - that's handled by update_credits_bar()
+                # when real data arrives. This prevents showing placeholder text.
+                
+                # Enable Cloudinary sync action if available
+                if hasattr(self, 'actionSynch_with_Cloudinary'):
+                    self.actionSynch_with_Cloudinary.setEnabled(True)
+                    debug_startup("Enabled Cloudinary sync action")
+                    
+            else:
+                debug_startup(f"Connection failed - showing only main label with error message: {status_message}")
+                
+                # Hide secondary widgets (bar and percentage labels) when not connected
+                secondary_widgets = [
+                    ('storageLabel', getattr(self, 'storageLabel', None)),
+                    ('transformationsLabel', getattr(self, 'transformationsLabel', None)), 
+                    ('bandwidthLabel', getattr(self, 'bandwidthLabel', None)),
+                    ('creditsBar', getattr(self, 'creditsBar', None))
+                ]
+                
+                for widget_name, widget in secondary_widgets:
+                    if widget:
+                        widget.setVisible(False)
+                        print(f"[LAYOUT FIX] Hid {widget_name}")
+                
+                # Set main label text based on the type of failure
+                if hasattr(self, 'label') and self.label:
+                    if "not configured" in status_message.lower():
+                        self.label.setText("Cloudinary not configured")
+                    else:
+                        self.label.setText("Not connected to Cloudinary")
+                
+                # Disable Cloudinary sync action        
+                if hasattr(self, 'actionSynch_with_Cloudinary'):
+                    self.actionSynch_with_Cloudinary.setEnabled(False)
+                
+                debug_startup(f"Cloudinary UI updated with error status: {status_message}")
+                
+            # Only force layout refresh if we're showing widgets (to prevent window shrinking on hide)
+            if connected:
+                self._force_layout_refresh_after_visibility_change()
+            else:
+                # For disconnected state, just update geometry without full refresh
+                if hasattr(self, 'centralwidget'):
+                    self.centralwidget.updateGeometry()
+                self.updateGeometry()
+            
+        except Exception as e:
+            debug_errors(f"Error updating Cloudinary UI status: {e}")
+
+    def _initialize_heavy_components(self):
+        """Initialize heavy components in background after window is shown"""
+        debug_startup("Starting heavy component initialization in background...")
         
-        # Initialize persistent ExifTool instance for better performance
-        self.persistent_exiftool = None
-        self.exiftool_available = False
-        self.init_persistent_exiftool()
+        # Show status in the status bar
+        if hasattr(self, 'statusBar'):
+            self.statusBar().showMessage("Initializing components...")
         
-        # Set initial UI state based on Cloudinary connection status
-        # This ensures the UI is properly initialized even if Cloudinary takes time to connect
-        self._update_cloudinary_ui_status(self.cloudinary_connected)
+        # Initialize components in order of importance
+        try:
+            # 1. Initialize Cloudinary (async)
+            debug_startup("Initializing Cloudinary integration...")
+            self._initialize_cloudinary_async()
+            
+            # 2. Initialize ExifTool (lazy - only when needed)
+            debug_startup("Preparing ExifTool for lazy initialization...")
+            self._prepare_exiftool_lazy()
+            
+            # 3. Initialize Assessment System
+            debug_startup("Initializing Image Assessment System...")
+            self._initialize_assessment_system()
+            
+            # 4. Initialize Upload Handler
+            debug_startup("Initializing Upload Handler...")
+            self._initialize_upload_handler()
+            
+            # Mark components as initialized
+            self.components_initialized = True
+            
+            # Update UI status
+            self._update_cloudinary_ui_status(self.cloudinary_connected, "Ready" if self.cloudinary_connected else "Not connected")
+            
+            if hasattr(self, 'statusBar'):
+                self.statusBar().showMessage("Ready", 2000)  # Show for 2 seconds
+            
+            debug_startup("Heavy component initialization complete")
+            
+        except Exception as e:
+            debug_errors(f"Error during heavy component initialization: {e}")
+            if hasattr(self, 'statusBar'):
+                self.statusBar().showMessage("Initialization error - some features may be limited", 5000)
+
+    def _initialize_cloudinary_async(self):
+        """Initialize Cloudinary integration asynchronously"""
+        # Initialize as disconnected
+        self.cloudinary_connected = False
+        self.cloudinary_updater = None
+        self.cloudinary_files_cache = []  # Global cache for Cloudinary files
+        
+        try:
+            # Get Cloudinary settings from our unified settings system
+            settings = SettingsDialog.get_saved_settings()
+            cloudinary_settings = SettingsDialog.get_cloudinary_settings()
+            
+            debug_cloudinary(f"Retrieved settings: {cloudinary_settings}")
+            
+            # Check if Cloudinary is configured
+            if not SettingsDialog.is_cloudinary_configured():
+                debug_cloudinary("Cloudinary not configured - skipping CloudinaryUpdater setup")
+                debug_cloudinary("Configure Cloudinary settings in File > Settings to enable cloud features")
+                self._update_cloudinary_ui_status(False, "Not configured")
+                return
+            
+            # Create CloudinaryUpdater instance
+            self.cloudinary_updater = CloudinaryUpdater()
+            debug_cloudinary("CloudinaryUpdater instance created successfully")
+            
+            debug_cloudinary("Cloudinary settings found - configuring CloudinaryUpdater...")
+            
+            # Prepare config in the format expected by CloudinaryUpdater
+            cloudinary_config = [
+                cloudinary_settings.get('log_folder', ''),
+                cloudinary_settings.get('cloud_name', ''),
+                cloudinary_settings.get('api_key', ''),
+                cloudinary_settings.get('api_secret', ''),
+                cloudinary_settings.get('max_size', '10')  # Default 10MB
+            ]
+            
+            debug_cloudinary(f"Cloudinary config prepared: {[cloudinary_config[0], cloudinary_config[1], '*****', '*****', cloudinary_config[4]]}")
+            
+            # Configure the CloudinaryUpdater
+            self.cloudinary_updater.setCloudinaryUpdaterConfig(cloudinary_config)
+            debug_cloudinary("CloudinaryUpdater configured successfully")
+            
+            # Test initial connection asynchronously
+            debug_cloudinary("Testing Cloudinary connection asynchronously...")
+            try:
+                # Connect signals to capture the response
+                self.cloudinary_updater.beginning_signal.connect(self.on_cloudinary_status_received)
+                self.cloudinary_updater.update_ui_signal.connect(self.on_cloudinary_ui_update)
+                
+                # Request account status (async)
+                self.cloudinary_updater.cloud_status()
+                debug_cloudinary("Cloudinary status request sent asynchronously")
+                
+            except Exception as conn_error:
+                debug_errors(f"Cloudinary connection test failed: {conn_error}")
+                self._update_cloudinary_ui_status(False, "Connection failed")
+                
+        except Exception as e:
+            debug_errors(f"Failed to initialize Cloudinary integration: {e}")
+            self._update_cloudinary_ui_status(False, "Initialization failed")
+
+    def _prepare_exiftool_lazy(self):
+        """Prepare ExifTool for lazy initialization (only when first needed)"""
+        # Just set the flag - actual initialization happens in get_exiftool()
+        self.exiftool_prepared = True
+        debug_startup("ExifTool prepared for lazy initialization")
+
+    def _initialize_assessment_system(self):
+        """Initialize Image Assessment System"""
+        if not hasattr(self, 'image_assessment') or self.image_assessment is None:
+            self.image_assessment = ImageAssessment(cloudinary_updater=self.cloudinary_updater, main_app=self)
+            self.setup_image_assessment_connections()
+            debug_startup("Image Assessment System initialized")
+
+    def _initialize_upload_handler(self):
+        """Initialize Cloudinary Upload Handler"""
+        if not hasattr(self, 'upload_handler') or self.upload_handler is None:
+            self.upload_handler = CloudinaryUploadHandler(
+                cloudinary_updater=self.cloudinary_updater,
+                image_assessment=self.image_assessment
+            )
+            self.setup_upload_handler_connections()
+            debug_startup("Upload Handler initialized")
+
+    def get_exiftool(self):
+        """Get ExifTool instance, initializing lazily if needed"""
+        if not self.exiftool_available and hasattr(self, 'exiftool_prepared'):
+            debug_startup("Lazy initializing ExifTool on first use...")
+            self.init_persistent_exiftool()
+        return self.persistent_exiftool if self.exiftool_available else None
+
+    def ensure_components_ready(self):
+        """Ensure all components are initialized before use"""
+        if not hasattr(self, 'components_initialized') or not self.components_initialized:
+            debug_startup("Components not ready - initializing synchronously...")
+            self._initialize_heavy_components()
 
     def get_widget_text_field(self, widget):
         """
@@ -471,6 +847,12 @@ class MainWindow(QMainWindow):
 
     def get_image_metadata(self, file_path):
         """Extract year and keywords from image metadata using persistent ExifTool (unified approach)"""
+        # Check cache first to avoid duplicate work
+        if hasattr(self, 'image_metadata') and file_path in self.image_metadata:
+            cached_data = self.image_metadata[file_path]
+            debug_metadata(f"Using cached metadata for {os.path.basename(file_path)}")
+            return cached_data['year'], cached_data['keywords']
+        
         year = None
         keywords = []
         filename = os.path.basename(file_path)
@@ -481,11 +863,13 @@ class MainWindow(QMainWindow):
             return year, keywords
         
         try:
-            if self.exiftool_available and self.persistent_exiftool:
-                debug_metadata(f"Reading metadata with persistent ExifTool from: {filename}")
-                
-                # Use the persistent ExifTool instance (no context manager needed)
-                et = self.persistent_exiftool
+            # Try to get ExifTool instance (triggers lazy initialization if needed)
+            et = self.get_exiftool()
+            
+            debug_metadata(f"ExifTool status check - available: {self.exiftool_available}, persistent: {et is not None}")
+            
+            if et is not None:
+                debug_metadata(f"Reading metadata with ExifTool from: {filename}")
                 
                 # Read date/time fields for year extraction
                 try:
@@ -619,8 +1003,8 @@ class MainWindow(QMainWindow):
                     except Exception as e:
                         debug_errors(f"XMP-dc:Subject read failed: {e}")
                 
-            # Fallback to PIL for date if ExifTool not available
-            elif not year:
+            # Fallback to PIL for date if ExifTool not available or didn't find year
+            if not year:
                 debug_metadata(f"Using PIL fallback for date extraction: {filename}")
                 try:
                     with Image.open(file_path) as img:
@@ -673,6 +1057,27 @@ class MainWindow(QMainWindow):
                 debug_metadata(f"Found year for {filename}: {year}")
             if unique_keywords:
                 debug_metadata(f"Found keywords for {filename}: {unique_keywords}")
+            
+            # Extract and cache Cloudinary public_id for upload optimization
+            cloudinary_public_id = None
+            try:
+                from utilities.exiftool_utils import get_cloudinary_public_id_from_metadata
+                cloudinary_public_id = get_cloudinary_public_id_from_metadata(file_path)
+                if cloudinary_public_id:
+                    debug_metadata(f"Found Cloudinary public_id for {filename}: {cloudinary_public_id}")
+                else:
+                    debug_metadata(f"No Cloudinary public_id found for {filename}")
+            except Exception as e:
+                debug_metadata(f"Failed to extract public_id for {filename}: {e}")
+            
+            # Cache the result for future use (including public_id for upload optimization)
+            if not hasattr(self, 'image_metadata'):
+                self.image_metadata = {}
+            self.image_metadata[file_path] = {
+                'year': year,
+                'keywords': unique_keywords,
+                'cloudinary_public_id': cloudinary_public_id  # Cache for upload phase optimization
+            }
                 
             return year, unique_keywords
                 
@@ -748,10 +1153,28 @@ class MainWindow(QMainWindow):
             debug_cloudinary(f"  Cloudinary cache has {len(cloudinary_files)} files")
             debug_cloudinary(f"  Looking for public_id: '{local_public_id}'")
             
-            if local_public_id not in cloudinary_public_ids:
+            # IMPORTANT: Only consider empty cache as "all orphaned" if we have successfully
+            # connected to Cloudinary AND attempted to populate the cache. This prevents
+            # valid public_ids from being removed during startup before cache is populated.
+            
+            if len(cloudinary_files) == 0 and self.cloudinary_cache_populated:
+                # We've connected and tried to populate cache, but it's empty - so any public_id is orphaned
+                debug_cloudinary(f"  🔥 Cloudinary cache is EMPTY after population attempt - public_ids are orphaned!")
+                debug_cloudinary(f"  ❌ {local_public_id} is orphaned (Cloudinary has no files)")
+                is_orphaned = True
+            elif len(cloudinary_files) == 0:
+                # Cache is empty but we haven't tried to populate it yet - skip cleanup for now
+                debug_cloudinary(f"  ⏳ Cloudinary cache not yet populated - skipping orphaned cleanup for now")
+                return 0
+            elif local_public_id not in cloudinary_public_ids:
                 debug_cloudinary(f"  ❌ Public_id not found in cache - marking as orphaned")
                 debug_cloudinary(f"  Available public_ids: {list(cloudinary_public_ids)[:5]}")  # Show first 5 for debugging
-                
+                is_orphaned = True
+            else:
+                debug_cloudinary(f"  ✅ Public_id found in cache - not orphaned")
+                is_orphaned = False
+            
+            if is_orphaned:
                 # Orphaned public_id - remove it from metadata
                 debug_cloudinary(f"Found orphaned public_id {local_public_id} in {os.path.basename(file_path)} - cleaning up")
                 
@@ -760,13 +1183,14 @@ class MainWindow(QMainWindow):
                     try:
                         # Remove the UserComment field that contains the public_id
                         self.persistent_exiftool.execute("-UserComment=", file_path, "-overwrite_original")
-                        debug_cloudinary(f"Removed orphaned public_id from {os.path.basename(file_path)}")
+                        debug_cloudinary(f"✅ Removed orphaned public_id from {os.path.basename(file_path)}")
                         return 1
                     except Exception as e:
-                        debug_cloudinary(f"Failed to remove orphaned public_id from {file_path}: {e}")
+                        debug_cloudinary(f"❌ Failed to remove orphaned public_id from {file_path}: {e}")
                         return 0
-            else:
-                debug_cloudinary(f"  ✅ Public_id found in cache - not orphaned")
+                else:
+                    debug_cloudinary(f"❌ ExifTool not available for cleanup")
+                    return 0
             
             return 0  # No cleanup needed
             
@@ -1532,26 +1956,53 @@ class MainWindow(QMainWindow):
                         width = orig_width
                         height = orig_height
                 
-                pixmap = QPixmap(file_path).scaled(
-                    width, height,
-                    Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation
-                )
+                # Optimize large image handling: resize with PIL first for better performance
+                if orig_width > self.MAX_PREVIEW_SIZE or orig_height > self.MAX_PREVIEW_SIZE:
+                    # For large images, resize with PIL first (much faster than QPixmap)
+                    try:
+                        # Use LANCZOS for better quality (fallback to older constant for older PIL versions)
+                        resample_filter = getattr(Image.Resampling, 'LANCZOS', getattr(Image, 'LANCZOS', 1))
+                    except AttributeError:
+                        resample_filter = 1  # LANCZOS constant value
+                    
+                    resized_img = img.resize((width, height), resample_filter)
+                    
+                    # Convert PIL image to QPixmap based on image mode
+                    if resized_img.mode == 'RGBA':
+                        qimage = QImage(resized_img.tobytes(), resized_img.width, resized_img.height, QImage.Format_RGBA8888)
+                    elif resized_img.mode == 'RGB':
+                        qimage = QImage(resized_img.tobytes(), resized_img.width, resized_img.height, QImage.Format_RGB888)
+                    else:
+                        # Convert other modes to RGB first
+                        resized_img = resized_img.convert('RGB')
+                        qimage = QImage(resized_img.tobytes(), resized_img.width, resized_img.height, QImage.Format_RGB888)
+                    pixmap = QPixmap.fromImage(qimage)
+                    print(f"Used PIL optimization for large image: {orig_width}x{orig_height} -> {width}x{height}")
+                else:
+                    # For small images, use the original QPixmap method
+                    pixmap = QPixmap(file_path)
+                    print(f"Used QPixmap for small image: {orig_width}x{orig_height}")
                 
                 if not pixmap.isNull():
                     print(f"Preview size: {pixmap.width()}x{pixmap.height()}")
                     self.image_previews[file_path] = pixmap
                     
-                    # Read metadata during preview creation for accurate progress tracking
-                    year, keywords = self.get_image_metadata(file_path)
-                    
-                    # Store metadata with the preview for later use
-                    if not hasattr(self, 'image_metadata'):
-                        self.image_metadata = {}
-                    self.image_metadata[file_path] = {
-                        'year': year,
-                        'keywords': keywords
-                    }
+                    # Check if metadata already exists to avoid duplicate reading
+                    if hasattr(self, 'image_metadata') and file_path in self.image_metadata:
+                        year = self.image_metadata[file_path]['year']
+                        keywords = self.image_metadata[file_path]['keywords']
+                        debug_metadata(f"Using cached metadata for {os.path.basename(file_path)}")
+                    else:
+                        # Read metadata during preview creation for accurate progress tracking
+                        year, keywords = self.get_image_metadata(file_path)
+                        
+                        # Store metadata with the preview for later use
+                        if not hasattr(self, 'image_metadata'):
+                            self.image_metadata = {}
+                        self.image_metadata[file_path] = {
+                            'year': year,
+                            'keywords': keywords
+                        }
                     
                     # Store original keywords for change tracking (should match what will be in UI)
                     if not hasattr(self, 'original_keywords'):
@@ -2200,11 +2651,39 @@ class MainWindow(QMainWindow):
                         existing_tags = ', '.join(all_tags) if all_tags else ''
                         debug_tags(f"Tags for {os.path.basename(file_path)}: year='{year}', keywords={keywords}, final_tags='{existing_tags}'")
                         
+                        # Get public_id directly from ExifTool metadata (no cached_metadata needed!)
+                        from utilities.cloudinary_upload_handler import get_cloudinary_public_id_from_metadata
+                        public_id = get_cloudinary_public_id_from_metadata(file_path)
+                        
+                        # Set original_tags as the current existing_tags (these are from metadata)
+                        original_tags_list = all_tags.copy()
+                        
+                        # Get cloudinary_tags if we have a public_id and Cloudinary connection
+                        cloudinary_tags_list = []
+                        if public_id and hasattr(self, 'cloudinary_files_cache') and self.cloudinary_files_cache:
+                            debug_tags(f"Checking for Cloudinary tags for {os.path.basename(file_path)} with public_id: {public_id}")
+                            for cf in self.cloudinary_files_cache:
+                                if cf.get('public_id') == public_id:
+                                    # Convert Cloudinary tags to list format
+                                    cf_tags = cf.get('tags', [])
+                                    if isinstance(cf_tags, list):
+                                        cloudinary_tags_list = [str(tag).strip() for tag in cf_tags if str(tag).strip()]
+                                    debug_tags(f"Found Cloudinary tags for {os.path.basename(file_path)}: {cloudinary_tags_list}")
+                                    break
+                            if not cloudinary_tags_list:
+                                debug_tags(f"No Cloudinary tags found for {os.path.basename(file_path)} with public_id: {public_id}")
+                        else:
+                            debug_tags(f"Skipping Cloudinary tags lookup for {os.path.basename(file_path)} - public_id: {public_id}, has_cache: {hasattr(self, 'cloudinary_files_cache')}")
+                        
                         image_data.append({
                             'file_path': file_path,
                             'preview': self.image_previews[file_path],
                             'metadata': metadata,
-                            'tags': existing_tags
+                            'tags': existing_tags,
+                            # Enhanced metadata for upload optimization
+                            'public_id': public_id,
+                            'original_tags': original_tags_list,
+                            'cloudinary_tags': cloudinary_tags_list
                         })
                     else:
                         print(f"Warning: No preview available for {file_path}, skipping...")
@@ -2723,27 +3202,6 @@ class MainWindow(QMainWindow):
             self.cloudinary_connected = False
             self._update_cloudinary_ui_status(False, "Initialization failed")
     
-    def _update_cloudinary_ui_status(self, connected, status_message=""):
-        """Update UI elements based on Cloudinary connection status"""
-        self.cloudinary_connected = connected
-        
-        try:
-            # Update the label text
-            if hasattr(self, 'label'):
-                if connected:
-                    self.label.setText("Current Credits Usage")
-                else:
-                    self.label.setText("Not connected to Cloudinary")
-            
-            # Update credits bar visibility
-            if hasattr(self, 'creditsBar'):
-                self.creditsBar.setVisible(connected)
-                
-            debug_cloudinary(f" Cloudinary UI status updated - Connected: {connected}, Message: {status_message}")
-            
-        except Exception as e:
-            debug_cloudinary(f"Error updating Cloudinary UI status: {str(e)}")
-    
     def update_cloudinary_status_for_loaded_images(self):
         """Check and update Cloudinary sync status for all currently loaded images"""
         if not hasattr(self.image_flow_manager, 'image_widgets') or not self.image_flow_manager.image_widgets:
@@ -2815,72 +3273,79 @@ class MainWindow(QMainWindow):
     
     def run_upload_assessment(self):
         """
-        Run NEW assessment for upload phase only.
-        This extracts UI tags and generates the new categorized lists needed by upload handler.
-        Called on-demand when user initiates upload, not during loading for faster performance.
+        Run SIMPLIFIED widget-based assessment for upload phase.
+        Uses widget methods to determine upload needs - NO ExifTool calls!
         """
-        debug_upload("Running NEW on-demand assessment for upload phase...")
+        debug_upload("Running SIMPLIFIED widget-based assessment for upload phase...")
         
-        if not self.image_assessment or not self.cloudinary_updater:
-            debug_upload("ERROR: ImageAssessment or CloudinaryUpdater not available")
-            return False
-            
-        if not self.image_files:
-            debug_upload("ERROR: No images loaded for assessment")
+        if not hasattr(self, 'image_flow_manager') or not self.image_flow_manager.image_widgets:
+            debug_upload("ERROR: No image widgets available for assessment")
             return False
         
         try:
-            # Create settings dialog for assessment configuration
-            from utilities.settings_dialog import SettingsDialog
-            settings_dialog = SettingsDialog(self)
+            # Initialize assessment results using widget data
+            files_for_tag_update_only = []
+            files_not_on_cloudinary = []
+            already_synced_count = 0
             
-            # Reset assessment lists for fresh upload assessment
-            self.image_assessment.reset_assessment_lists()
+            debug_upload(f"Analyzing {len(self.image_flow_manager.image_widgets)} widgets for upload...")
             
-            # Extract UI tags for each file from the image widgets
-            ui_tag_data = {}
-            if hasattr(self, 'image_flow_manager') and self.image_flow_manager.image_widgets:
-                debug_upload("Extracting tags from UI widgets...")
-                for file_path, widget in self.image_flow_manager.image_widgets.items():
-                    if hasattr(widget, 'get_tags'):
-                        tags = widget.get_tags()
-                        if isinstance(tags, str):
-                            # Split comma-separated string into list
-                            ui_tag_data[file_path] = [tag.strip() for tag in tags.split(',') if tag.strip()]
-                        elif isinstance(tags, list):
-                            ui_tag_data[file_path] = [str(tag).strip() for tag in tags if str(tag).strip()]
-                        else:
-                            ui_tag_data[file_path] = []
-                        debug_upload(f"UI tags for {os.path.basename(file_path)}: {ui_tag_data[file_path]}")
-                    else:
-                        ui_tag_data[file_path] = []
-            else:
-                debug_upload("WARNING: No image widgets found - using empty tag data")
-                for file_path in self.image_files:
-                    ui_tag_data[file_path] = []
-            
-            # Run NEW assessment on all loaded images with UI tag data
-            debug_upload(f"Running NEW assessment on {len(self.image_files)} images with UI tags")
-            assessment_result = self.image_assessment.assess_images_for_upload(
-                self.image_files, ui_tag_data, settings_dialog
-            )
-            
-            if assessment_result:
-                tag_update_count = len(assessment_result.get('files_for_tag_update_only', []))
-                new_upload_count = len(assessment_result.get('files_not_on_cloudinary', []))
-                synced_count = assessment_result.get('already_synced_count', 0)
+            # Analyze each widget to determine upload needs
+            for file_path, widget in self.image_flow_manager.image_widgets.items():
+                # Get current UI tags
+                ui_tags = widget.get_tags()
+                ui_tags_list = [tag.strip() for tag in ui_tags] if isinstance(ui_tags, list) else [tag.strip() for tag in str(ui_tags).split(',') if tag.strip()]
                 
-                debug_upload(f"NEW upload assessment complete:")
-                debug_upload(f"  Files needing tag updates only: {tag_update_count}")
-                debug_upload(f"  Files not on Cloudinary (resize+upload): {new_upload_count}")
-                debug_upload(f"  Files already synced (no action): {synced_count}")
-                return True
-            else:
-                debug_upload("ERROR: NEW assessment failed during upload preparation")
-                return False
+                debug_upload(f"Widget analysis for {os.path.basename(file_path)}: UI tags = {ui_tags_list}")
+                
+                # Check if image has a public_id (is on Cloudinary)
+                public_id = widget.get_cloudinary_public_id()
+                
+                if public_id:
+                    # Image is on Cloudinary - check if tags need updating
+                    debug_upload(f"  Has public_id: {public_id}")
+                    
+                    if widget.ui_tags_match_cloudinary():
+                        # Tags match - no action needed
+                        debug_upload(f"  Tags match Cloudinary - no action needed")
+                        already_synced_count += 1
+                    else:
+                        # Tags don't match - needs tag update only
+                        debug_upload(f"  Tags differ from Cloudinary - needs tag update")
+                        debug_upload(f"    UI tags: {ui_tags_list}")
+                        debug_upload(f"    Cloudinary tags: {widget.get_cloudinary_tags()}")
+                        
+                        files_for_tag_update_only.append({
+                            'file_path': file_path,
+                            'public_id': public_id,
+                            'ui_tags': ui_tags_list,
+                            'current_cloudinary_tags': widget.get_cloudinary_tags()
+                        })
+                else:
+                    # Image is NOT on Cloudinary - needs full upload
+                    debug_upload(f"  No public_id - needs full upload")
+                    
+                    files_not_on_cloudinary.append({
+                        'file_path': file_path,
+                        'ui_tags': ui_tags_list,
+                        'original_size': os.path.getsize(file_path) if os.path.exists(file_path) else 0
+                    })
+            
+            # Store results in image_assessment for compatibility with upload handler
+            self.image_assessment.files_for_tag_update_only = files_for_tag_update_only
+            self.image_assessment.files_not_on_cloudinary = files_not_on_cloudinary
+            self.image_assessment.already_synced_count = already_synced_count
+            
+            # Log summary
+            debug_upload(f"SIMPLIFIED widget-based assessment complete:")
+            debug_upload(f"  Files needing tag updates only: {len(files_for_tag_update_only)}")
+            debug_upload(f"  Files not on Cloudinary (full upload): {len(files_not_on_cloudinary)}")
+            debug_upload(f"  Files already synced (no action): {already_synced_count}")
+            
+            return True
                 
         except Exception as e:
-            debug_upload(f"ERROR: Exception during NEW upload assessment: {e}")
+            debug_upload(f"ERROR: Exception during SIMPLIFIED widget-based assessment: {e}")
             return False
     
     def start_cloudinary_upload(self):
@@ -3069,6 +3534,10 @@ class MainWindow(QMainWindow):
         if data and len(data) > 0:
             if data[0] == True:  # Status retrieval successful
                 debug_cloudinary(f"✅ Cloudinary connection successful!")
+                debug_startup("Showing Cloudinary UI after successful connection")
+                
+                # IMPORTANT: Set the connection flag to True
+                self.cloudinary_connected = True
                 self._update_cloudinary_ui_status(True, "Connected")
                 
                 # Retrieve Cloudinary files list once at initialization
@@ -3091,9 +3560,11 @@ class MainWindow(QMainWindow):
                     self.update_credits_bar(storage_percent, transformations_percent, bandwidth_percent, resources_count)
             else:
                 debug_cloudinary(f"❌ Cloudinary connection failed: {data}")
+                self.cloudinary_connected = False
                 self._update_cloudinary_ui_status(False, "Connection failed")
         else:
             debug_cloudinary(f"❌ No data received from Cloudinary")
+            self.cloudinary_connected = False
             self._update_cloudinary_ui_status(False, "No response")
     
     def _retrieve_cloudinary_files_cache(self):
@@ -3116,15 +3587,51 @@ class MainWindow(QMainWindow):
                     break
             
             self.cloudinary_files_cache = all_files
+            self.cloudinary_cache_populated = True  # Mark that we've attempted to populate the cache
             debug_cloudinary(f"✅ Cached {len(self.cloudinary_files_cache)} files from Cloudinary for global use")
+            
+            # Update widget cloudinary_tags now that cache is loaded
+            self._populate_widget_cloudinary_tags()
             
         except Exception as e:
             print(f"[WARNING] Could not retrieve Cloudinary files for cache: {e}")
             self.cloudinary_files_cache = []
+            self.cloudinary_cache_populated = True  # Mark that we attempted even if it failed
     
     def create_colored_label_text(self, color, label_text, percentage):
         """Create HTML text with a colored square and percentage for credit labels"""
         return f'<span style="background-color: {color}; color: {color}; border: 1px solid #ccc;">██</span> {label_text} {percentage:.1f}%'
+
+    def _populate_widget_cloudinary_tags(self):
+        """Populate cloudinary_tags in widgets after Cloudinary cache is loaded"""
+        if not hasattr(self, 'image_flow_manager') or not self.image_flow_manager:
+            debug_cloudinary("No image_flow_manager available to populate cloudinary_tags")
+            return
+            
+        if not hasattr(self, 'cloudinary_files_cache') or not self.cloudinary_files_cache:
+            debug_cloudinary("No cloudinary_files_cache available to populate cloudinary_tags")
+            return
+            
+        debug_cloudinary(f"Populating cloudinary_tags in {len(self.image_flow_manager.image_widgets)} widgets from {len(self.cloudinary_files_cache)} cached files")
+        
+        for file_path, widget in self.image_flow_manager.image_widgets.items():
+            public_id = widget.get_cloudinary_public_id()
+            if not public_id:
+                continue
+                
+            # Find matching Cloudinary file
+            for cf in self.cloudinary_files_cache:
+                if cf.get('public_id') == public_id:
+                    cf_tags = cf.get('tags', [])
+                    if isinstance(cf_tags, list):
+                        cloudinary_tags_list = [str(tag).strip() for tag in cf_tags if str(tag).strip()]
+                        widget.set_cloudinary_tags(cloudinary_tags_list)
+                        debug_cloudinary(f"✅ Populated cloudinary_tags for {os.path.basename(widget.file_path)}: {cloudinary_tags_list}")
+                    break
+            else:
+                debug_cloudinary(f"⚠️ No Cloudinary file found for {os.path.basename(widget.file_path)} with public_id: {public_id}")
+        
+        debug_cloudinary("Finished populating cloudinary_tags in widgets")
     
     def update_credits_bar(self, storage_percent, transformations_percent, bandwidth_percent, resources_count=0):
         """Update the CloudinaryCreditsBar with usage data and resources count"""
@@ -3194,21 +3701,46 @@ class MainWindow(QMainWindow):
                 
                 # Update the colored legend labels
                 try:
+                    # First, ensure the labels are visible (they might be hidden from startup)
+                    cloudinary_widgets = [
+                        ('storageLabel', getattr(self, 'storageLabel', None)),
+                        ('transformationsLabel', getattr(self, 'transformationsLabel', None)), 
+                        ('bandwidthLabel', getattr(self, 'bandwidthLabel', None)),
+                        ('label', getattr(self, 'label', None))  # "Current Credits Usage" label
+                    ]
+                    
+                    # Make widgets visible and update their text
+                    for widget_name, widget in cloudinary_widgets:
+                        if widget:
+                            if not widget.isVisible():
+                                widget.setVisible(True)
+                                print(f"[LAYOUT FIX] Made {widget_name} visible")
+                            else:
+                                print(f"[LAYOUT FIX] {widget_name} was already visible")
+                        else:
+                            print(f"[LAYOUT FIX] Widget {widget_name} not found")
+                    
                     if hasattr(self, 'storageLabel'):
                         storage_text = self.create_colored_label_text(STORAGE_COLOUR, "Storage", storage_perc)
                         self.storageLabel.setText(storage_text)
-                        debug_cloudinary(f"Updated storageLabel: {storage_text}")
+                        print(f"[LAYOUT FIX] Updated storageLabel: {storage_text}")
                     
                     if hasattr(self, 'transformationsLabel'):
                         transformations_text = self.create_colored_label_text(TRANSFORMATIONS_COLOUR, "Transformations", transformations_perc)
                         self.transformationsLabel.setText(transformations_text)
-                        debug_cloudinary(f"Updated transformationsLabel: {transformations_text}")
+                        print(f"[LAYOUT FIX] Updated transformationsLabel: {transformations_text}")
                     
                     if hasattr(self, 'bandwidthLabel'):
                         bandwidth_text = self.create_colored_label_text(BANDWIDTH_COLOUR, "Bandwidth", bandwidth_perc)
                         self.bandwidthLabel.setText(bandwidth_text)
-                        debug_cloudinary(f"Updated bandwidthLabel: {bandwidth_text}")
+                        print(f"[LAYOUT FIX] Updated bandwidthLabel: {bandwidth_text}")
+                        
+                    # Force layout refresh after making widgets visible and updating text
+                    print("[LAYOUT FIX] Calling layout refresh...")
+                    self._force_layout_refresh_after_visibility_change()
+                        
                 except Exception as label_error:
+                    print(f"[LAYOUT FIX] Error updating legend labels: {label_error}")
                     debug_cloudinary(f"Error updating legend labels: {label_error}")
                 
                 # Store values to prevent duplicate updates

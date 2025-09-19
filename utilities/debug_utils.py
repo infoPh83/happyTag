@@ -26,30 +26,30 @@ from typing import Callable, Dict, Optional
 # Base configuration
 ##############################
 
-# Debug configuration - default state (conservative: enable only core categories)
+# Debug configuration - default state (temporarily enabled for performance analysis)
 DEBUG_CONFIG: Dict[str, bool] = {
     # Image display and widget management
-    'image_display': False,   # Widget sizing, scaling, dimensions, colors
-    'layout': False,          # Flow layout, positioning, widget arrangement
+    'image_display': True,    # Widget sizing, scaling, dimensions, colors
+    'layout': True,           # Flow layout, positioning, widget arrangement
 
     # Content and metadata
-    'tags': False,            # Tag handling, metadata extraction, keywords
-    'metadata': False,        # ExifTool operations, file metadata reading
+    'tags': True,             # Tag handling, metadata extraction, keywords
+    'metadata': True,         # ExifTool operations, file metadata reading
 
     # External services
-    'cloudinary': False,      # Cloudinary API calls, sync operations, uploads
+    'cloudinary': True,       # Cloudinary API calls, sync operations, uploads
         # Analysis and processing
-    'assessment': False,      # Image assessment, Cloudinary sync status
-    'upload': False,          # Cloudinary upload phase, file transfers
+    'assessment': True,       # Image assessment, Cloudinary sync status
+    'upload': True,           # Cloudinary upload phase, file transfers
 
     # Performance and resources
-    'memory': False,          # Memory usage, resource monitoring
-    'timers': False,          # Timer operations, callbacks, cleanup
+    'memory': True,           # Memory usage, resource monitoring
+    'timers': True,           # Timer operations, callbacks, cleanup
 
     # User interactions
-    'ui_events': False,       # Mouse clicks, selections, user actions
+    'ui_events': True,        # Mouse clicks, selections, user actions
         # Application workflow
-    'file_ops': False,        # File operations, processing workflow
+    'file_ops': True,         # File operations, processing workflow
 
     # System level
     'startup': True,          # Application initialization
@@ -83,9 +83,10 @@ def set_level(level: str):
     if level_u in _LEVELS:
         _current_level_name = level_u
         _current_level = _LEVELS[level_u]
-        debug_print('startup', f"Debug level set to {_current_level_name}", force=True)
+        # Avoid circular dependency by using print directly during early initialization
+        print(f"[STARTUP] Debug level set to {_current_level_name}")
     else:
-        debug_print('errors', f"Unknown debug level: {level}", force=True)
+        print(f"[ERROR] Unknown debug level: {level}")
 
 def register_category(name: str, enabled: bool = False):
     """Register a new debug category at runtime if it does not exist."""

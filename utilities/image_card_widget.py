@@ -42,6 +42,11 @@ class ImageCardWidget(QWidget):
         self.metadata = {}
         self.tags = []
         
+        # Enhanced metadata storage for upload optimization
+        self.cloudinary_public_id = None  # Cloudinary public_id for this image
+        self.original_tags = []  # Tags as they were saved to disk/metadata
+        self.cloudinary_tags = []  # Tags as they exist on Cloudinary
+        
         # UI components
         self.image_label = None
         self.filename_label = None  # Add filename label
@@ -903,6 +908,43 @@ class ImageCardWidget(QWidget):
     def get_cloudinary_status(self):
         """Get current Cloudinary sync status"""
         return self.is_on_cloudinary
+    
+    # Enhanced metadata storage methods for upload optimization
+    def set_cloudinary_public_id(self, public_id):
+        """Set the Cloudinary public_id for this image"""
+        self.cloudinary_public_id = public_id
+        
+    def get_cloudinary_public_id(self):
+        """Get the Cloudinary public_id for this image"""
+        return self.cloudinary_public_id
+        
+    def set_original_tags(self, tags):
+        """Set the original tags as they were saved to disk/metadata"""
+        self.original_tags = tags if isinstance(tags, list) else ([tags] if tags else [])
+        
+    def get_original_tags(self):
+        """Get the original tags as they were saved to disk/metadata"""
+        return self.original_tags.copy()
+        
+    def set_cloudinary_tags(self, tags):
+        """Set the tags as they exist on Cloudinary"""
+        self.cloudinary_tags = tags if isinstance(tags, list) else ([tags] if tags else [])
+        
+    def get_cloudinary_tags(self):
+        """Get the tags as they exist on Cloudinary"""
+        return self.cloudinary_tags.copy()
+        
+    def ui_tags_match_original(self):
+        """Check if current UI tags match the original saved tags"""
+        current_ui_tags = set(self.get_tags())
+        original_tags_set = set(self.original_tags)
+        return current_ui_tags == original_tags_set
+        
+    def ui_tags_match_cloudinary(self):
+        """Check if current UI tags match the Cloudinary tags"""
+        current_ui_tags = set(self.get_tags())
+        cloudinary_tags_set = set(self.cloudinary_tags)
+        return current_ui_tags == cloudinary_tags_set
     
     def _update_visual_style(self):
         """Update visual style based on selection state and Cloudinary sync status"""
