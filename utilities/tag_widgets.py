@@ -1,13 +1,14 @@
 from PyQt5.QtWidgets import QWidget, QPushButton, QSizePolicy, QLayout, QWidgetItem
 from PyQt5.QtGui import QPalette, QColor
 from PyQt5.QtCore import Qt, QSize, QRect, QPoint
+from .debug_utils import debug_tag_widgets
 
 class TagButton(QPushButton):
     def __init__(self, text, color, parent=None):
         super().__init__(text, parent)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         
-        print(f"[DEBUG TagButton] Creating TagButton with text='{text}', color='{color}'")
+        debug_tag_widgets(f"Creating TagButton with text='{text}', color='{color}'")
         
         # Set background color with some transparency
         bg_color = QColor(color)
@@ -16,7 +17,7 @@ class TagButton(QPushButton):
         hover_color = QColor(color)
         hover_color.setAlpha(230)  # 90% opacity
         
-        print(f"[DEBUG TagButton] bg_color={bg_color.name(QColor.HexArgb)}, hover_color={hover_color.name(QColor.HexArgb)}")
+        debug_tag_widgets(f"bg_color={bg_color.name(QColor.HexArgb)}, hover_color={hover_color.name(QColor.HexArgb)}")
         
         # Style the button with modern look and explicit border-radius
         self.setStyleSheet(f"""

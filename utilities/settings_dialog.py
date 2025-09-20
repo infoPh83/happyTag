@@ -5,6 +5,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import QDialog, QFileDialog, QMessageBox
 from PyQt5.QtCore import Qt
 from PyQt5 import uic
+from .debug_utils import debug_ui_events, debug_errors
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -291,7 +292,7 @@ class SettingsDialog(QDialog):
             settings_file = get_settings_file_path()
             with open(settings_file, 'wb') as f:
                 pickle.dump(settings, f)
-            print(f"Settings saved to: {settings_file}")
+            debug_ui_events(f"Settings saved to: {settings_file}")
         except Exception as e:
             QMessageBox.warning(self, "Save Error", f"Could not save settings: {str(e)}")
             
@@ -361,7 +362,7 @@ class SettingsDialog(QDialog):
                 self.set_initial_placeholders()
                         
         except Exception as e:
-            print(f"Could not load settings: {str(e)}")
+            debug_errors(f"Could not load settings: {str(e)}")
             # Set initial placeholder text on error
             self.set_initial_placeholders()
             
@@ -423,7 +424,7 @@ class SettingsDialog(QDialog):
                     settings = pickle.load(f)
                 return settings
         except Exception as e:
-            print(f"Could not load settings: {str(e)}")
+            debug_errors(f"Could not load settings: {str(e)}")
         return {
             # HappyTag settings
             'b2b_final_path': '', 

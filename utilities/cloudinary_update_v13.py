@@ -8,6 +8,7 @@ import cloudinary.uploader
 import cloudinary.api
 from cloudinary.api import usage
 import requests
+from .debug_utils import debug_cloudinary, debug_business, debug_errors
 from requests.auth import HTTPBasicAuth
 import os
 import sys
@@ -132,14 +133,14 @@ class CloudinaryUpdater(QObject):
             # Prevent propagation to root logger to avoid console duplication
             self.file_logger.propagate = False
             
-            print(f"[DEBUG] CloudinaryUpdater file logging enabled: {log_file_path}")
+            debug_cloudinary(f"CloudinaryUpdater file logging enabled: {log_file_path}")
             
         except Exception as e:
-            print(f"[ERROR] Failed to setup CloudinaryUpdater file logging: {e}")
+            debug_errors(f"Failed to setup CloudinaryUpdater file logging: {e}")
             self.file_logger = None
 
     def setCloudinaryUpdaterConfig(self, cloudinary_config):
-        print(f"IN CLODINARY UPDATE 6: Cloudinary config: {cloudinary_config}")
+        debug_cloudinary(f"CloudinaryUpdater initialization with config: {cloudinary_config}")
         self.logFilePath = cloudinary_config[0]
         self.cloudName = cloudinary_config[1]
         self.apiKey = cloudinary_config[2]
@@ -153,7 +154,7 @@ class CloudinaryUpdater(QObject):
             api_secret=self.apiSecret
         )
 
-        print(f"CLODINARY UPDATE VARIABLES: Cloudinary config: {self.logFilePath}, {self.cloudName}, {self.apiKey}, {self.apiSecret}, {self.maxFileSize}")
+        debug_cloudinary(f"CloudinaryUpdater variables: {self.logFilePath}, {self.cloudName}, {self.apiKey}, *****, {self.maxFileSize}")
 
     def log_message(self, message, level="INFO"):
         """Log message to both console and log file"""
@@ -183,7 +184,7 @@ class CloudinaryUpdater(QObject):
                 self.log_file_handle.write(f"\n{formatted_message}")
                 self.log_file_handle.flush()
             except Exception as e:
-                print(f"[ERROR] Failed to write to legacy log file: {e}")
+                debug_errors(f"Failed to write to legacy log file: {e}")
             self.log_file_handle.flush()  # Ensure immediate write
 
     def sync_files_signal(self, folder, mode):
@@ -253,7 +254,7 @@ class CloudinaryUpdater(QObject):
             try:
                 shutil.rmtree(self.resized_dir, ignore_errors=True)
             except PermissionError as e:
-                print(f"Error in deleting tmp folder: {e}")
+                debug_errors(f"Error in deleting tmp folder: {e}")
         self.resized_dir.mkdir(parents=True, exist_ok=True)
 
         try:
@@ -276,7 +277,7 @@ class CloudinaryUpdater(QObject):
                 # For folder modes, show the directory path as before
                 self.log_message(f"Mode: {sync_files_mode} | Directory: {local_directory}")
 
-            print("")
+            debug_cloudinary("")
             logging.info("Checking the folder...")
 
             # List all files from Cloudinary
@@ -503,19 +504,19 @@ class CloudinaryUpdater(QObject):
                         
         except Exception as e:
             self.database = {}
-            print(f"Warning: Could not load database: {e}")
+            debug_errors(f"Warning: Could not load database: {e}")
 
 
 def get_actual_resource_count(cloudinary_updater_instance):
     """Get the actual count of resources by fetching and counting them ourselves."""
     try:
-        print(f"[DEBUG] Getting actual resource count by fetching all assets...")
+        debug_business(f"Getting actual resource count by fetching all assets...")
         
         total_assets = 0
         
         # Method 1: Count all assets by actually fetching them (most reliable)
         try:
-            print(f"[DEBUG] Fetching all resources to count them...")
+            debug_business(f"Fetching all resources to count them...")
             next_cursor = None
             batch_count = 0
             
@@ -534,7 +535,7 @@ def get_actual_resource_count(cloudinary_updater_instance):
                 total_assets += assets_in_batch
                 batch_count += 1
                 
-                print(f"[DEBUG] Batch {batch_count}: {assets_in_batch} assets (total so far: {total_assets})")
+                debug_business(f"Batch {batch_count}: {assets_in_batch} assets (total so far: {total_assets})")
                 
                 # Check if there are more pages
                 next_cursor = resources_response.get('next_cursor')
@@ -543,13 +544,13 @@ def get_actual_resource_count(cloudinary_updater_instance):
                 
                 # Safety limit to prevent infinite loops
                 if batch_count > 100:  # Max 10,000 assets
-                    print(f"[DEBUG] Safety limit reached after {batch_count} batches")
+                    debug_business(f"Safety limit reached after {batch_count} batches")
                     break
             
-            print(f"[DEBUG] Method 1 - Counted {total_assets} assets by fetching all resources")
+            debug_business(f"Method 1 - Counted {total_assets} assets by fetching all resources")
             
         except Exception as e:
-            print(f"[DEBUG] Method 1 (fetch count) failed: {e}")
+            debug_errors(f"Method 1 (fetch count) failed: {e}")
             total_assets = 0
         
         # Method 2: Fallback to total_count from a single API call
@@ -557,9 +558,9 @@ def get_actual_resource_count(cloudinary_updater_instance):
             try:
                 resources_response = cloudinary.api.resources(max_results=1)
                 total_assets = resources_response.get('total_count', 0)
-                print(f"[DEBUG] Method 2 - Using total_count from API: {total_assets}")
+                debug_cloudinary(f"Method 2 - Using total_count from API: {total_assets}")
             except Exception as e:
-                print(f"[DEBUG] Method 2 (total_count) failed: {e}")
+                debug_errors(f"Method 2 (total_count) failed: {e}")
                 total_assets = 0
         
         # Method 3: Try specific resource types if general count failed
@@ -591,33 +592,33 @@ def get_actual_resource_count(cloudinary_updater_instance):
                     pass
                 
                 total_assets = image_count + raw_count + video_count
-                print(f"[DEBUG] Method 3 - By resource types: {total_assets} (images: {image_count}, raw: {raw_count}, video: {video_count})")
+                debug_cloudinary(f"Method 3 - By resource types: {total_assets} (images: {image_count}, raw: {raw_count}, video: {video_count})")
                 
             except Exception as e:
-                print(f"[DEBUG] Method 3 (by type) failed: {e}")
+                debug_errors(f"Method 3 (by type) failed: {e}")
                 total_assets = 0
         
-        print(f"[DEBUG] Final counted resource count: {total_assets}")
+        debug_business(f"Final counted resource count: {total_assets}")
         return total_assets if total_assets > 0 else None
         
     except Exception as e:
-        print(f"[DEBUG] Error getting actual resource count: {e}")
+        debug_errors(f"Error getting actual resource count: {e}")
         return None
 
 def get_cloudinary_status(cloudinary_updater_instance):
     """Get Cloudinary usage details."""
     try:
-        print("in get_cloudinary_status A")
+        debug_cloudinary("Starting Cloudinary status check...")
         result = usage()
-        print(f"Cloudinary API result: {result}")
+        debug_cloudinary(f"Cloudinary API result: {result}")
         
         api_key = cloudinary_updater_instance.apiKey
         api_secret = cloudinary_updater_instance.apiSecret
         url = f"https://api.cloudinary.com/v1_1/{cloudinary_updater_instance.cloudName}/usage"
 
-        print("in get_cloudinary_status")
-        print(f"Cloudinary API URL: {url}")
-        print(f"Cloudinary API Key: {api_key}")
+        debug_cloudinary("in get_cloudinary_status")
+        debug_cloudinary(f"Cloudinary API URL: {url}")
+        debug_cloudinary(f"Cloudinary API Key: {api_key}")
 
         response = requests.get(url, auth=HTTPBasicAuth(api_key, api_secret))
         headers = response.headers
@@ -645,11 +646,11 @@ def get_cloudinary_status(cloudinary_updater_instance):
         actual_resource_count = get_actual_resource_count(cloudinary_updater_instance)
         if actual_resource_count is not None and actual_resource_count > 0:
             num_files = actual_resource_count
-            print(f"[DEBUG] Using actual resource count: {num_files}")
+            debug_cloudinary(f"Using actual resource count: {num_files}")
         else:
             # Fallback to usage API count (this is actually more reliable for billing)
             num_files = result.get('resources', 0)
-            print(f"[DEBUG] Using usage API resource count (this is the authoritative count for billing): {num_files}")
+            debug_cloudinary(f"Using usage API resource count (this is the authoritative count for billing): {num_files}")
         
         average_file_size = 0
         if num_files > 0:
@@ -657,24 +658,24 @@ def get_cloudinary_status(cloudinary_updater_instance):
         else:
             average_file_size = cloudinary_updater_instance.maxFileSize
 
-        print(f"\n--- CLOUDINARY STATUS SUMMARY ---")
-        print(f"Storage Credits: {storageCredits}")
-        print(f"Bandwidth Credits: {bandwidthCredits}")
-        print(f"Transformations Credits: {transformationsCredits}")
-        print(f"Total Used Credits: {usedCredits}")
-        print(f"Remaining Credits: {remainingCredits}")
+        debug_business(f"\n--- CLOUDINARY STATUS SUMMARY ---")
+        debug_business(f"Storage Credits: {storageCredits}")
+        debug_business(f"Bandwidth Credits: {bandwidthCredits}")
+        debug_business(f"Transformations Credits: {transformationsCredits}")
+        debug_business(f"Total Used Credits: {usedCredits}")
+        debug_business(f"Remaining Credits: {remainingCredits}")
         
-        print(f"\n[DEBUG] Percentage calculations:")
-        print(f"  CREDITS_MAX: {CREDITS_MAX}")
+        debug_business(f"\nPercentage calculations:")
+        debug_business(f"  CREDITS_MAX: {CREDITS_MAX}")
         
         # Calculate the actual percentages
         storage_percentage = (storageCredits / CREDITS_MAX) * 100
         transformations_percentage = (transformationsCredits / CREDITS_MAX) * 100
         bandwidth_percentage = (bandwidthCredits / CREDITS_MAX) * 100
         
-        print(f"  Storage %: {storage_percentage:.2f}%")
-        print(f"  Transformations %: {transformations_percentage:.2f}%")
-        print(f"  Bandwidth %: {bandwidth_percentage:.2f}%")
+        debug_business(f"  Storage %: {storage_percentage:.2f}%")
+        debug_business(f"  Transformations %: {transformations_percentage:.2f}%")
+        debug_business(f"  Bandwidth %: {bandwidth_percentage:.2f}%")
 
         # Return status data in expected format
         return_data = [
@@ -694,14 +695,14 @@ def get_cloudinary_status(cloudinary_updater_instance):
             remainingStorage  # Remaining storage
         ]
         
-        print(f"\n[DEBUG] Return data array:")
+        debug_cloudinary(f"\nReturn data array:")
         for i, item in enumerate(return_data):
-            print(f"  [{i}]: {item} (type: {type(item)})")
+            debug_cloudinary(f"  [{i}]: {item} (type: {type(item)})")
         
         return return_data
         
     except Exception as e:
-        print(f"Error in get_cloudinary_status: {e}")
+        debug_errors(f"Error in get_cloudinary_status: {e}")
         return [False, f"Connection error: {str(e)}"]
 
 def convert_bytes(size):
@@ -753,14 +754,14 @@ def load_csv_database(csv_path):
                         'upload_date': row.get('upload_date', '')  # Add upload_date field with fallback
                     }
                 except KeyError as e:
-                    print(f"Missing field in CSV row: {e}. Row: {row}")
+                    debug_errors(f"Missing field in CSV row: {e}. Row: {row}")
                 except ValueError as e:
-                    print(f"Invalid value in CSV row: {e}. Row: {row}")
+                    debug_errors(f"Invalid value in CSV row: {e}. Row: {row}")
     return database
 
 def update_csv_database(csv_path, database):
     """Update the CSV database with new entries."""
-    print(f"Updating database with {len(database)} entries")
+    debug_cloudinary(f"Updating database with {len(database)} entries")
     with open(csv_path, mode='w', newline='') as file:
         fieldnames = ['file_name', 'original_size', 'resized_size', 'filetype', 'public_id', 'url', 'upload_date']
         writer = csv.DictWriter(file, fieldnames=fieldnames)
@@ -805,5 +806,5 @@ def get_cloudinary_credits(self):
         result = usage()
         return result
     except Exception as e:
-        print(f"Failed to get Cloudinary credits: {e}")
+        debug_errors(f"Failed to get Cloudinary credits: {e}")
         return None

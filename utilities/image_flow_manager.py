@@ -6,7 +6,6 @@ Handles responsive flow layout, selection management, and bulk operations
 
 from PyQt5.QtWidgets import QWidget, QScrollArea, QVBoxLayout, QSizePolicy, QRubberBand, QApplication
 from PyQt5.QtCore import Qt, pyqtSignal, QSize, QTimer, QRect
-from PyQt5.QtGui import QMouseEvent
 from .image_card_widget import ImageCardWidget
 from .tag_widgets import FlowLayout
 from .image_sorter import ImageSorter
@@ -102,7 +101,8 @@ class ImageFlowManager(QWidget):
             return
         
         # Create image widget with current width and sync status
-        widget = ImageCardWidget(file_path, max_width=self.widget_width, preview_pixmap=preview_pixmap, cloudinary_synced=cloudinary_synced)
+        widget = ImageCardWidget(file_path, max_width=self.widget_width, preview_pixmap=preview_pixmap, 
+                                cloudinary_synced=cloudinary_synced, cloudinary_public_id=public_id)
         
         # Set initial data
         if tags:
@@ -110,9 +110,7 @@ class ImageFlowManager(QWidget):
         if metadata:
             widget.set_metadata(metadata)
             
-        # Set enhanced metadata for upload optimization
-        if public_id:
-            widget.set_cloudinary_public_id(public_id)
+        # Set enhanced metadata for upload optimization (public_id is already set in constructor)
         if original_tags:
             widget.set_original_tags(original_tags)
         if cloudinary_tags:

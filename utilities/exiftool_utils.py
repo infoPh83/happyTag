@@ -7,7 +7,7 @@ import os
 import subprocess
 import platform
 from pathlib import Path
-from utilities.debug_utils import debug_startup, debug_upload
+from utilities.debug_utils import debug_startup, debug_upload, debug_metadata
 
 # Global ExifTool configuration
 EXIFTOOL_AVAILABLE = False
@@ -231,10 +231,10 @@ def get_cloudinary_public_id_from_metadata(file_path):
             # Check if it contains our cloudinary public_id marker
             if user_comment.startswith('cloudinary_public_id:'):
                 public_id = user_comment.replace('cloudinary_public_id:', '', 1)
-                debug_upload(f"Found Cloudinary public_id in metadata: {public_id}")
+                debug_metadata(f"Found Cloudinary public_id in metadata: {public_id}")
                 return public_id
         
-        debug_upload(f"No Cloudinary public_id found in metadata for {os.path.basename(file_path)}")
+        debug_metadata(f"No Cloudinary public_id found in metadata for {os.path.basename(file_path)}")
         return None
         
     except Exception as e:

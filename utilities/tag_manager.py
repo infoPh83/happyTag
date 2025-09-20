@@ -7,6 +7,7 @@ from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from .tag_widgets import TagButton, FlowLayout
 from .business_widgets import BusinessButton, BusinessCategoryHeader
 from .settings_dialog import SettingsDialog
+from .debug_utils import debug_tag_widgets, debug_business, debug_errors, debug_ui_events
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -140,10 +141,10 @@ class TagManager(QDialog):
     def setup_add_keyword_button(self):
         """Setup the Add Keyword Dialog button if it exists in the UI"""
         if hasattr(self, 'openAddKeywordDialogButton'):
-            print("Found openAddKeywordDialogButton in TagManager, connecting...")
+            debug_ui_events("Found openAddKeywordDialogButton in TagManager, connecting...")
             self.openAddKeywordDialogButton.clicked.connect(self.open_add_keyword_dialog)
         else:
-            print("openAddKeywordDialogButton not found in TagManager")
+            debug_ui_events("openAddKeywordDialogButton not found in TagManager")
     
     def open_add_keyword_dialog(self):
         """Open the Add Keyword dialog using the configured spreadsheet path"""
@@ -156,7 +157,7 @@ class TagManager(QDialog):
             
             # Check if the file exists and is configured
             if not spreadsheet_path or not os.path.exists(spreadsheet_path):
-                print(f"[ERROR] Cloudinary tags file not found or not configured: {spreadsheet_path}")
+                debug_errors(f"Cloudinary tags file not found or not configured: {spreadsheet_path}")
                 from PyQt5.QtWidgets import QMessageBox
                 QMessageBox.warning(
                     self, 
@@ -166,20 +167,20 @@ class TagManager(QDialog):
                 )
                 return
             
-            print(f"[DEBUG] Using configured spreadsheet path: {spreadsheet_path}")
+            debug_tag_widgets(f"Using configured spreadsheet path: {spreadsheet_path}")
             
             # Get the current search text from the tags input field
             initial_tag_text = ""
             if hasattr(self, 'tagsInput') and self.tagsInput:
                 initial_tag_text = self.tagsInput.toPlainText().strip()
-                print(f"[DEBUG] Transferring search text to new tag dialog: '{initial_tag_text}'")
+                debug_tag_widgets(f"Transferring search text to new tag dialog: '{initial_tag_text}'")
             
             # Use the tags data from this TagManager instance
             tags_data = self.original_tags_data if hasattr(self, 'original_tags_data') else None
             if tags_data:
-                print(f"[DEBUG] Using {len(tags_data)} categories from TagManager's memory")
+                debug_tag_widgets(f"Using {len(tags_data)} categories from TagManager's memory")
             else:
-                print("[DEBUG] No tags data available in TagManager")
+                debug_tag_widgets("No tags data available in TagManager")
             
             # Create and show the add keyword dialog with initial tag text
             add_dialog = AddKeywordDialog(spreadsheet_path, self, tags_data, initial_tag_text)
@@ -191,13 +192,13 @@ class TagManager(QDialog):
             add_dialog.exec_()
             
         except Exception as e:
-            print(f"[ERROR] Error opening add keyword dialog: {e}")
+            debug_errors(f"Error opening add keyword dialog: {e}")
             import traceback
             traceback.print_exc()
     
     def on_tag_added(self, text, color, category):
         """Handle when a new tag is added"""
-        print(f"New tag added: '{text}' with color '{color}' in category '{category}'")
+        debug_tag_widgets(f"New tag added: '{text}' with color '{color}' in category '{category}'")
         
         # Refresh the tags display to include the new tag
         self.populate_tags_list()
@@ -416,17 +417,17 @@ class TagManager(QDialog):
     def load_businesses_from_file(self, file_path):
         """Load businesses from both the B2B + B2C final ODS file and NON TLE tenants list ODS file"""
         try:
-            print(f"[DEBUG] Starting business loading process...")
+            debug_business(f"Starting business loading process...")
             # Clear existing business items
             self.clear_business_layout()
-            print(f"[DEBUG] Cleared existing business layout")
+            debug_business(f"Cleared existing business layout")
             
             # Debug print for B2B + B2C final.ods loading
-            print(f"[DEBUG] Loading businesses from B2B + B2C final.ods: {file_path}")
+            debug_business(f"Loading businesses from B2B + B2C final.ods: {file_path}")
             # Read business data from the main B2B + B2C final ODS file
             business_data = self.read_businesses_from_ods(file_path)
             b2b_count = len(business_data) if business_data else 0
-            print(f"[DEBUG] Loaded {b2b_count} businesses from B2B + B2C final.ods")
+            debug_business(f"Loaded {b2b_count} businesses from B2B + B2C final.ods")
             
             # Try to read from NON TLE tenants list.ods file
             non_tle_path = os.path.join(os.path.dirname(file_path), "NON TLE tenants list.ods")
@@ -434,18 +435,18 @@ class TagManager(QDialog):
             non_tle_count = 0
             
             if os.path.exists(non_tle_path):
-                print(f"[DEBUG] Loading NON TLE businesses from: {non_tle_path}")
+                debug_business(f"Loading NON TLE businesses from: {non_tle_path}")
                 non_tle_data = self.read_non_tle_businesses_from_ods(non_tle_path)
                 non_tle_count = len(non_tle_data) if non_tle_data else 0
-                print(f"[DEBUG] Loaded {non_tle_count} businesses from NON TLE tenants list.ods")
+                debug_business(f"Loaded {non_tle_count} businesses from NON TLE tenants list.ods")
             else:
-                print(f"[DEBUG] NON TLE tenants list.ods not found at: {non_tle_path}")
+                debug_business(f"NON TLE tenants list.ods not found at: {non_tle_path}")
             
             # Merge the data by category
-            print(f"[DEBUG] Merging business data...")
+            debug_business(f"Merging business data...")
             merged_data = self.merge_business_data(business_data, non_tle_data)
             total_merged_count = sum(len(businesses) for category_name, category_color, businesses in merged_data) if merged_data else 0
-            print(f"[DEBUG] Total businesses after merging: {total_merged_count}")
+            debug_business(f"Total businesses after merging: {total_merged_count}")
             
             # Store original data for potential filtering later
             self.original_business_data = merged_data if merged_data else []
@@ -459,7 +460,7 @@ class TagManager(QDialog):
                 self.show_partial_loading_warning(b2b_count, non_tle_count, non_tle_path)
             
             # Display the businesses
-            print(f"[DEBUG] Starting to display businesses...")
+            debug_business(f"Starting to display businesses...")
             self.display_businesses(merged_data if merged_data else [])
             
             if not merged_data:

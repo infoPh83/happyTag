@@ -1,30 +1,29 @@
 import sys
 import os
 import re
-import gc
 import subprocess
-import plistlib
 from datetime import datetime
 from PIL import Image
-from PIL.ExifTags import TAGS
 
 from PyQt5.QtWidgets import (QMainWindow, QApplication, QFileDialog, 
                            QWidget, QLabel, QTextEdit, QMessageBox,
-                           QVBoxLayout, QGridLayout, QSizePolicy, QProgressBar, QRubberBand, QDialog)
-from PyQt5.QtCore import Qt, QTimer, QSize, QRect, QPoint, QEvent
+                           QVBoxLayout, QSizePolicy, QProgressBar, QRubberBand, QDialog)
+from PyQt5.QtCore import Qt, QTimer, QSize, QRect
 from PyQt5.QtGui import QPixmap, QImage
 from PyQt5 import uic
 from utilities.tag_manager import TagManager
 from utilities.settings_dialog import SettingsDialog
 from utilities.cloudinary_update_v13 import CloudinaryUpdater
-from ui.cloudinaryCreditsBar import CloudinaryCreditsBar
 from utilities.image_assessment import ImageAssessment
 from utilities.image_flow_manager import ImageFlowManager
 from utilities.cloudinary_upload_handler import CloudinaryUploadHandler
 from utilities.debug_utils import (
-    debug_startup, debug_layout, debug_image_display, debug_tags, 
+    debug_startup, debug_layout, debug_tags, 
     debug_metadata, debug_cloudinary, debug_memory, debug_errors,
-    debug_file_ops, debug_assessment, debug_ui_events, configure_debug, print_debug_status, debug, debug_upload
+    debug_file_ops, debug_assessment, debug_ui_events, print_debug_status, debug, debug_upload,
+    debug_image_loading, debug_exiftool, debug_layout_fix, debug_business,
+    debug_width_control, debug_ctrl_operations, debug_orientation, 
+    debug_color_conversion, debug_file_dialogs, debug_tag_widgets, debug_temp_files
 )
 
 def resource_path(relative_path):
@@ -98,7 +97,7 @@ try:
                     exiftool_path = os.path.join(base_path, 'packages', 'exiftool_win64', 'exiftool-13.34_64', 'exiftool(-k).exe')
                 else:
                     exiftool_path = os.path.join(base_path, 'packages', 'exiftool_win32', 'exiftool-13.34_32', 'exiftool(-k).exe')
-            print(f"Detected Windows, looking for: {exiftool_path}")
+            debug_exiftool(f"Detected Windows, looking for: {exiftool_path}")
         
         elif system == 'darwin':  # macOS
             # For Mac, we'll use the Perl version from Image-ExifTool
@@ -108,7 +107,7 @@ try:
             else:
                 # In development mode, use local packages directory
                 exiftool_path = os.path.join(base_path, 'packages', 'Image-ExifTool-13.34', 'exiftool')
-            print(f"Detected macOS, looking for: {exiftool_path}")
+            debug_exiftool(f"Detected macOS, looking for: {exiftool_path}")
         
         elif system == 'linux':
             # For Linux, try the Perl version or system installation
@@ -116,10 +115,10 @@ try:
                 exiftool_path = os.path.join(base_path, 'packages', 'Image-ExifTool-13.34', 'exiftool')
             else:
                 exiftool_path = os.path.join(base_path, 'packages', 'Image-ExifTool-13.34', 'exiftool')
-            print(f"Detected Linux, looking for: {exiftool_path}")
+            debug_exiftool(f"Detected Linux, looking for: {exiftool_path}")
         
         else:
-            print(f"Unsupported system: {system}")
+            debug_exiftool(f"Unsupported system: {system}")
             return None
         
         if os.path.exists(exiftool_path):
@@ -144,9 +143,9 @@ try:
                 debug_startup(f"ExifTool version test result: {test_result}")
             EXIFTOOL_AVAILABLE = True
             EXIFTOOL_PATH = local_exiftool_path
-            print(f"Successfully using local ExifTool from: {local_exiftool_path}")
+            debug_exiftool(f"Successfully using local ExifTool from: {local_exiftool_path}")
         except Exception as e:
-            print(f"Local ExifTool test failed: {e}")
+            debug_exiftool(f"Local ExifTool test failed: {e}")
             EXIFTOOL_AVAILABLE = False
             EXIFTOOL_PATH = None
     else:
@@ -163,18 +162,18 @@ try:
                 debug_startup(f"System ExifTool version test result: {test_result}")
             EXIFTOOL_AVAILABLE = True
             EXIFTOOL_PATH = None
-            print("Using system ExifTool")
+            debug_exiftool("Using system ExifTool")
         except Exception:
             EXIFTOOL_AVAILABLE = False
             EXIFTOOL_PATH = None
-            print("Warning: ExifTool executable not found - using fallback metadata reading")
+            debug_exiftool("Warning: ExifTool executable not found - using fallback metadata reading")
 
     debug_startup(f"Final ExifTool status: EXIFTOOL_AVAILABLE={EXIFTOOL_AVAILABLE}, EXIFTOOL_PATH={EXIFTOOL_PATH}")
 
 except ImportError:
     EXIFTOOL_AVAILABLE = False
     EXIFTOOL_PATH = None
-    print("Warning: PyExifTool not available - using fallback metadata reading")
+    debug_exiftool("Warning: PyExifTool not available - using fallback metadata reading")
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -468,38 +467,38 @@ class MainWindow(QMainWindow):
     def _force_layout_refresh_after_visibility_change(self):
         """Force layout refresh specifically after widget visibility changes"""
         try:
-            print("[LAYOUT FIX] Starting forced layout refresh...")
+            debug_layout_fix("Starting forced layout refresh...")
             
             # Store current window size before refresh to prevent shrinking
             original_size = self.size()
-            print(f"[LAYOUT FIX] Storing original window size: {original_size.width()}x{original_size.height()}")
+            debug_layout_fix(f"Storing original window size: {original_size.width()}x{original_size.height()}")
             
             # Update the central widget's layout
             if hasattr(self, 'centralwidget'):
                 self.centralwidget.adjustSize()
                 self.centralwidget.updateGeometry()
-                print("[LAYOUT FIX] Updated central widget geometry")
+                debug_layout_fix("Updated central widget geometry")
             
             # Force the grid layout to recalculate without changing main window size
             if hasattr(self, 'gridLayout'):
                 self.gridLayout.invalidate()
                 self.gridLayout.activate()
-                print("[LAYOUT FIX] Invalidated and activated grid layout")
+                debug_layout_fix("Invalidated and activated grid layout")
             
             # Update main window geometry but preserve size
             self.updateGeometry()
-            print("[LAYOUT FIX] Updated main window geometry")
+            debug_layout_fix("Updated main window geometry")
             
             # Restore the original window size to prevent shrinking
             self.resize(original_size)
-            print(f"[LAYOUT FIX] Restored window size to: {original_size.width()}x{original_size.height()}")
+            debug_layout_fix(f"Restored window size to: {original_size.width()}x{original_size.height()}")
             
             # Force immediate repaint
             self.repaint()
-            print("[LAYOUT FIX] Layout refresh completed")
+            debug_layout_fix("Layout refresh completed")
             
         except Exception as e:
-            print(f"[LAYOUT FIX] Error in forced layout refresh: {e}")
+            debug_layout_fix(f"Error in forced layout refresh: {e}")
             debug_errors(f"Error in forced layout refresh: {e}")
 
     def _update_cloudinary_ui_status(self, connected, status_message=""):
@@ -525,7 +524,7 @@ class MainWindow(QMainWindow):
                 for widget_name, widget in cloudinary_widgets:
                     if widget:
                         widget.setVisible(True)
-                        print(f"[LAYOUT FIX] Made {widget_name} visible")
+                        debug_layout_fix(f"Made {widget_name} visible")
                 
                 # Set main label text for successful connection
                 if hasattr(self, 'label') and self.label:
@@ -553,7 +552,7 @@ class MainWindow(QMainWindow):
                 for widget_name, widget in secondary_widgets:
                     if widget:
                         widget.setVisible(False)
-                        print(f"[LAYOUT FIX] Hid {widget_name}")
+                        debug_layout_fix(f"Hid {widget_name}")
                 
                 # Set main label text based on the type of failure
                 if hasattr(self, 'label') and self.label:
@@ -987,25 +986,12 @@ class MainWindow(QMainWindow):
             if unique_keywords:
                 debug_metadata(f"Found keywords for {filename}: {unique_keywords}")
             
-            # Extract and cache Cloudinary public_id for upload optimization
-            cloudinary_public_id = None
-            try:
-                from utilities.exiftool_utils import get_cloudinary_public_id_from_metadata
-                cloudinary_public_id = get_cloudinary_public_id_from_metadata(file_path)
-                if cloudinary_public_id:
-                    debug_metadata(f"Found Cloudinary public_id for {filename}: {cloudinary_public_id}")
-                else:
-                    debug_metadata(f"No Cloudinary public_id found for {filename}")
-            except Exception as e:
-                debug_metadata(f"Failed to extract public_id for {filename}: {e}")
-            
-            # Cache the result for future use (including public_id for upload optimization)
+            # Cache the result for future use (cloudinary_public_id will be added during assessment phase)
             if not hasattr(self, 'image_metadata'):
                 self.image_metadata = {}
             self.image_metadata[file_path] = {
                 'year': year,
-                'keywords': unique_keywords,
-                'cloudinary_public_id': cloudinary_public_id  # Cache for upload phase optimization
+                'keywords': unique_keywords
             }
                 
             return year, unique_keywords
@@ -1240,7 +1226,7 @@ class MainWindow(QMainWindow):
             local_public_id = get_cloudinary_public_id_from_metadata(file_path)
             
             if not local_public_id:
-                debug_cloudinary(f"No public_id found in {os.path.basename(file_path)} - keeping local tags")
+                debug_tags(f"No public_id found in {os.path.basename(file_path)} - keeping local tags")
                 return None
             
             # Get Cloudinary files data from main app cache
@@ -1955,22 +1941,26 @@ class MainWindow(QMainWindow):
     def create_preview(self, file_path):
         """Create and store a preview of the image with metadata reading for accurate progress"""
         try:
-            print(f"Creating preview from file: {file_path}")
+            debug_image_loading(f"Creating preview from file: {file_path}")
             
             # Check file extension first
             _, ext = os.path.splitext(file_path.lower())
             if ext == '.psd':
-                print(f"Warning: PSD files are not currently supported for preview: {file_path}")
+                debug_image_loading(f"Warning: PSD files are not currently supported for preview: {file_path}")
                 self.unsupported_files.append((file_path, "PSD format not currently supported"))
                 return None
             elif ext == '.bmp':
-                print(f"Warning: BMP files are not currently supported for preview: {file_path}")
+                debug_image_loading(f"Warning: BMP files are not currently supported for preview: {file_path}")
                 self.unsupported_files.append((file_path, "BMP format not currently supported"))
                 return None
             
             with Image.open(file_path) as img:
-                orig_width, orig_height = img.size
-                print(f"Original size: {orig_width}x{orig_height}")
+                # CRITICAL FIX: Apply EXIF orientation correction FIRST
+                # This fixes corrupted portrait images with rotation data (orientations 6, 8)
+                from PIL import ImageOps
+                img_corrected = ImageOps.exif_transpose(img)
+                orig_width, orig_height = img_corrected.size  # Use corrected dimensions
+                debug_orientation(f"Original size: {img.size}, After EXIF correction: {orig_width}x{orig_height}")
                 
                 if orig_width > orig_height:
                     if orig_width > self.MAX_PREVIEW_SIZE:
@@ -1997,47 +1987,122 @@ class MainWindow(QMainWindow):
                         resample_filter = 1  # LANCZOS constant value
                     
                     # Handle ICC color profiles that might cause Qt conversion issues
-                    if 'icc_profile' in img.info:
-                        print(f"Image has ICC profile ({len(img.info['icc_profile'])} bytes), removing for Qt compatibility...")
+                    if 'icc_profile' in img_corrected.info:
+                        debug_color_conversion(f"Image has ICC profile ({len(img_corrected.info['icc_profile'])} bytes), converting for Qt compatibility...")
                         # Clear any cached preview for this image since we're fixing a color profile issue
                         if file_path in self.image_previews:
-                            print(f"Clearing cached preview for {os.path.basename(file_path)} due to ICC profile fix")
+                            debug_color_conversion(f"Clearing cached preview for {os.path.basename(file_path)} due to ICC profile fix")
                             del self.image_previews[file_path]
                         
-                        img = img.copy()
-                        del img.info['icc_profile']
+                        # SIMPLIFIED FIX: Convert to RGB and remove ICC profile
+                        # This avoids potential byte order issues with ImageCms.profileToProfile()
+                        try:
+                            # Convert to RGB mode first (this applies any color space conversion)
+                            img_corrected = img_corrected.convert('RGB')
+                            # Remove the ICC profile to prevent Qt conversion issues
+                            if 'icc_profile' in img_corrected.info:
+                                del img_corrected.info['icc_profile']
+                            debug_color_conversion(f"Successfully converted to RGB and removed ICC profile")
+                        except Exception as icc_error:
+                            debug_color_conversion(f"RGB conversion failed ({icc_error}), using image as-is")
+                            # Fallback: just remove the profile
+                            img_corrected = img_corrected.copy()
+                            if 'icc_profile' in img_corrected.info:
+                                del img_corrected.info['icc_profile']
                     
-                    resized_img = img.resize((width, height), resample_filter)
+                    resized_img = img_corrected.resize((width, height), resample_filter)
                     
-                    # Convert PIL image to QPixmap based on image mode
-                    if resized_img.mode == 'RGBA':
-                        qimage = QImage(resized_img.tobytes(), resized_img.width, resized_img.height, QImage.Format_RGBA8888)
-                        pixmap = QPixmap.fromImage(qimage)
-                    elif resized_img.mode == 'RGB':
-                        # Ensure proper RGB byte order for Qt with ICC profile handling
-                        rgb_data = resized_img.tobytes('raw', 'RGB')
-                        qimage = QImage(rgb_data, resized_img.width, resized_img.height, QImage.Format_RGB888)
+                    # ALTERNATIVE FIX: Save PIL image and load with QPixmap to avoid byte conversion issues
+                    # This bypasses the problematic PIL → QImage → QPixmap conversion
+                    import tempfile
+                    try:
+                        # Create a temporary file for the PIL image
+                        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
+                            temp_path = temp_file.name
+                            # Save the PIL image without ICC profile
+                            resized_img.save(temp_path, 'JPEG', quality=95)
+                            debug_temp_files(f"Saved temporary image: {temp_path}")
                         
-                        # Verify QImage is not null and create QPixmap
-                        if qimage.isNull():
-                            print("ERROR: QImage is null, falling back to QPixmap")
-                            pixmap = QPixmap(file_path)
+                        # Load with QPixmap directly from file
+                        pixmap = QPixmap(temp_path)
+                        
+                        # Clean up the temporary file
+                        try:
+                            os.unlink(temp_path)
+                        except:
+                            pass
+                        
+                        if not pixmap.isNull():
+                            debug_image_loading(f"Successfully created QPixmap from temp file: {pixmap.size().width()}x{pixmap.size().height()}")
                         else:
+                            debug_errors("ERROR: QPixmap from temp file is null!")
+                            
+                    except Exception as temp_error:
+                        debug_temp_files(f"Temporary file approach failed ({temp_error}), falling back to direct conversion")
+                        
+                        # Fallback: Direct PIL → QImage → QPixmap conversion
+                        if resized_img.mode == 'RGB':
+                            rgb_data = resized_img.tobytes('raw', 'RGB')
+                            qimage = QImage(rgb_data, resized_img.width, resized_img.height, QImage.Format_RGB888)
+                            
+                            if qimage.isNull():
+                                debug_errors("ERROR: QImage is null, falling back to QPixmap")
+                                pixmap = QPixmap(file_path)
+                            else:
+                                pixmap = QPixmap.fromImage(qimage)
+                        else:
+                            # Convert other modes to RGB first
+                            resized_img = resized_img.convert('RGB')
+                            rgb_data = resized_img.tobytes('raw', 'RGB')
+                            qimage = QImage(rgb_data, resized_img.width, resized_img.height, QImage.Format_RGB888)
                             pixmap = QPixmap.fromImage(qimage)
-                    else:
-                        # Convert other modes to RGB first
-                        resized_img = resized_img.convert('RGB')
-                        rgb_data = resized_img.tobytes('raw', 'RGB')
-                        qimage = QImage(rgb_data, resized_img.width, resized_img.height, QImage.Format_RGB888)
-                        pixmap = QPixmap.fromImage(qimage)
-                    print(f"Used PIL optimization for large image: {orig_width}x{orig_height} -> {resized_img.width}x{resized_img.height}")
+                    debug_image_loading(f"Used PIL optimization for large image: {orig_width}x{orig_height} -> {resized_img.width}x{resized_img.height}")
                 else:
-                    # For small images, use the original QPixmap method
-                    pixmap = QPixmap(file_path)
-                    print(f"Used QPixmap for small image: {orig_width}x{orig_height}")
+                    # For small images, also use temp file approach to avoid conversion issues
+                    import tempfile
+                    try:
+                        # Create a temporary file for the PIL image
+                        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
+                            temp_path = temp_file.name
+                            # Save the PIL image without ICC profile
+                            img_corrected.save(temp_path, 'JPEG', quality=95)
+                            debug_temp_files(f"Saved temporary small image: {temp_path}")
+                        
+                        # Load with QPixmap directly from file
+                        pixmap = QPixmap(temp_path)
+                        
+                        # Clean up the temporary file
+                        try:
+                            os.unlink(temp_path)
+                        except:
+                            pass
+                        
+                        if not pixmap.isNull():
+                            debug_image_loading(f"Successfully created small QPixmap from temp file: {pixmap.size().width()}x{pixmap.size().height()}")
+                        else:
+                            debug_errors("ERROR: Small QPixmap from temp file is null!")
+                            
+                    except Exception as temp_error:
+                        debug_temp_files(f"Small image temp file approach failed ({temp_error}), falling back to direct conversion")
+                        
+                        # Fallback: Direct PIL → QImage → QPixmap conversion
+                        if img_corrected.mode == 'RGB':
+                            rgb_data = img_corrected.tobytes('raw', 'RGB')
+                            qimage = QImage(rgb_data, img_corrected.width, img_corrected.height, QImage.Format_RGB888)
+                            pixmap = QPixmap.fromImage(qimage)
+                        elif img_corrected.mode == 'RGBA':
+                            qimage = QImage(img_corrected.tobytes(), img_corrected.width, img_corrected.height, QImage.Format_RGBA8888)
+                            pixmap = QPixmap.fromImage(qimage)
+                        else:
+                            # Convert other modes to RGB first
+                            img_rgb = img_corrected.convert('RGB')
+                            rgb_data = img_rgb.tobytes('raw', 'RGB')
+                            qimage = QImage(rgb_data, img_rgb.width, img_rgb.height, QImage.Format_RGB888)
+                            pixmap = QPixmap.fromImage(qimage)
+                    debug_orientation(f"Used orientation-corrected image for small image: {img.size} -> {orig_width}x{orig_height}")
                 
                 if not pixmap.isNull():
-                    print(f"Preview size: {pixmap.width()}x{pixmap.height()}")
+                    debug_image_loading(f"Preview size: {pixmap.width()}x{pixmap.height()}")
                     self.image_previews[file_path] = pixmap
                     
                     # Check if metadata already exists to avoid duplicate reading
@@ -2078,14 +2143,14 @@ class MainWindow(QMainWindow):
                     
                     return pixmap
                 else:
-                    print(f"Error: Could not create preview for {file_path} - QPixmap returned null (unsupported format or corrupted file)")
+                    debug_errors(f"Error: Could not create preview for {file_path} - QPixmap returned null (unsupported format or corrupted file)")
                     return None
                     
         except Exception as e:
             file_ext = os.path.splitext(file_path)[1].lower()
             if file_ext in ['.psd', '.psb']:
                 reason = "PSD/PSB format not supported"
-                print(f"Error creating preview for {file_path}: {reason}")
+                debug_errors(f"Error creating preview for {file_path}: {reason}")
                 self.unsupported_files.append((file_path, reason))
             elif file_ext in ['.ai', '.eps']:
                 reason = "Vector formats (AI/EPS) not supported"
@@ -2099,13 +2164,13 @@ class MainWindow(QMainWindow):
 
     def update_layout(self, value=None):
         """Update the layout using the new ImageFlowManager"""
-        print("\nStarting update_layout with ImageFlowManager...")
+        debug_layout("Starting update_layout with ImageFlowManager...")
         
         # Calculate scaled size
         ratio = preview.width() / preview.height()
         scaled_width = min(max_width, preview.width())
         scaled_height = int(scaled_width / ratio)
-        print(f"Scaled dimensions: {scaled_width}x{scaled_height}")
+        debug_width_control(f"Scaled dimensions: {scaled_width}x{scaled_height}")
         
         # Create container widget with minimal margins
         container = QWidget()
@@ -2596,7 +2661,7 @@ class MainWindow(QMainWindow):
                         self.select_widgets_in_rect(selection_rect)
     def update_layout(self, value=None):
         """Update the layout using the new ImageFlowManager"""
-        print("\nStarting update_layout with ImageFlowManager...")
+        debug_layout("Starting update_layout with ImageFlowManager...")
         
         # Prevent recursion during layout updates
         if getattr(self, '_updating_layout', False):
@@ -2604,7 +2669,7 @@ class MainWindow(QMainWindow):
             return
         
         if not self.image_files:
-            print("No image files to display")
+            debug_layout("No image files to display")
             return
         
         # Set recursion guard
@@ -2704,9 +2769,12 @@ class MainWindow(QMainWindow):
                         existing_tags = ', '.join(all_tags) if all_tags else ''
                         debug_tags(f"Tags for {os.path.basename(file_path)}: year='{year}', keywords={keywords}, final_tags='{existing_tags}'")
                         
-                        # Get public_id directly from ExifTool metadata (no cached_metadata needed!)
-                        from utilities.cloudinary_upload_handler import get_cloudinary_public_id_from_metadata
-                        public_id = get_cloudinary_public_id_from_metadata(file_path)
+                        # Get public_id from cached metadata (already extracted during assessment phase)
+                        public_id = metadata.get('cloudinary_public_id')
+                        if public_id:
+                            debug_tags(f"Using cached public_id for {os.path.basename(file_path)}: {public_id}")
+                        else:
+                            debug_tags(f"No cached public_id for {os.path.basename(file_path)}")
                         
                         # Set original_tags as the current existing_tags (these are from metadata)
                         original_tags_list = all_tags.copy()
@@ -2840,7 +2908,7 @@ class MainWindow(QMainWindow):
             debug_layout(f"Images sorted by size (reverse={reverse})")
     
     def open_files(self):
-        print("Opening file dialog...")
+        debug_file_dialogs("Opening file dialog...")
         files, _ = QFileDialog.getOpenFileNames(
             self,
             "Select Images",
@@ -2848,7 +2916,7 @@ class MainWindow(QMainWindow):
             "Images (*.png *.xpm *.jpg *.jpeg *.gif *.tiff *.tif *.webp)"
         )
         
-        print(f"Selected files: {files}")
+        debug_file_dialogs(f"Selected files: {files}")
         
         if files:
             # Clear previous metadata errors and data
@@ -2870,7 +2938,7 @@ class MainWindow(QMainWindow):
 
     def open_folder(self):
         """Open a folder dialog and import all image files from the selected folder"""
-        print("Opening folder dialog...")
+        debug_file_dialogs("Opening folder dialog...")
         folder_path = QFileDialog.getExistingDirectory(
             self,
             "Select Folder",
@@ -2878,7 +2946,7 @@ class MainWindow(QMainWindow):
             QFileDialog.ShowDirsOnly
         )
         
-        print(f"Selected folder: {folder_path}")
+        debug_file_dialogs(f"Selected folder: {folder_path}")
         
         if folder_path:
             # Define supported image extensions (excluding XMP which are metadata sidecar files)
@@ -2907,11 +2975,11 @@ class MainWindow(QMainWindow):
                     else:
                         non_image_files += 1
             
-            print(f"Found {len(image_files)} image files in folder")
+            debug_file_ops(f"Found {len(image_files)} image files in folder")
             if len(unsupported_image_files) > 0:
-                print(f"Found {len(unsupported_image_files)} unsupported image files (BMP/PSD)")
+                debug_file_ops(f"Found {len(unsupported_image_files)} unsupported image files (BMP/PSD)")
             if non_image_files > 0:
-                print(f"Skipping {non_image_files} non-image files")
+                debug_file_ops(f"Skipping {non_image_files} non-image files")
             
             if image_files:
                 # Clear previous metadata errors and data (but keep unsupported_files for reporting)
@@ -2930,7 +2998,7 @@ class MainWindow(QMainWindow):
                 # Start complete integrated processing (new approach) with unsupported file info
                 self.start_integrated_processing(image_files, "folder", non_image_files, len(unsupported_image_files))
             else:
-                print("No image files found in the selected folder")
+                debug_file_dialogs("No image files found in the selected folder")
 
     def _convert_bmp_files_to_jpeg(self, image_files):
         """
@@ -2964,7 +3032,7 @@ class MainWindow(QMainWindow):
                     debug_startup(f"Converted BMP to JPEG: {os.path.basename(file_path)} -> {os.path.basename(jpeg_path)}")
                     
                 except Exception as e:
-                    print(f"[ERROR] Failed to convert BMP file {file_path}: {e}")
+                    debug_errors(f"[ERROR] Failed to convert BMP file {file_path}: {e}")
                     # Keep original file if conversion fails
                     converted_files.append(file_path)
             else:
@@ -3052,6 +3120,16 @@ class MainWindow(QMainWindow):
                 try:
                     preview = self.create_preview(file_path)
                     if preview:
+                        # Extract public_id during assessment phase to avoid redundant calls during widget creation
+                        cloudinary_public_id = None
+                        if cloudinary_enabled:
+                            try:
+                                from utilities.exiftool_utils import get_cloudinary_public_id_from_metadata
+                                cloudinary_public_id = get_cloudinary_public_id_from_metadata(file_path)
+                                debug_assessment(f"Extracted public_id for {os.path.basename(file_path)}: {cloudinary_public_id or 'None'}")
+                            except Exception as e:
+                                debug_errors(f"Failed to extract public_id for {os.path.basename(file_path)}: {e}")
+                        
                         year, local_keywords = self.get_image_metadata(file_path)
                         
                         # Store ACTUAL local keywords as original for proper change detection
@@ -3078,14 +3156,15 @@ class MainWindow(QMainWindow):
                             'preview': preview,
                             'year': year,
                             'keywords': keywords,
-                            'cloudinary_synced': cloudinary_sync_status.get(file_path, False)  # Include sync status
+                            'cloudinary_synced': cloudinary_sync_status.get(file_path, False),  # Include sync status
+                            'cloudinary_public_id': cloudinary_public_id  # Cache for widget creation
                         }
                         processed_data.append(image_data)
                         
                         debug_file_ops(f"{os.path.basename(file_path)} - Complete processing finished")
                     
                 except Exception as e:
-                    print(f"[WARNING] Metadata extraction failed for {os.path.basename(file_path)}: {e}")
+                    debug_errors(f"[WARNING] Metadata extraction failed for {os.path.basename(file_path)}: {e}")
                     # Still add the image even if metadata fails
                     try:
                         preview = self.create_preview(file_path)
@@ -3099,10 +3178,10 @@ class MainWindow(QMainWindow):
                             }
                             processed_data.append(image_data)
                     except Exception as preview_e:
-                        print(f"[ERROR] Failed to process {os.path.basename(file_path)}: {preview_e}")
+                        debug_errors(f"[ERROR] Failed to process {os.path.basename(file_path)}: {preview_e}")
                         
             except Exception as e:
-                print(f"[ERROR] Complete failure processing {os.path.basename(file_path)}: {e}")
+                debug_errors(f"[ERROR] Complete failure processing {os.path.basename(file_path)}: {e}")
         
         self.hide_progress()
         
@@ -3147,7 +3226,7 @@ class MainWindow(QMainWindow):
         # Store processed images
         self.image_files = [data['file_path'] for data in processed_data]
         self.image_previews = {data['file_path']: data['preview'] for data in processed_data}
-        self.image_metadata = {data['file_path']: {'year': data['year'], 'keywords': data['keywords'], 'cloudinary_synced': data.get('cloudinary_synced', False)} 
+        self.image_metadata = {data['file_path']: {'year': data['year'], 'keywords': data['keywords'], 'cloudinary_synced': data.get('cloudinary_synced', False), 'cloudinary_public_id': data.get('cloudinary_public_id')} 
                              for data in processed_data}
         
         # Update layout with processed data
@@ -3248,7 +3327,7 @@ class MainWindow(QMainWindow):
                 self._update_cloudinary_ui_status(False, "Connection failed")
                 
         except Exception as e:
-            print(f"[ERROR] Failed to initialize Cloudinary: {str(e)}")
+            debug_errors(f"[ERROR] Failed to initialize Cloudinary: {str(e)}")
             import traceback
             traceback.print_exc()
             self.cloudinary_updater = None
@@ -3582,7 +3661,7 @@ class MainWindow(QMainWindow):
     
     def on_cloudinary_status_received(self, data):
         """Handle Cloudinary status data received from cloud_status"""
-        print(f"[UPLOAD REFRESH] on_cloudinary_status_received called with data length: {len(data) if data else 0}")
+        debug_business(f"[UPLOAD REFRESH] on_cloudinary_status_received called with data length: {len(data) if data else 0}")
         debug_cloudinary(f" Cloudinary status received: {data}")
         if data and len(data) > 0:
             if data[0] == True:  # Status retrieval successful
@@ -3609,7 +3688,7 @@ class MainWindow(QMainWindow):
                     
                     # Update the CloudinaryCreditsBar if it exists
                     resources_count = data[4] if len(data) > 4 else 0  # Get number of files from index 4
-                    print(f"[UPLOAD REFRESH] Calling update_credits_bar with resources_count: {resources_count}")
+                    debug_business(f"[UPLOAD REFRESH] Calling update_credits_bar with resources_count: {resources_count}")
                     self.update_credits_bar(storage_percent, transformations_percent, bandwidth_percent, resources_count)
             else:
                 debug_cloudinary(f"❌ Cloudinary connection failed: {data}")
@@ -3647,7 +3726,7 @@ class MainWindow(QMainWindow):
             self._populate_widget_cloudinary_tags()
             
         except Exception as e:
-            print(f"[WARNING] Could not retrieve Cloudinary files for cache: {e}")
+            debug_errors(f"[WARNING] Could not retrieve Cloudinary files for cache: {e}")
             self.cloudinary_files_cache = []
             self.cloudinary_cache_populated = True  # Mark that we attempted even if it failed
     
@@ -3688,13 +3767,13 @@ class MainWindow(QMainWindow):
     
     def update_credits_bar(self, storage_percent, transformations_percent, bandwidth_percent, resources_count=0):
         """Update the CloudinaryCreditsBar with usage data and resources count"""
-        print(f"[UPLOAD REFRESH] update_credits_bar called with resources_count: {resources_count}")
+        debug_cloudinary(f"update_credits_bar called with resources_count: {resources_count}")
         debug_cloudinary(f"main.py update_credits_bar() called with:")
-        print(f"  Storage: {storage_percent} (type: {type(storage_percent)})")
-        print(f"  Transformations: {transformations_percent} (type: {type(transformations_percent)})")
-        print(f"  Bandwidth: {bandwidth_percent} (type: {type(bandwidth_percent)})")
-        print(f"  Resources: {resources_count} (type: {type(resources_count)})")
-        
+        debug_cloudinary(f"  Storage: {storage_percent} (type: {type(storage_percent)})")
+        debug_cloudinary(f"  Transformations: {transformations_percent} (type: {type(transformations_percent)})")
+        debug_cloudinary(f"  Bandwidth: {bandwidth_percent} (type: {type(bandwidth_percent)})")
+        debug_cloudinary(f"  Resources: {resources_count} (type: {type(resources_count)})")
+
         # Only update if Cloudinary is connected
         if not self.cloudinary_connected:
             debug_cloudinary(f" Cloudinary not connected - skipping credits bar update")
@@ -3719,7 +3798,7 @@ class MainWindow(QMainWindow):
                     break
             
             if credits_bar is not None:
-                print(f"[UPLOAD REFRESH] Credits bar found, updating...")
+                debug_business(f"[UPLOAD REFRESH] Credits bar found, updating...")
                 # Define colors matching the original Cloudinary app
                 STORAGE_COLOUR = "#b83232"      # Red
                 TRANSFORMATIONS_COLOUR = "#32a4ba"  # Blue  
@@ -3745,11 +3824,10 @@ class MainWindow(QMainWindow):
                 # Set the overlay text with resources count
                 if resources_count > 0:
                     overlay_text = f"{resources_count} online images"
-                    print(f"[UPLOAD REFRESH] Setting overlay text to: '{overlay_text}'")
                     debug_cloudinary(f"Setting overlay text: '{overlay_text}'")
                     credits_bar.setOverlayText(overlay_text)
                 else:
-                    print(f"[UPLOAD REFRESH] No overlay text set (resources_count: {resources_count})")
+                    debug_cloudinary(f"No overlay text set (resources_count: {resources_count})")
                     credits_bar.setOverlayText("")  # Clear overlay if no resources
                 
                 # Update the colored legend labels
@@ -3767,33 +3845,33 @@ class MainWindow(QMainWindow):
                         if widget:
                             if not widget.isVisible():
                                 widget.setVisible(True)
-                                print(f"[LAYOUT FIX] Made {widget_name} visible")
+                                debug_layout_fix(f"Made {widget_name} visible")
                             else:
-                                print(f"[LAYOUT FIX] {widget_name} was already visible")
+                                debug_layout_fix(f"{widget_name} was already visible")
                         else:
-                            print(f"[LAYOUT FIX] Widget {widget_name} not found")
+                            debug_layout_fix(f"Widget {widget_name} not found")
                     
                     if hasattr(self, 'storageLabel'):
                         storage_text = self.create_colored_label_text(STORAGE_COLOUR, "Storage", storage_perc)
                         self.storageLabel.setText(storage_text)
-                        print(f"[LAYOUT FIX] Updated storageLabel: {storage_text}")
+                        debug_layout_fix(f"Updated storageLabel: {storage_text}")
                     
                     if hasattr(self, 'transformationsLabel'):
                         transformations_text = self.create_colored_label_text(TRANSFORMATIONS_COLOUR, "Transformations", transformations_perc)
                         self.transformationsLabel.setText(transformations_text)
-                        print(f"[LAYOUT FIX] Updated transformationsLabel: {transformations_text}")
+                        debug_layout_fix(f"Updated transformationsLabel: {transformations_text}")
                     
                     if hasattr(self, 'bandwidthLabel'):
                         bandwidth_text = self.create_colored_label_text(BANDWIDTH_COLOUR, "Bandwidth", bandwidth_perc)
                         self.bandwidthLabel.setText(bandwidth_text)
-                        print(f"[LAYOUT FIX] Updated bandwidthLabel: {bandwidth_text}")
+                        debug_layout_fix(f"Updated bandwidthLabel: {bandwidth_text}")
                         
                     # Force layout refresh after making widgets visible and updating text
-                    print("[LAYOUT FIX] Calling layout refresh...")
+                    debug_layout_fix("Calling layout refresh...")
                     self._force_layout_refresh_after_visibility_change()
                         
                 except Exception as label_error:
-                    print(f"[LAYOUT FIX] Error updating legend labels: {label_error}")
+                    debug_layout_fix(f"Error updating legend labels: {label_error}")
                     debug_cloudinary(f"Error updating legend labels: {label_error}")
                 
                 # Store values to prevent duplicate updates
@@ -3802,7 +3880,7 @@ class MainWindow(QMainWindow):
                 debug_cloudinary(f"📊 Credits bar updated - Storage: {storage_perc:.2f}%, Transformations: {transformations_perc:.2f}%, Bandwidth: {bandwidth_perc:.2f}%")
                 
             else:
-                print(f"[UPLOAD REFRESH] Credits bar widget not found!")
+                debug_business(f"[UPLOAD REFRESH] Credits bar widget not found!")
                 debug_cloudinary(f"⚠️ Credits bar widget not found in main window")
                 # List all widget attributes for debugging
                 widget_attrs = [attr for attr in dir(self) if not attr.startswith('_') and hasattr(getattr(self, attr, None), 'setVisible')]

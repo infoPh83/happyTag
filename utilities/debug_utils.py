@@ -38,7 +38,8 @@ DEBUG_CONFIG: Dict[str, bool] = {
 
     # External services
     'cloudinary': True,       # Cloudinary API calls, sync operations, uploads
-        # Analysis and processing
+    
+    # Analysis and processing
     'assessment': True,       # Image assessment, Cloudinary sync status
     'upload': True,           # Cloudinary upload phase, file transfers
 
@@ -48,12 +49,26 @@ DEBUG_CONFIG: Dict[str, bool] = {
 
     # User interactions
     'ui_events': True,        # Mouse clicks, selections, user actions
-        # Application workflow
+    
+    # Application workflow
     'file_ops': True,         # File operations, processing workflow
 
     # System level
     'startup': True,          # Application initialization
     'errors': True,           # Error conditions and exceptions (always forced)
+    
+    # NEW CATEGORIES - previously uncategorized debug outputs
+    'image_loading': False,   # Image preview creation, PIL processing, QPixmap conversion
+    'exiftool': False,        # ExifTool path detection, version checks, binary operations
+    'layout_fix': False,     # Layout refresh operations, widget visibility fixes
+    'business': False,        # Business data loading, spreadsheet processing
+    'width_control': False,  # Text widget width maintenance and enforcement
+    'ctrl_operations': False, # Ctrl key operation suppression and detection
+    'orientation': False,    # Image orientation correction, EXIF processing
+    'color_conversion': False, # ICC profile handling, color space conversion
+    'file_dialogs': False,   # File/folder dialog operations and selections
+    'tag_widgets': False,    # Tag button creation, color processing
+    'temp_files': False,     # Temporary file operations for image processing
 }
 
 # Global debug state & levels
@@ -110,20 +125,33 @@ def parse_env_configuration():
     """Parse environment variables to adjust debug configuration dynamically."""
     global _log_file_path
     env_spec = os.environ.get('HAPPYTAG_DEBUG')
-    if env_spec:
-        # Start from existing config but only modify what is specified
+    
+    # Handle silent mode: if HAPPYTAG_DEBUG is not set or empty, disable all categories
+    if env_spec is None or env_spec == "":
+        # Silent mode - disable all categories for performance testing
+        for k in DEBUG_CONFIG.keys():
+            DEBUG_CONFIG[k] = False
+    else:
+        # When environment variable is set, start from disabled state and only enable specified categories
+        # This ensures clean selective debugging
+        for k in DEBUG_CONFIG.keys():
+            DEBUG_CONFIG[k] = False
+        
+        # Parse non-empty environment variable
         tokens = [t.strip() for t in env_spec.split(',') if t.strip()]
         apply_all = any(t.lower() == 'all' or t == '*' for t in tokens)
         if apply_all:
             for k in DEBUG_CONFIG.keys():
                 DEBUG_CONFIG[k] = True
-        for tok in tokens:
-            if tok.lower() in ('all', '*'):
-                continue
-            if tok.startswith('-'):
-                disable_categories(tok[1:])
-            else:
-                enable_categories(tok)
+        else:
+            for tok in tokens:
+                if tok.lower() in ('all', '*'):
+                    continue
+                if tok.startswith('-'):
+                    disable_categories(tok[1:])
+                else:
+                    enable_categories(tok)
+                
     # Level override already captured at import time but allow re-parse
     lvl = os.environ.get('HAPPYTAG_DEBUG_LEVEL')
     if lvl:
@@ -217,6 +245,40 @@ def debug_startup(message: str, *, level: str = "INFO"):
 
 def debug_errors(message: str, *, level: str = "INFO"):
     debug('errors', message, level=level, force=True)
+
+# NEW DEBUG FUNCTIONS for previously uncategorized outputs
+def debug_image_loading(message: str, *, level: str = "INFO"):
+    debug('image_loading', message, level=level)
+
+def debug_exiftool(message: str, *, level: str = "INFO"):
+    debug('exiftool', message, level=level)
+
+def debug_layout_fix(message: str, *, level: str = "INFO"):
+    debug('layout_fix', message, level=level)
+
+def debug_business(message: str, *, level: str = "INFO"):
+    debug('business', message, level=level)
+
+def debug_width_control(message: str, *, level: str = "INFO"):
+    debug('width_control', message, level=level)
+
+def debug_ctrl_operations(message: str, *, level: str = "INFO"):
+    debug('ctrl_operations', message, level=level)
+
+def debug_orientation(message: str, *, level: str = "INFO"):
+    debug('orientation', message, level=level)
+
+def debug_color_conversion(message: str, *, level: str = "INFO"):
+    debug('color_conversion', message, level=level)
+
+def debug_file_dialogs(message: str, *, level: str = "INFO"):
+    debug('file_dialogs', message, level=level)
+
+def debug_tag_widgets(message: str, *, level: str = "INFO"):
+    debug('tag_widgets', message, level=level)
+
+def debug_temp_files(message: str, *, level: str = "INFO"):
+    debug('temp_files', message, level=level)
 
 @contextmanager
 def debug_timer(category: str, label: str, *, level: str = "VERBOSE"):

@@ -1,6 +1,7 @@
 from PyQt5.QtWidgets import QWidget
 from PyQt5.QtGui import QPainter, QColor, QPixmap, QFont, QPen
 from PyQt5.QtCore import QSize, Qt
+from utilities.debug_utils import debug_cloudinary
 
 class CloudinaryCreditsBar(QWidget):
     """Custom widget to display a segmented bar for credits with optional text overlay."""
@@ -49,8 +50,8 @@ class CloudinaryCreditsBar(QWidget):
             # Invalidate cache since text changed
             self._cached_pixmap = None
             
-            print(f"[DEBUG] CloudinaryCreditsBar.setOverlayText() called: '{text}'")
-            print(f"[DEBUG] show_text_overlay: {self.show_text_overlay}")
+            debug_cloudinary(f"CloudinaryCreditsBar.setOverlayText() called: '{text}'")
+            debug_cloudinary(f"show_text_overlay: {self.show_text_overlay}")
             
             self.update()
 
@@ -63,10 +64,10 @@ class CloudinaryCreditsBar(QWidget):
             # Values haven't changed, no need to repaint
             return
         
-        print(f"[DEBUG] CloudinaryCreditsBar.setPercentages() called:")
-        print(f"  Storage: {storage} (type: {type(storage)})")
-        print(f"  Utilities: {utilities} (type: {type(utilities)})")
-        print(f"  Usage: {usage} (type: {type(usage)})")
+        debug_cloudinary(f"CloudinaryCreditsBar.setPercentages() called:")
+        debug_cloudinary(f"  Storage: {storage} (type: {type(storage)})")
+        debug_cloudinary(f"  Utilities: {utilities} (type: {type(utilities)})")
+        debug_cloudinary(f"  Usage: {usage} (type: {type(usage)})")
 
         self.storage = storage
         self.utilities = utilities
@@ -76,7 +77,7 @@ class CloudinaryCreditsBar(QWidget):
         self._last_values = new_values
         self._cached_pixmap = None
         
-        print(f"[DEBUG] CloudinaryCreditsBar values updated - Storage: {self.storage}, Utilities: {self.utilities}, Usage: {self.usage}")
+        debug_cloudinary(f"CloudinaryCreditsBar values updated - Storage: {self.storage}, Utilities: {self.utilities}, Usage: {self.usage}")
 
         self.update()
 
@@ -85,10 +86,10 @@ class CloudinaryCreditsBar(QWidget):
     def setColors(self, storage_color, utilities_color, usage_color):
         """Update the colors of the segments and refresh the widget."""
         
-        print(f"[DEBUG] CloudinaryCreditsBar.setColors() called:")
-        print(f"  Storage color: {storage_color}")
-        print(f"  Utilities color: {utilities_color}")
-        print(f"  Usage color: {usage_color}")
+        debug_cloudinary(f"CloudinaryCreditsBar.setColors() called:")
+        debug_cloudinary(f"  Storage color: {storage_color}")
+        debug_cloudinary(f"  Utilities color: {utilities_color}")
+        debug_cloudinary(f"  Usage color: {usage_color}")
 
         self.storage_color = QColor(storage_color)
         self.utilities_color = QColor(utilities_color)
@@ -97,7 +98,7 @@ class CloudinaryCreditsBar(QWidget):
         # Invalidate cache since colors changed
         self._cached_pixmap = None
         
-        print(f"[DEBUG] CloudinaryCreditsBar colors updated successfully")
+        debug_cloudinary(f"CloudinaryCreditsBar colors updated successfully")
 
         self.update()
 
@@ -125,10 +126,10 @@ class CloudinaryCreditsBar(QWidget):
         
         # Only show debug info occasionally to reduce spam
         if self._debug_paint_count <= 3 or self._debug_paint_count % 10 == 0:
-            print(f"[DEBUG] CloudinaryCreditsBar.paintEvent() #{self._debug_paint_count}")
-            print(f"  Values - Storage: {self.storage}%, Utilities: {self.utilities}%, Usage: {self.usage}%")
-            print(f"  Size: {self.width()}x{self.height()}")
-            print(f"  Text overlay: '{current_text}'" if current_text else "  No text overlay")
+            debug_cloudinary(f"CloudinaryCreditsBar.paintEvent() #{self._debug_paint_count}")
+            debug_cloudinary(f"  Values - Storage: {self.storage}%, Utilities: {self.utilities}%, Usage: {self.usage}%")
+            debug_cloudinary(f"  Size: {self.width()}x{self.height()}")
+            debug_cloudinary(f"  Text overlay: '{current_text}'" if current_text else "  No text overlay")
         
         # Create new cached pixmap
         self._cached_pixmap = QPixmap(self.width(), self.height())
@@ -178,7 +179,7 @@ class CloudinaryCreditsBar(QWidget):
         widget_painter.drawPixmap(0, 0, self._cached_pixmap)
         
         if self._debug_paint_count <= 3 or self._debug_paint_count % 10 == 0:
-            print(f"[DEBUG] CloudinaryCreditsBar painting completed (cached)")
+            debug_cloudinary(f"CloudinaryCreditsBar painting completed (cached)")
     
     def _draw_text_overlay(self, painter, width, height, text):
         """Draw centered text overlay on the credits bar."""

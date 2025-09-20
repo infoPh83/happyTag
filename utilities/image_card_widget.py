@@ -6,12 +6,11 @@ Encapsulates all image card functionality in a reusable component
 
 import os
 from pathlib import Path
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                            QTextEdit, QPlainTextEdit, QFrame, QSizePolicy, QMenu, QAction,
-                            QAbstractScrollArea, QApplication)
+from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, 
+                            QPlainTextEdit, QFrame, QSizePolicy)
 from PyQt5.QtCore import Qt, pyqtSignal, QSize, QTimer, QEvent
-from PyQt5.QtGui import QPixmap, QFont, QFontMetrics, QPalette, QContextMenuEvent, QTextOption, QTextDocument
-from .debug_utils import debug_layout, debug_image_display, debug_memory, debug_errors, debug
+from PyQt5.QtGui import QPixmap, QTextOption
+from .debug_utils import debug_layout, debug_image_display, debug_errors, debug
 
 # Debug control - set to False to reduce console output
 DEBUG_LAYOUT = False  # Set to True for layout debugging
@@ -31,7 +30,7 @@ class ImageCardWidget(QWidget):
     double_clicked = pyqtSignal(str)           # file_path
     clear_other_selections = pyqtSignal(str)   # file_path of item to keep selected
     
-    def __init__(self, file_path, max_width=300, preview_pixmap=None, cloudinary_synced=False, parent=None):
+    def __init__(self, file_path, max_width=300, preview_pixmap=None, cloudinary_synced=False, cloudinary_public_id=None, parent=None):
         super().__init__(parent)
         # Core data
         self.file_path = file_path
@@ -43,7 +42,7 @@ class ImageCardWidget(QWidget):
         self.tags = []
         
         # Enhanced metadata storage for upload optimization
-        self.cloudinary_public_id = None  # Cloudinary public_id for this image
+        self.cloudinary_public_id = cloudinary_public_id  # Cloudinary public_id for this image (passed from main app)
         self.original_tags = []  # Tags as they were saved to disk/metadata
         self.cloudinary_tags = []  # Tags as they exist on Cloudinary
         
@@ -293,8 +292,39 @@ class ImageCardWidget(QWidget):
                 if not os.path.exists(self.file_path):
                     self._set_error_image("File not found")
                     return
+                
+                # CRITICAL FIX: Apply EXIF orientation correction when loading from file
+                # This ensures portrait images display correctly even when preview_pixmap is None
+                try:
+                    from PIL import Image, ImageOps
+                    from PyQt5.QtGui import QImage
                     
-                pixmap = QPixmap(self.file_path)
+                    with Image.open(self.file_path) as img:
+                        # Apply EXIF orientation correction
+                        img_corrected = ImageOps.exif_transpose(img)
+                        
+                        # Convert to QPixmap with orientation correction
+                        if img_corrected.mode == 'RGB':
+                            rgb_data = img_corrected.tobytes('raw', 'RGB')
+                            qimage = QImage(rgb_data, img_corrected.width, img_corrected.height, QImage.Format_RGB888)
+                            pixmap = QPixmap.fromImage(qimage)
+                        elif img_corrected.mode == 'RGBA':
+                            qimage = QImage(img_corrected.tobytes(), img_corrected.width, img_corrected.height, QImage.Format_RGBA8888)
+                            pixmap = QPixmap.fromImage(qimage)
+                        else:
+                            # Convert other modes to RGB first
+                            img_rgb = img_corrected.convert('RGB')
+                            rgb_data = img_rgb.tobytes('raw', 'RGB')
+                            qimage = QImage(rgb_data, img_rgb.width, img_rgb.height, QImage.Format_RGB888)
+                            pixmap = QPixmap.fromImage(qimage)
+                            
+                        debug_image_display(f"Applied EXIF orientation correction for {os.path.basename(self.file_path)}: {img.size} -> {img_corrected.size}")
+                        
+                except Exception as e:
+                    debug_image_display(f"EXIF correction failed for {os.path.basename(self.file_path)}, using QPixmap fallback: {e}")
+                    # Fallback to basic QPixmap loading if EXIF correction fails
+                    pixmap = QPixmap(self.file_path)
+                
                 if pixmap.isNull():
                     self._set_error_image("Invalid image")
                     return
