@@ -107,7 +107,6 @@ def register_category(name: str, enabled: bool = False):
     """Register a new debug category at runtime if it does not exist."""
     if name not in DEBUG_CONFIG:
         DEBUG_CONFIG[name] = enabled
-        debug_print('startup', f"Registered debug category '{name}' (enabled={enabled})")
 
 def enable_categories(*names: str):
     for name in names:
@@ -165,6 +164,91 @@ def parse_env_configuration():
             print(f"[STARTUP] File logging enabled: {_log_file_path}")  # Simple print to avoid circular dependency
 
 parse_env_configuration()
+
+def configure_debug_programmatically(categories: str = "", level: str = "INFO", log_file: str = ""):
+    """
+    Configure debug settings programmatically, bypassing environment variables.
+    
+    This is especially useful for PyInstaller builds where you want to set debug
+    configuration at runtime without relying on environment variables.
+    
+    Args:
+        categories (str): Debug categories to enable, same format as HAPPYTAG_DEBUG:
+                         - "" or None: Silent mode (disable all)
+                         - "all": Enable all categories
+                         - "layout,tags,metadata": Enable specific categories
+                         - "all,-cloudinary": Enable all except cloudinary
+        level (str): Debug level ("INFO", "VERBOSE", "TRACE")
+        log_file (str): Optional file path for logging output
+    
+    Examples:
+        # Silent mode for production builds
+        configure_debug_programmatically("")
+        
+        # Enable only specific categories
+        configure_debug_programmatically("errors,startup")
+        
+        # Enable all with file logging
+        configure_debug_programmatically("all", "VERBOSE", "debug.log")
+    """
+    global _log_file_path
+    
+    # Reset all categories to disabled first
+    for k in DEBUG_CONFIG.keys():
+        DEBUG_CONFIG[k] = False
+    
+    # Apply category configuration
+    if categories is None or categories == "":
+        # Silent mode - all categories already disabled above
+        pass
+    else:
+        # Parse category specification
+        tokens = [t.strip() for t in categories.split(',') if t.strip()]
+        apply_all = any(t.lower() == 'all' or t == '*' for t in tokens)
+        
+        if apply_all:
+            # Enable all categories first
+            for k in DEBUG_CONFIG.keys():
+                DEBUG_CONFIG[k] = True
+        
+        # Process individual tokens
+        for tok in tokens:
+            if tok.lower() in ('all', '*'):
+                continue
+            elif tok.startswith('-'):
+                # Disable specific category
+                category = tok[1:]
+                if category in DEBUG_CONFIG and category != 'errors':
+                    DEBUG_CONFIG[category] = False
+            else:
+                # Enable specific category
+                enable_categories(tok)
+    
+    # Set debug level
+    if level:
+        set_level(level)
+    
+    # Configure log file
+    if log_file:
+        _log_file_path = log_file
+        _open_log_file_if_needed()
+        if _log_file_handle:
+            debug_print('startup', f"Programmatic file logging enabled: {_log_file_path}")
+
+def get_debug_configuration():
+    """
+    Get the current debug configuration for inspection.
+    
+    Returns:
+        dict: Contains 'categories', 'level', 'enabled', and 'log_file' keys
+    """
+    enabled_categories = [k for k, v in DEBUG_CONFIG.items() if v]
+    return {
+        'categories': enabled_categories,
+        'level': _current_level_name,
+        'enabled': _debug_enabled,
+        'log_file': _log_file_path
+    }
 
 def set_debug_state(enabled: bool):
     """Enable or disable all debug output globally"""

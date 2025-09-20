@@ -30,21 +30,27 @@ class ImageCardWidget(QWidget):
     double_clicked = pyqtSignal(str)           # file_path
     clear_other_selections = pyqtSignal(str)   # file_path of item to keep selected
     
-    def __init__(self, file_path, max_width=300, preview_pixmap=None, cloudinary_synced=False, cloudinary_public_id=None, parent=None):
+    def __init__(self, file_path, max_width=300, preview_pixmap=None, cloudinary_synced=False, cloudinary_public_id=None, 
+                 original_tags=None, cloudinary_tags=None, parent=None):
         super().__init__(parent)
         # Core data
         self.file_path = file_path
         self.max_width = max_width
         self.preview_pixmap = preview_pixmap  # Store preview pixmap if provided
         self.is_selected = False
-        self.is_on_cloudinary = cloudinary_synced  # Set Cloudinary sync status from constructor
+        
+        # CENTRALIZED METADATA - Single source of truth for all image data
+        self.public_id = cloudinary_public_id or ""  # Cloudinary public_id (string)
+        self.on_cloudinary = cloudinary_synced or False  # Whether file is synced with Cloudinary (boolean)
+        self.original_tags = original_tags or []  # Tags read from file metadata on loading (list of strings)
+        self.ui_tags = []  # Current tags in the UI text input element (list of strings)
+        self.cloudinary_tags = cloudinary_tags or []  # Tags retrieved from Cloudinary API (list of strings)
+        
+        # Legacy compatibility (remove these eventually)
+        self.is_on_cloudinary = self.on_cloudinary  # Backward compatibility
+        self.cloudinary_public_id = self.public_id  # Backward compatibility
         self.metadata = {}
         self.tags = []
-        
-        # Enhanced metadata storage for upload optimization
-        self.cloudinary_public_id = cloudinary_public_id  # Cloudinary public_id for this image (passed from main app)
-        self.original_tags = []  # Tags as they were saved to disk/metadata
-        self.cloudinary_tags = []  # Tags as they exist on Cloudinary
         
         # UI components
         self.image_label = None
@@ -652,6 +658,10 @@ class ImageCardWidget(QWidget):
     def _on_text_changed(self):
         """Handle text changes in the text edit"""
         new_text = self.text_edit.toPlainText()
+        
+        # Update UI tags - parse the current text into tags list
+        self.ui_tags = [tag.strip() for tag in new_text.split(',') if tag.strip()] if new_text else []
+        
         self.text_changed.emit(self.file_path, new_text)
         
         # Check if a programmatic update is in progress
@@ -875,6 +885,9 @@ class ImageCardWidget(QWidget):
             tags_text = str(tags).strip() if tags else ""
             
         self.tags = tags if isinstance(tags, list) else ([tags] if tags else [])
+        
+        # Update UI tags to match what's being set
+        self.ui_tags = self.tags.copy() if self.tags else []
         
         # Debug what we're actually setting
         if tags_text:

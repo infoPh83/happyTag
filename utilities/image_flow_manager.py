@@ -100,11 +100,12 @@ class ImageFlowManager(QWidget):
             print(f"[WARNING] Image already exists in flow: {file_path}")
             return
         
-        # Create image widget with current width and sync status
+        # Create image widget with centralized metadata - pass all data at construction
         widget = ImageCardWidget(file_path, max_width=self.widget_width, preview_pixmap=preview_pixmap, 
-                                cloudinary_synced=cloudinary_synced, cloudinary_public_id=public_id)
+                                cloudinary_synced=cloudinary_synced, cloudinary_public_id=public_id,
+                                original_tags=original_tags, cloudinary_tags=cloudinary_tags)
         
-        # Set initial data
+        # Set initial UI tags
         if tags:
             widget.set_tags(tags)
         if metadata:
@@ -396,9 +397,16 @@ class ImageFlowManager(QWidget):
                 metadata = image_data.get('metadata', {})
                 preview_pixmap = image_data.get('preview', None)
                 cloudinary_synced = metadata.get('cloudinary_synced', False)  # Extract sync status from metadata
+                
+                # Enhanced metadata for upload optimization
+                public_id = image_data.get('public_id')
+                original_tags = image_data.get('original_tags', [])
+                cloudinary_tags = image_data.get('cloudinary_tags', [])
 
-                # Add the image with preview pixmap and sync status
-                self.add_image(file_path, tags=tags, metadata=metadata, preview_pixmap=preview_pixmap, cloudinary_synced=cloudinary_synced)
+                # Add the image with preview pixmap, sync status, and enhanced metadata
+                self.add_image(file_path, tags=tags, metadata=metadata, preview_pixmap=preview_pixmap, 
+                              cloudinary_synced=cloudinary_synced, public_id=public_id, 
+                              original_tags=original_tags, cloudinary_tags=cloudinary_tags)
             
             # Force garbage collection after each batch to free memory
             gc.collect()

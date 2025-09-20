@@ -8,80 +8,41 @@ import subprocess
 import platform
 from pathlib import Path
 from utilities.debug_utils import debug_startup, debug_upload, debug_metadata
+from utilities.exiftool_detector import get_exiftool_info
 
-# Global ExifTool configuration
-EXIFTOOL_AVAILABLE = False
-EXIFTOOL_PATH = None
+def get_exiftool_command():
+    """
+    Get the appropriate ExifTool command structure for subprocess calls.
+    
+    Returns:
+        list[str]: Command components for subprocess, or None if ExifTool not available
+    """
+    # Get current status from the unified detector
+    info = get_exiftool_info()
+    
+    if not info['available'] or not info['path']:
+        return None
+    
+    exiftool_path = info['path']
+    
+    if isinstance(exiftool_path, dict) and exiftool_path.get('type') == 'perl':
+        # Perl-based ExifTool: [perl.exe, exiftool.pl]
+        return [str(exiftool_path['path']), str(exiftool_path['args'][0])]
+    else:
+        # Regular ExifTool executable: [exiftool.exe]
+        return [str(exiftool_path)]
 
 def initialize_exiftool():
-    """Initialize ExifTool and set global availability variables"""
-    global EXIFTOOL_AVAILABLE, EXIFTOOL_PATH
+    """
+    Initialize ExifTool using the unified detector.
+    This function is kept for backward compatibility but now delegates to exiftool_detector.
+    """
+    # Delegate to unified detector - no local state needed
+    info = get_exiftool_info()
     
-    debug_startup("Initializing ExifTool...")
+    debug_startup(f"ExifTool Utils: AVAILABLE={info['available']}, PATH={info['path']}")
     
-    # Reset to defaults
-    EXIFTOOL_AVAILABLE = False
-    EXIFTOOL_PATH = None
-    
-    current_platform = platform.system().lower()
-    debug_startup(f"Platform detected: {current_platform}")
-    
-    # Define potential ExifTool paths based on platform
-    if current_platform == 'windows':
-        potential_paths = [
-            'utilities/exiftool.exe',
-            'exiftool.exe',
-            'C:/Program Files/ExifTool/exiftool.exe',
-            'C:/ExifTool/exiftool.exe'
-        ]
-    else:  # macOS/Linux
-        potential_paths = [
-            '/usr/local/bin/exiftool',
-            '/usr/bin/exiftool',
-            '/opt/homebrew/bin/exiftool',
-            'exiftool'  # In PATH
-        ]
-    
-    # Test each potential path
-    for path in potential_paths:
-        debug_startup(f"Testing ExifTool path: {path}")
-        try:
-            result = subprocess.run(
-                [path, '-ver'], 
-                capture_output=True, 
-                text=True, 
-                timeout=10
-            )
-            if result.returncode == 0:
-                EXIFTOOL_AVAILABLE = True
-                EXIFTOOL_PATH = path
-                version = result.stdout.strip()
-                debug_startup(f"✅ ExifTool found at: {path} (version {version})")
-                break
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError) as e:
-            debug_startup(f"❌ ExifTool not found at {path}: {e}")
-            continue
-    
-    if not EXIFTOOL_AVAILABLE:
-        debug_startup("❌ ExifTool not found in any standard location")
-        # Try system PATH as last resort
-        try:
-            result = subprocess.run(
-                ['exiftool', '-ver'], 
-                capture_output=True, 
-                text=True, 
-                timeout=10
-            )
-            if result.returncode == 0:
-                EXIFTOOL_AVAILABLE = True
-                EXIFTOOL_PATH = 'exiftool'
-                version = result.stdout.strip()
-                debug_startup(f"✅ ExifTool found in system PATH (version {version})")
-        except Exception as e:
-            debug_startup(f"❌ ExifTool not found in system PATH: {e}")
-    
-    debug_startup(f"Final ExifTool status: AVAILABLE={EXIFTOOL_AVAILABLE}, PATH={EXIFTOOL_PATH}")
-    return EXIFTOOL_AVAILABLE, EXIFTOOL_PATH
+    return info['available']
 
 def write_cloudinary_metadata_to_file(file_path, public_id, tags=None):
     """
@@ -95,17 +56,18 @@ def write_cloudinary_metadata_to_file(file_path, public_id, tags=None):
     Returns:
         dict: {'success': bool, 'message': str, 'details': dict}
     """
-    if not EXIFTOOL_AVAILABLE or not EXIFTOOL_PATH:
-        return {
-            'success': False,
-            'message': 'ExifTool not available for writing metadata',
-            'details': {'exiftool_available': EXIFTOOL_AVAILABLE, 'exiftool_path': EXIFTOOL_PATH}
-        }
-    
     try:
+        # Get the appropriate ExifTool command structure (auto-initializes if needed)
+        exiftool_cmd = get_exiftool_command()
+        if not exiftool_cmd:
+            return {
+                'success': False,
+                'message': 'ExifTool not available for writing metadata',
+                'details': {'message': 'ExifTool command not available'}
+            }
+        
         # Write public_id to UserComment field first with UTF-8 encoding support
-        public_id_commands = [
-            EXIFTOOL_PATH,
+        public_id_commands = exiftool_cmd + [
             '-overwrite_original_in_place',  # Preserves extended attributes including Finder tags
             '-charset', 'UTF8',  # Explicit UTF-8 charset for special characters
             '-codedcharacterset=UTF8',  # For IPTC fields
@@ -184,14 +146,15 @@ def get_cloudinary_public_id_from_metadata(file_path):
     Returns:
         str or None: The public_id if found, None if not found or error
     """
-    if not EXIFTOOL_AVAILABLE or not EXIFTOOL_PATH:
-        debug_upload(f"ExifTool not available for reading metadata from {file_path}")
-        return None
-        
     try:
+        # Get the appropriate ExifTool command structure (auto-initializes if needed)
+        exiftool_cmd = get_exiftool_command()
+        if not exiftool_cmd:
+            debug_upload(f"ExifTool not available for reading metadata from {file_path}")
+            return None
+        
         # Use ExifTool to read UserComment field with better encoding handling
-        read_commands = [
-            EXIFTOOL_PATH,
+        read_commands = exiftool_cmd + [
             '-charset', 'UTF8',  # Explicit UTF-8 charset for special characters
             '-UserComment',
             '-s3',  # Short format, no tag names
@@ -241,5 +204,5 @@ def get_cloudinary_public_id_from_metadata(file_path):
         debug_upload(f"Error reading metadata from {file_path}: {e}")
         return None
 
-# Initialize ExifTool when module is imported
-initialize_exiftool()
+# NOTE: ExifTool initialization is now handled by the main application
+# using the unified exiftool_detector module. No module-level initialization needed.

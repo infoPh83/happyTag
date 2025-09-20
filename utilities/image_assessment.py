@@ -349,9 +349,15 @@ class ImageAssessment(QObject):
             try:
                 import subprocess
                 import json
+                from utilities.exiftool_utils import get_exiftool_command
                 
-                # Read public_id from UserComment field using ExifTool
-                cmd = ['exiftool', '-UserComment', '-j', file_path]
+                # Read public_id from UserComment field using ExifTool (unified detection)
+                exiftool_cmd = get_exiftool_command()
+                if not exiftool_cmd:
+                    debug_assessment(f"[LIGHTWEIGHT] ExifTool not available for {os.path.basename(file_path)}")
+                    return False
+                    
+                cmd = exiftool_cmd + ['-UserComment', '-j', file_path]
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
                 
                 if result.returncode != 0:

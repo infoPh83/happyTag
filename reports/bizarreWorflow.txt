@@ -1,0 +1,104 @@
+[11:31:31.114] [INFO] [FILE_OPS] Loading image 7/10: test_final.tiff
+[11:31:31.118] [INFO] [ASSESSMENT] [LIGHTWEIGHT ASSESSMENT] Checking sync status for test_final.tiff - File 7/10
+[11:31:31.118] [INFO] [ASSESSMENT] [LIGHTWEIGHT] Checking sync status for test_final.tiff
+[11:31:31.355] [INFO] [ASSESSMENT] [LIGHTWEIGHT] Found public_id 'Uploads/test images/test_final.tiff' for test_final.tiff
+[11:31:31.355] [INFO] [ASSESSMENT] [LIGHTWEIGHT] Using cached Cloudinary files: 10 files
+[11:31:31.355] [INFO] [CLOUDINARY] [LIGHTWEIGHT] File test_final.tiff is SYNCED (public_id: Uploads/test images/test_final.tiff)
+[11:31:31.356] [INFO] [CLOUDINARY] [LIGHTWEIGHT ASSESSMENT] test_final.tiff - Already synced with Cloudinary (SKIPPED)
+[11:31:31.356] [INFO] [ASSESSMENT] [LIGHTWEIGHT ASSESSMENT] test_final.tiff - Status: ALREADY_SYNCED
+[11:31:31.356] [INFO] [IMAGE_LOADING] Creating preview from file: D:/Python playfolder/happyTag/test images\test_final.tiff
+[11:31:31.359] [INFO] [ORIENTATION] Original size: (200, 200), After EXIF correction: 200x200
+[11:31:31.360] [INFO] [TEMP_FILES] Saved temporary small image: C:\Users\simon\AppData\Local\Temp\tmpfc9oz4mx.jpg
+[11:31:31.362] [INFO] [IMAGE_LOADING] Successfully created small QPixmap from temp file: 200x200
+[11:31:31.362] [INFO] [ORIENTATION] Used orientation-corrected image for small image: (200, 200) -> 200x200
+[11:31:31.362] [INFO] [IMAGE_LOADING] Preview size: 200x200
+[11:31:31.362] [INFO] [METADATA] ExifTool status check - available: True, persistent: True
+[11:31:31.363] [INFO] [METADATA] Reading metadata with ExifTool from: test_final.tiff
+[11:31:31.368] [INFO] [METADATA] Found keywords for test_final.tiff: ['2025', '2025', '2025']
+[11:31:31.368] [INFO] [METADATA] Using PIL fallback for date extraction: test_final.tiff
+[11:31:31.370] [INFO] [METADATA] Using file creation year: 2025
+[11:31:31.370] [INFO] [METADATA] Found year for test_final.tiff: 2025
+[11:31:31.370] [INFO] [METADATA] Found keywords for test_final.tiff: ['2025']
+[11:31:31.370] [INFO] [UPLOAD] ExifTool not available for reading metadata from D:/Python playfolder/happyTag/test images\test_final.tiff
+[11:31:31.371] [INFO] [ASSESSMENT] Extracted public_id for test_final.tiff: None
+[11:31:31.371] [INFO] [METADATA] Using cached metadata for test_final.tiff
+[11:31:31.371] [INFO] [UPLOAD] ExifTool not available for reading metadata from D:/Python playfolder/happyTag/test images\test_final.tiff
+[11:31:31.371] [INFO] [TAGS] No public_id found in test_final.tiff - keeping local tags
+[11:31:31.372] [INFO] [FILE_OPS] test_final.tiff - Complete processing finished
+
+
+LATEST RUN
+
+[11:49:18.706] [INFO] [FILE_OPS] Loading image 8/10: test_finder_tags_demo.jpg
+[11:49:18.708] [INFO] [ASSESSMENT] [LIGHTWEIGHT ASSESSMENT] Checking sync status for test_finder_tags_demo.jpg - File 8/10
+[11:49:18.708] [INFO] [ASSESSMENT] [LIGHTWEIGHT] Checking sync status for test_finder_tags_demo.jpg
+[11:49:18.952] [INFO] [ASSESSMENT] [LIGHTWEIGHT] Found public_id 'Uploads/test images/test_finder_tags_demo.jpg' for test_finder_tags_demo.jpg
+[11:49:18.952] [INFO] [ASSESSMENT] [LIGHTWEIGHT] Using cached Cloudinary files: 10 files
+[11:49:18.953] [INFO] [CLOUDINARY] [LIGHTWEIGHT] File test_finder_tags_demo.jpg is SYNCED (public_id: Uploads/test images/test_finder_tags_demo.jpg)
+[11:49:18.956] [INFO] [CLOUDINARY] [LIGHTWEIGHT ASSESSMENT] test_finder_tags_demo.jpg - Already synced with Cloudinary (SKIPPED)
+[11:49:18.956] [INFO] [ASSESSMENT] [LIGHTWEIGHT ASSESSMENT] test_finder_tags_demo.jpg - Status: ALREADY_SYNCED
+[11:49:18.956] [INFO] [IMAGE_LOADING] Creating preview from file: D:/Python playfolder/happyTag/test images\test_finder_tags_demo.jpg
+[11:49:19.005] [INFO] [ORIENTATION] Original size: (2240, 3360), After EXIF correction: 2240x3360
+[11:49:19.005] [INFO] [COLOR_CONVERSION] Image has ICC profile (560 bytes), converting for Qt compatibility...
+[11:49:19.013] [INFO] [COLOR_CONVERSION] Successfully converted to RGB and removed ICC profile
+[11:49:19.070] [INFO] [TEMP_FILES] Saved temporary image: C:\Users\simon\AppData\Local\Temp\tmpukbh67wd.jpg
+[11:49:19.083] [INFO] [IMAGE_LOADING] Successfully created QPixmap from temp file: 533x800
+[11:49:19.083] [INFO] [IMAGE_LOADING] Used PIL optimization for large image: 2240x3360 -> 533x800
+[11:49:19.084] [INFO] [IMAGE_LOADING] Preview size: 533x800
+[11:49:19.084] [INFO] [METADATA] ExifTool status check - available: True, persistent: True
+[11:49:19.085] [INFO] [METADATA] Reading metadata with ExifTool from: test_finder_tags_demo.jpg
+[11:49:19.100] [INFO] [METADATA] Found year for test_finder_tags_demo.jpg: 2023
+[11:49:19.100] [INFO] [METADATA] Found keywords for test_finder_tags_demo.jpg: ['2023', '2023', '2023']
+[11:49:19.101] [INFO] [METADATA] Found year for test_finder_tags_demo.jpg: 2023
+[11:49:19.101] [INFO] [METADATA] Found keywords for test_finder_tags_demo.jpg: ['2023']
+[11:49:19.349] [INFO] [METADATA] Found Cloudinary public_id in metadata: Uploads/test images/test_finder_tags_demo.jpg
+[11:49:19.349] [INFO] [ASSESSMENT] Extracted public_id for test_finder_tags_demo.jpg: Uploads/test images/test_finder_tags_demo.jpg
+[11:49:19.350] [INFO] [METADATA] Using cached metadata for test_finder_tags_demo.jpg
+[11:49:19.594] [INFO] [METADATA] Found Cloudinary public_id in metadata: Uploads/test images/test_finder_tags_demo.jpg
+[11:49:19.594] [INFO] [CLOUDINARY] Searching for public_id 'Uploads/test images/test_finder_tags_demo.jpg' in 10 Cloudinary files
+[11:49:19.595] [INFO] [CLOUDINARY] Target public_id: 'Uploads/test images/test_finder_tags_demo.jpg'
+[11:49:19.598] [INFO] [CLOUDINARY]   File 1: public_id='Uploads/test images/Archway_highRes_002.jpg', tags=['2025'] (type: <class 'list'>)
+[11:49:19.598] [INFO] [CLOUDINARY]   File 2: public_id='Uploads/test images/CopyrightLuca Piffaretti_B.jpg', tags=['2024'] (type: <class 'list'>)
+[11:49:19.599] [INFO] [CLOUDINARY]   File 3: public_id='Uploads/test images/CopyrightLuca Piffaretti_A.jpg', tags=['2024'] (type: <class 'list'>)
+[11:49:19.599] [INFO] [CLOUDINARY]   File 4: public_id='Uploads/test images/test_finder_tags_demo.jpg', tags=['2023'] (type: <class 'list'>)
+[11:49:19.600] [INFO] [CLOUDINARY] Found matching Cloudinary file for public_id: Uploads/test images/test_finder_tags_demo.jpg
+[11:49:19.601] [INFO] [CLOUDINARY] Found 1 tags in Cloudinary for Uploads/test images/test_finder_tags_demo.jpg: ['2023']
+[11:49:19.601] [INFO] [CLOUDINARY] Cloudinary tags match local tags for test_finder_tags_demo.jpg - no import needed
+[11:49:19.601] [INFO] [FILE_OPS] test_finder_tags_demo.jpg - Complete processing finished
+
+
+
+TEST 01
+
+[12:15:39.059] [INFO] [FILE_OPS] Loading image 10/10: ©Luca Piffaretti_B.jpg
+[12:15:39.060] [INFO] [ASSESSMENT] [LIGHTWEIGHT ASSESSMENT] Checking sync status for ©Luca Piffaretti_B.jpg - File 10/10
+[12:15:39.060] [INFO] [ASSESSMENT] [LIGHTWEIGHT] Checking sync status for ©Luca Piffaretti_B.jpg
+[12:15:39.325] [INFO] [ASSESSMENT] [LIGHTWEIGHT] Found public_id 'Uploads/test images/CopyrightLuca Piffaretti_B.jpg' for ©Luca Piffaretti_B.jpg
+[12:15:39.325] [INFO] [ASSESSMENT] [LIGHTWEIGHT] Using cached Cloudinary files: 10 files
+[12:15:39.325] [INFO] [CLOUDINARY] [LIGHTWEIGHT] File ©Luca Piffaretti_B.jpg is SYNCED (public_id: Uploads/test images/CopyrightLuca Piffaretti_B.jpg)
+[12:15:39.325] [INFO] [CLOUDINARY] [LIGHTWEIGHT ASSESSMENT] ©Luca Piffaretti_B.jpg - Already synced with Cloudinary (SKIPPED)
+[12:15:39.326] [INFO] [ASSESSMENT] [LIGHTWEIGHT ASSESSMENT] ©Luca Piffaretti_B.jpg - Status: ALREADY_SYNCED
+[12:15:39.326] [INFO] [IMAGE_LOADING] Creating preview from file: D:/Python playfolder/happyTag/test images\©Luca Piffaretti_B.jpg
+[12:15:39.709] [INFO] [ORIENTATION] Original size: (8269, 6750), After EXIF correction: 8269x6750
+[12:15:39.710] [INFO] [COLOR_CONVERSION] Image has ICC profile (560 bytes), converting for Qt compatibility...
+[12:15:39.764] [INFO] [COLOR_CONVERSION] Successfully converted to RGB and removed ICC profile
+[12:15:40.076] [INFO] [TEMP_FILES] Saved temporary image: C:\Users\simon\AppData\Local\Temp\tmpo2b542s2.jpg
+[12:15:40.088] [INFO] [IMAGE_LOADING] Successfully created QPixmap from temp file: 800x653
+[12:15:40.088] [INFO] [IMAGE_LOADING] Used PIL optimization for large image: 8269x6750 -> 800x653
+[12:15:40.089] [INFO] [IMAGE_LOADING] Preview size: 800x653
+[12:15:40.089] [INFO] [METADATA] ExifTool status check - available: True, persistent: True  
+[12:15:40.089] [INFO] [METADATA] Reading metadata with ExifTool from: ©Luca Piffaretti_B.jpg[12:15:40.114] [INFO] [METADATA] Found year for ©Luca Piffaretti_B.jpg: 2024
+[12:15:40.114] [INFO] [METADATA] Found keywords for ©Luca Piffaretti_B.jpg: ['2024', '2024', '2024']
+[12:15:40.114] [INFO] [METADATA] Found year for ©Luca Piffaretti_B.jpg: 2024
+[12:15:40.114] [INFO] [METADATA] Found keywords for ©Luca Piffaretti_B.jpg: ['2024']        
+[12:15:40.398] [INFO] [METADATA] Found Cloudinary public_id in metadata: Uploads/test images/CopyrightLuca Piffaretti_B.jpg
+[12:15:40.398] [INFO] [ASSESSMENT] Extracted public_id for ©Luca Piffaretti_B.jpg: Uploads/test images/CopyrightLuca Piffaretti_B.jpg
+[12:15:40.398] [INFO] [METADATA] Using cached metadata for ©Luca Piffaretti_B.jpg
+[12:15:40.398] [INFO] [CLOUDINARY] Searching for public_id 'Uploads/test images/CopyrightLuca Piffaretti_B.jpg' in 10 Cloudinary files
+[12:15:40.399] [INFO] [CLOUDINARY] Target public_id: 'Uploads/test images/CopyrightLuca Piffaretti_B.jpg'
+[12:15:40.399] [INFO] [CLOUDINARY]   File 1: public_id='Uploads/test images/Archway_highRes_002.jpg', tags=['2025'] (type: <class 'list'>)
+[12:15:40.399] [INFO] [CLOUDINARY]   File 2: public_id='Uploads/test images/CopyrightLuca Piffaretti_B.jpg', tags=['2024'] (type: <class 'list'>)
+[12:15:40.399] [INFO] [CLOUDINARY] Found matching Cloudinary file for public_id: Uploads/test images/CopyrightLuca Piffaretti_B.jpg
+[12:15:40.399] [INFO] [CLOUDINARY] Found 1 tags in Cloudinary for Uploads/test images/CopyrightLuca Piffaretti_B.jpg: ['2024']
+[12:15:40.399] [INFO] [CLOUDINARY] Cloudinary tags match local tags for ©Luca Piffaretti_B.jpg - no import needed
+[12:15:40.400] [INFO] [FILE_OPS] ©Luca Piffaretti_B.jpg - Complete processing finished

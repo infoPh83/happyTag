@@ -14,6 +14,7 @@ from PyQt5 import uic
 from utilities.tag_manager import TagManager
 from utilities.settings_dialog import SettingsDialog
 from utilities.cloudinary_update_v13 import CloudinaryUpdater
+from utilities.exiftool_detector import initialize_exiftool, get_exiftool_info
 from utilities.image_assessment import ImageAssessment
 from utilities.image_flow_manager import ImageFlowManager
 from utilities.cloudinary_upload_handler import CloudinaryUploadHandler
@@ -21,7 +22,7 @@ from utilities.debug_utils import (
     debug_startup, debug_layout, debug_tags, 
     debug_metadata, debug_cloudinary, debug_memory, debug_errors,
     debug_file_ops, debug_assessment, debug_ui_events, print_debug_status, debug, debug_upload,
-    debug_image_loading, debug_exiftool, debug_layout_fix, debug_business,
+    debug_image_loading, debug_exiftool, debug_layout_fix, debug_business, debug_print,
     debug_width_control, debug_ctrl_operations, debug_orientation, 
     debug_color_conversion, debug_file_dialogs, debug_tag_widgets, debug_temp_files
 )
@@ -64,116 +65,35 @@ try:
         except Exception as e:
             debug_startup(f"Process cleanup warning (non-critical): {e}")
     
-    # Clean up any stale processes first
-    cleanup_stale_exiftool_processes()
-    
-    def detect_exiftool_path():
-        """Detect the appropriate ExifTool executable based on the current system"""
-        system = platform.system().lower()
-        architecture = platform.machine().lower()
-        is_64bit = struct.calcsize("P") * 8 == 64
+    def init_exiftool():
+        """Initialize ExifTool using the unified cross-platform detector"""
+        global EXIFTOOL_AVAILABLE, EXIFTOOL_PATH
         
-        # Check if running from PyInstaller bundle
-        is_bundled = getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
+        # Clean up any stale processes first
+        cleanup_stale_exiftool_processes()
         
-        if is_bundled:
-            debug_startup(f"Running from PyInstaller bundle, base path: {sys._MEIPASS}")
-            base_path = sys._MEIPASS
+        # Use the unified detector (handles both Windows and macOS)
+        success = initialize_exiftool()
+        
+        if success:
+            # Get the detected ExifTool info
+            info = get_exiftool_info()
+            EXIFTOOL_AVAILABLE = info['available']
+            EXIFTOOL_PATH = info['path']
+            
+            debug_startup(f"Final ExifTool status: EXIFTOOL_AVAILABLE={EXIFTOOL_AVAILABLE}, EXIFTOOL_PATH={EXIFTOOL_PATH}")
         else:
-            debug_startup("Running in development mode")
-            base_path = os.path.abspath(".")
-        
-        if system == 'windows':
-            # Windows: choose between 32-bit and 64-bit versions
-            if is_bundled:
-                # In PyInstaller bundle, ExifTool is in packages directory
-                if is_64bit:
-                    exiftool_path = os.path.join(base_path, 'packages', 'exiftool_win64', 'exiftool-13.34_64', 'exiftool(-k).exe')
-                else:
-                    exiftool_path = os.path.join(base_path, 'packages', 'exiftool_win32', 'exiftool-13.34_32', 'exiftool(-k).exe')
-            else:
-                # In development mode, use local packages directory
-                if is_64bit:
-                    exiftool_path = os.path.join(base_path, 'packages', 'exiftool_win64', 'exiftool-13.34_64', 'exiftool(-k).exe')
-                else:
-                    exiftool_path = os.path.join(base_path, 'packages', 'exiftool_win32', 'exiftool-13.34_32', 'exiftool(-k).exe')
-            debug_exiftool(f"Detected Windows, looking for: {exiftool_path}")
-        
-        elif system == 'darwin':  # macOS
-            # For Mac, we'll use the Perl version from Image-ExifTool
-            if is_bundled:
-                # In PyInstaller bundle, ExifTool is bundled at the root level
-                exiftool_path = os.path.join(base_path, 'packages', 'Image-ExifTool-13.34', 'exiftool')
-            else:
-                # In development mode, use local packages directory
-                exiftool_path = os.path.join(base_path, 'packages', 'Image-ExifTool-13.34', 'exiftool')
-            debug_exiftool(f"Detected macOS, looking for: {exiftool_path}")
-        
-        elif system == 'linux':
-            # For Linux, try the Perl version or system installation
-            if is_bundled:
-                exiftool_path = os.path.join(base_path, 'packages', 'Image-ExifTool-13.34', 'exiftool')
-            else:
-                exiftool_path = os.path.join(base_path, 'packages', 'Image-ExifTool-13.34', 'exiftool')
-            debug_exiftool(f"Detected Linux, looking for: {exiftool_path}")
-        
-        else:
-            debug_exiftool(f"Unsupported system: {system}")
-            return None
-        
-        if os.path.exists(exiftool_path):
-            debug_startup(f"ExifTool found at: {exiftool_path}")
-            return exiftool_path
-        else:
-            debug_startup(f"ExifTool executable not found at: {exiftool_path}")
-            return None
-    
-    # Try to find local ExifTool installation
-    local_exiftool_path = detect_exiftool_path()
-    
-    debug_startup(f"Local ExifTool path detected: {local_exiftool_path}")
-    
-    if local_exiftool_path:
-        # Test if local ExifTool works
-        try:
-            debug_startup(f"Testing local ExifTool at: {local_exiftool_path}")
-            with exiftool.ExifTool(executable=local_exiftool_path) as et:
-                # Simple test - try to get version
-                test_result = et.execute("-ver")
-                debug_startup(f"ExifTool version test result: {test_result}")
-            EXIFTOOL_AVAILABLE = True
-            EXIFTOOL_PATH = local_exiftool_path
-            debug_exiftool(f"Successfully using local ExifTool from: {local_exiftool_path}")
-        except Exception as e:
-            debug_exiftool(f"Local ExifTool test failed: {e}")
             EXIFTOOL_AVAILABLE = False
             EXIFTOOL_PATH = None
-    else:
-        debug_startup("No local ExifTool path found")
-        EXIFTOOL_AVAILABLE = False
-        EXIFTOOL_PATH = None
+            debug_startup("Warning: ExifTool not available - using fallback metadata reading")
+
+    # Initialize ExifTool at startup
+    init_exiftool()
     
-    # Fallback to system ExifTool if local one doesn't work
-    if not EXIFTOOL_AVAILABLE:
-        debug_startup("Trying system ExifTool as fallback")
-        try:
-            with exiftool.ExifTool() as et:
-                test_result = et.execute("-ver")
-                debug_startup(f"System ExifTool version test result: {test_result}")
-            EXIFTOOL_AVAILABLE = True
-            EXIFTOOL_PATH = None
-            debug_exiftool("Using system ExifTool")
-        except Exception:
-            EXIFTOOL_AVAILABLE = False
-            EXIFTOOL_PATH = None
-            debug_exiftool("Warning: ExifTool executable not found - using fallback metadata reading")
-
-    debug_startup(f"Final ExifTool status: EXIFTOOL_AVAILABLE={EXIFTOOL_AVAILABLE}, EXIFTOOL_PATH={EXIFTOOL_PATH}")
-
 except ImportError:
     EXIFTOOL_AVAILABLE = False
     EXIFTOOL_PATH = None
-    debug_exiftool("Warning: PyExifTool not available - using fallback metadata reading")
+    debug_startup("Warning: PyExifTool module not available - using fallback metadata reading")
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -304,6 +224,10 @@ class MainWindow(QMainWindow):
         self.image_previews = {}
         self.image_metadata = {}  # Store metadata (year, keywords) for each image
         self.original_keywords = {}  # Track original keywords for change detection
+        self.cloudinary_metadata_cache = {}  # Cache for public_id and sync status to avoid redundant ExifTool calls
+        
+        # ExifTool state
+        self.exiftool_wrapper_path = None  # Store path to temporary wrapper file for cleanup
         
         # Initialize the new ImageFlowManager for responsive layout
         # Use external scroll mode since we're placing it in the main window's scroll area
@@ -769,7 +693,47 @@ class MainWindow(QMainWindow):
                 try:
                     if EXIFTOOL_PATH:
                         debug_startup(f"Using local ExifTool: {EXIFTOOL_PATH}")
-                        self.persistent_exiftool = et_module.ExifTool(executable=EXIFTOOL_PATH)
+                        
+                        # Handle both string paths and dictionary configurations
+                        if isinstance(EXIFTOOL_PATH, dict) and EXIFTOOL_PATH.get('type') == 'perl':
+                            # Perl-based ExifTool: create a wrapper to make it compatible with PyExifTool
+                            perl_exe = EXIFTOOL_PATH['path']
+                            exiftool_pl = EXIFTOOL_PATH['args'][0]  # First arg is the exiftool.pl path
+                            
+                            debug_startup(f"Configuring Perl-based ExifTool: {perl_exe} {exiftool_pl}")
+                            
+                            # Create a temporary wrapper script for Perl-based ExifTool
+                            import tempfile
+                            import os
+                            
+                            # Create a temporary batch file that calls perl.exe with exiftool.pl
+                            wrapper_content = f'@echo off\n"{perl_exe}" "{exiftool_pl}" %*\n'
+                            
+                            # Create temp file with .bat extension
+                            wrapper_fd, wrapper_path = tempfile.mkstemp(suffix='.bat', text=True)
+                            try:
+                                with os.fdopen(wrapper_fd, 'w') as f:
+                                    f.write(wrapper_content)
+                                
+                                debug_startup(f"Created ExifTool wrapper: {wrapper_path}")
+                                
+                                # Use the wrapper as the executable
+                                self.persistent_exiftool = et_module.ExifTool(executable=wrapper_path)
+                                
+                                # Store wrapper path for cleanup later
+                                self.exiftool_wrapper_path = wrapper_path
+                                
+                            except Exception as wrapper_error:
+                                debug_errors(f"Failed to create ExifTool wrapper: {wrapper_error}")
+                                # Cleanup on error
+                                try:
+                                    os.unlink(wrapper_path)
+                                except:
+                                    pass
+                                raise wrapper_error
+                        else:
+                            # Regular string path (standard ExifTool executable)
+                            self.persistent_exiftool = et_module.ExifTool(executable=EXIFTOOL_PATH)
                     else:
                         debug_startup("Using system ExifTool")
                         self.persistent_exiftool = et_module.ExifTool()
@@ -814,6 +778,16 @@ class MainWindow(QMainWindow):
             finally:
                 self.persistent_exiftool = None
                 self.exiftool_available = False
+        
+        # Clean up wrapper file if it exists
+        if hasattr(self, 'exiftool_wrapper_path') and self.exiftool_wrapper_path:
+            try:
+                import os
+                os.unlink(self.exiftool_wrapper_path)
+                debug_startup(f"Cleaned up ExifTool wrapper: {self.exiftool_wrapper_path}")
+                self.exiftool_wrapper_path = None
+            except Exception as e:
+                debug_errors(f"Error cleaning up wrapper file: {e}")
 
     def closeEvent(self, event):
         """Handle application close event to clean up resources"""
@@ -843,6 +817,185 @@ class MainWindow(QMainWindow):
         """Handle context menu requests from the ImageFlowManager"""
         debug("ui_events", f"Context menu requested for {file_path} at {position}")
         # Add your context menu logic here
+
+    def get_comprehensive_metadata(self, file_path):
+        """
+        Get ALL metadata needed for image processing in a single ExifTool call.
+        Returns: dict with 'year', 'keywords', 'public_id', 'cloudinary_synced'
+        This replaces multiple separate calls to optimize the workflow.
+        """
+        filename = os.path.basename(file_path)
+        debug_metadata(f"COMPREHENSIVE START: get_comprehensive_metadata called for {filename}")
+        result = {
+            'year': None,
+            'keywords': [],
+            'public_id': None,
+            'cloudinary_synced': False
+        }
+        
+        # Skip files that previously caused issues
+        if file_path in self.problematic_files:
+            debug_metadata(f"Skipping problematic file: {filename}")
+            return result
+        
+        try:
+            # Try to get ExifTool instance (triggers lazy initialization if needed)
+            et = self.get_exiftool()
+            
+            debug_metadata(f"ExifTool status check - available: {self.exiftool_available}, persistent: {et is not None}")
+            
+            if et is not None:
+                debug_metadata(f"Reading comprehensive metadata with ExifTool from: {filename}")
+                
+                # SINGLE ExifTool call to get ALL metadata we need using JSON output
+                try:
+                    # Get all needed metadata in one call using JSON format for reliable parsing
+                    metadata_output = et.execute('-DateTimeOriginal', '-CreateDate', '-IPTC:Keywords', '-XMP:Keywords', '-XMP:Subject', '-UserComment', '-j', file_path)
+                    
+                    debug_metadata(f"Raw ExifTool JSON output for {filename}: {repr(metadata_output)}")
+                    
+                    if metadata_output and not metadata_output.startswith('Warning') and metadata_output.strip():
+                        import json
+                        try:
+                            data = json.loads(metadata_output)
+                            if data and isinstance(data, list) and len(data) > 0:
+                                metadata_dict = data[0]  # First (and typically only) image
+                                debug_metadata(f"Parsed JSON metadata for {filename}: {metadata_dict.keys()}")
+                                
+                                # Extract year from date fields (handle both prefixed and non-prefixed)
+                                date_fields = ['DateTimeOriginal', 'CreateDate', 'EXIF:DateTimeOriginal', 'EXIF:CreateDate', 'XMP:CreateDate']
+                                for date_field in date_fields:
+                                    if date_field in metadata_dict:
+                                        date_str = metadata_dict[date_field]
+                                        debug_metadata(f"Found {date_field} in {filename}: {date_str}")
+                                        try:
+                                            # Try parsing with fractional seconds first
+                                            if '.' in date_str and date_str.count(':') == 5:
+                                                # Format: 2025:08:03 19:09:13.67
+                                                result['year'] = datetime.strptime(date_str.split('.')[0], '%Y:%m:%d %H:%M:%S').year
+                                            else:
+                                                # Standard format: 2025:08:03 19:09:13
+                                                result['year'] = datetime.strptime(date_str, '%Y:%m:%d %H:%M:%S').year
+                                            debug_metadata(f"Found year for {filename}: {result['year']}")
+                                            break
+                                        except ValueError as ve:
+                                            debug_metadata(f"Failed to parse date '{date_str}' for {filename}: {ve}")
+                                            continue
+                                
+                                # Extract keywords from IPTC/XMP fields (handle both prefixed and non-prefixed)
+                                all_keywords = set()
+                                keyword_fields = ['Keywords', 'Subject', 'IPTC:Keywords', 'XMP:Keywords', 'XMP:Subject']
+                                for keyword_field in keyword_fields:
+                                    if keyword_field in metadata_dict:
+                                        keywords_value = metadata_dict[keyword_field]
+                                        debug_metadata(f"Found {keyword_field} in {filename}: {keywords_value}")
+                                        if keywords_value:
+                                            # Handle both string and list formats
+                                            if isinstance(keywords_value, list):
+                                                for kw in keywords_value:
+                                                    if kw and str(kw).strip():
+                                                        all_keywords.add(str(kw).strip())
+                                            else:
+                                                # Handle comma-separated keywords
+                                                if ',' in str(keywords_value):
+                                                    keywords_list = [k.strip() for k in str(keywords_value).split(',') if k.strip()]
+                                                else:
+                                                    keywords_list = [str(keywords_value)]
+                                                
+                                                for kw in keywords_list:
+                                                    if kw and kw.strip():
+                                                        all_keywords.add(kw.strip())
+                                
+                                # Convert to sorted list for consistency
+                                result['keywords'] = sorted(list(all_keywords))
+                                debug_metadata(f"Found keywords for {filename}: {result['keywords']}")
+                                
+                                # Extract public_id from UserComment (handle both prefixed and non-prefixed)
+                                user_comment = None
+                                for field_name in ['UserComment', 'EXIF:UserComment']:
+                                    if field_name in metadata_dict:
+                                        user_comment = metadata_dict[field_name]
+                                        debug_metadata(f"Found {field_name} in {filename}: '{user_comment}'")
+                                        break
+                                
+                                if user_comment:
+                                    if user_comment and user_comment.startswith('cloudinary_public_id:'):
+                                        result['public_id'] = user_comment.replace('cloudinary_public_id:', '').strip()
+                                        debug_metadata(f"Found Cloudinary public_id in metadata: {result['public_id']}")
+                                        
+                                        # Check if public_id exists in Cloudinary cache to determine sync status
+                                        if hasattr(self, 'cloudinary_files_cache') and self.cloudinary_files_cache:
+                                            debug_metadata(f"Checking {len(self.cloudinary_files_cache)} cached Cloudinary files for {result['public_id']}")
+                                            for cf in self.cloudinary_files_cache:
+                                                if cf.get('public_id') == result['public_id']:
+                                                    result['cloudinary_synced'] = True
+                                                    debug_cloudinary(f"[UNIFIED] File {filename} is SYNCED (public_id: {result['public_id']})")
+                                                    break
+                                        
+                                        if not result['cloudinary_synced']:
+                                            debug_cloudinary(f"[UNIFIED] File {filename} has orphaned public_id: {result['public_id']}")
+                                    else:
+                                        debug_metadata(f"UserComment found but doesn't start with 'cloudinary_public_id:' - value: '{user_comment}'")
+                                else:
+                                    debug_metadata(f"No UserComment field found for {filename}")
+                                    
+                            else:
+                                debug_metadata(f"Invalid JSON structure for {filename}")
+                        except json.JSONDecodeError as e:
+                            debug_errors(f"Failed to parse JSON metadata for {filename}: {e}")
+                            
+                    else:
+                        debug_metadata(f"No usable metadata output for {filename}")
+                        
+                except Exception as e:
+                    debug_errors(f"ExifTool error reading metadata for {filename}: {e}")
+                    
+            else:
+                debug_metadata(f"ExifTool not available for metadata extraction")
+                
+        except Exception as e:
+            debug_errors(f"Error extracting comprehensive metadata for {filename}: {e}")
+            self.problematic_files.add(file_path)
+        
+        # FALLBACK: If year not found from ExifTool, try PIL method (same as get_image_metadata)
+        debug_metadata(f"Checking if fallback needed for {filename}: result['year'] = {result['year']}")
+        if result['year'] is None:
+            debug_metadata(f"FALLBACK TRIGGERED: Using PIL fallback for date extraction: {filename}")
+            try:
+                # Try PIL method for date extraction
+                from PIL import Image
+                from PIL.ExifTags import TAGS
+                
+                with Image.open(file_path) as img:
+                    exifdata = img.getexif()
+                    for tag_id in exifdata:
+                        tag = TAGS.get(tag_id, tag_id)
+                        data = exifdata.get(tag_id)
+                        if tag in ['DateTimeOriginal', 'DateTime']:
+                            try:
+                                result['year'] = datetime.strptime(str(data)[:19], '%Y:%m:%d %H:%M:%S').year
+                                debug_metadata(f"Found year from PIL {tag}: {result['year']}")
+                                break
+                            except:
+                                continue
+                
+                # If still no year, use file creation date as final fallback
+                if result['year'] is None:
+                    import os
+                    creation_time = os.path.getctime(file_path)
+                    result['year'] = datetime.fromtimestamp(creation_time).year
+                    debug_metadata(f"Using file creation year: {result['year']}")
+                    debug_metadata(f"DEBUG: After setting file creation year, result['year'] = {result['year']}")
+                    
+            except Exception as fallback_e:
+                debug_errors(f"PIL fallback failed for {filename}: {fallback_e}")
+                # Final fallback to current year
+                result['year'] = datetime.now().year
+                debug_metadata(f"Using current year as final fallback: {result['year']}")
+        
+        debug_metadata(f"DEBUG: Final result before return: {result}")
+        debug_metadata(f"COMPREHENSIVE METADATA COMPLETE for {filename}")
+        return result
 
     def get_image_metadata(self, file_path):
         """Extract year and keywords from image metadata using persistent ExifTool (unified approach)"""
@@ -1215,56 +1368,67 @@ class MainWindow(QMainWindow):
             debug_cloudinary(f"Error during orphaned public_id cleanup for {file_path}: {e}")
             return 0
 
-    def _import_cloudinary_tags_for_file(self, file_path, local_keywords):
+    def _import_cloudinary_tags_for_file(self, file_path, local_keywords, public_id=None, cloudinary_tags=None):
         """
         Import Cloudinary tags for a single file if public_id matches.
+        Args:
+            file_path: Path to the image file
+            local_keywords: Current local keywords
+            public_id: Pre-extracted public_id (optional, will be extracted if not provided)
+            cloudinary_tags: Pre-extracted cloudinary tags (optional, will be looked up if not provided)
         Returns: Cloudinary keywords list if found and different, None if no import needed
         """
         try:
-            # Get public_id from file metadata
-            from utilities.cloudinary_upload_handler import get_cloudinary_public_id_from_metadata
-            local_public_id = get_cloudinary_public_id_from_metadata(file_path)
+            # Use provided public_id or extract from file metadata
+            local_public_id = public_id
+            if not local_public_id:
+                from utilities.cloudinary_upload_handler import get_cloudinary_public_id_from_metadata
+                local_public_id = get_cloudinary_public_id_from_metadata(file_path)
             
             if not local_public_id:
                 debug_tags(f"No public_id found in {os.path.basename(file_path)} - keeping local tags")
                 return None
+
+            # Use provided cloudinary_tags or look up from cache
+            cloudinary_tags_list = cloudinary_tags
+            if cloudinary_tags_list is None:
+                # Get Cloudinary files data from main app cache
+                cloudinary_files = getattr(self, 'cloudinary_files_cache', [])
+                if not cloudinary_files:
+                    debug_cloudinary(f"No Cloudinary files data available in main app cache")
+                    return None
+
+                debug_cloudinary(f"Searching for public_id '{local_public_id}' in {len(cloudinary_files)} Cloudinary files")
+
+                # Debug: Show what we're looking for vs what's available
+                debug_cloudinary(f"Target public_id: '{local_public_id}'")
+
+                # Find matching Cloudinary file by public_id
+                cloudinary_file = None
+                for i, cf in enumerate(cloudinary_files):
+                    cf_public_id = cf.get('public_id', '')
+                    debug_cloudinary(f"  File {i+1}: public_id='{cf_public_id}', tags={cf.get('tags', [])} (type: {type(cf.get('tags', []))})")
+                    if cf_public_id == local_public_id:
+                        cloudinary_file = cf
+                        debug_cloudinary(f"Found matching Cloudinary file for public_id: {local_public_id}")
+                        break
+
+                if not cloudinary_file:
+                    debug_cloudinary(f"No Cloudinary file found for public_id: {local_public_id}")
+                    debug_cloudinary(f"Available public_ids: {[cf.get('public_id', 'NO_ID') for cf in cloudinary_files[:5]]}")  # Show first 5 for debugging
+                    return None
+
+                # Extract Cloudinary tags
+                cloudinary_tags_list = cloudinary_file.get('tags', [])
             
-            # Get Cloudinary files data from main app cache
-            cloudinary_files = getattr(self, 'cloudinary_files_cache', [])
-            if not cloudinary_files:
-                debug_cloudinary(f"No Cloudinary files data available in main app cache")
-                return None
-            
-            debug_cloudinary(f"Searching for public_id '{local_public_id}' in {len(cloudinary_files)} Cloudinary files")
-            
-            # Debug: Show what we're looking for vs what's available
-            debug_cloudinary(f"Target public_id: '{local_public_id}'")
-            
-            # Find matching Cloudinary file by public_id
-            cloudinary_file = None
-            for i, cf in enumerate(cloudinary_files):
-                cf_public_id = cf.get('public_id', '')
-                debug_cloudinary(f"  File {i+1}: public_id='{cf_public_id}', tags={cf.get('tags', [])} (type: {type(cf.get('tags', []))})")
-                if cf_public_id == local_public_id:
-                    cloudinary_file = cf
-                    debug_cloudinary(f"Found matching Cloudinary file for public_id: {local_public_id}")
-                    break
-            
-            if not cloudinary_file:
-                debug_cloudinary(f"No Cloudinary file found for public_id: {local_public_id}")
-                debug_cloudinary(f"Available public_ids: {[cf.get('public_id', 'NO_ID') for cf in cloudinary_files[:5]]}")  # Show first 5 for debugging
-                return None
-            
-            # Extract Cloudinary tags
-            cloudinary_tags = cloudinary_file.get('tags', [])
-            if not cloudinary_tags:
+            if not cloudinary_tags_list:
                 debug_cloudinary(f"No tags in Cloudinary for {local_public_id} - keeping local tags")
                 return None
-            
-            debug_cloudinary(f"Found {len(cloudinary_tags)} tags in Cloudinary for {local_public_id}: {cloudinary_tags}")
-            
+
+            debug_cloudinary(f"Found {len(cloudinary_tags_list)} tags in Cloudinary for {local_public_id}: {cloudinary_tags_list}")
+
             # Convert to same format as local keywords (list of strings)
-            cloudinary_keywords = [str(tag).strip() for tag in cloudinary_tags if str(tag).strip()]
+            cloudinary_keywords = [str(tag).strip() for tag in cloudinary_tags_list if str(tag).strip()]
             
             # Compare with local keywords to see if import is needed
             local_set = set(local_keywords) if local_keywords else set()
@@ -2738,19 +2902,27 @@ class MainWindow(QMainWindow):
                         # Get existing metadata/tags if available
                         metadata = self.image_metadata.get(file_path, {})
                         
+                        # DEBUG: Check what gets retrieved from image_metadata
+                        debug_metadata(f"Retrieved metadata for {os.path.basename(file_path)}: {metadata}")
+                        
                         # Build tags from year and keywords
                         year = metadata.get('year', '')
                         keywords = metadata.get('keywords', [])
+                        keywords_from_cloudinary = metadata.get('keywords_from_cloudinary', False)
                         
                         # Combine year and keywords into a single tag string with duplicate checking
                         all_tags = []
                         seen = set()
                         
-                        # Add year first if it exists and isn't already in keywords
-                        if year:
+                        # Only add year automatically if keywords did NOT come from Cloudinary import
+                        # When tags are imported from Cloudinary, we respect them exactly as they are
+                        if year and not keywords_from_cloudinary:
                             year_str = str(year)
                             all_tags.append(year_str)
                             seen.add(year_str)
+                            debug_tags(f"Added year '{year_str}' to tags for {os.path.basename(file_path)} (local keywords)")
+                        elif keywords_from_cloudinary:
+                            debug_tags(f"Skipped adding year to {os.path.basename(file_path)} - keywords imported from Cloudinary")
                         
                         # Add keywords, checking for duplicates
                         if keywords:
@@ -3095,60 +3267,89 @@ class MainWindow(QMainWindow):
                 # Cloudinary assessment if enabled  
                 if cloudinary_enabled and self.cloudinary_updater:
                     try:
-                        debug_assessment(f"[LIGHTWEIGHT ASSESSMENT] Checking sync status for {os.path.basename(file_path)} - File {i+1}/{len(image_files)}")
+                        debug_assessment(f"[UNIFIED ASSESSMENT] Checking metadata and sync status for {os.path.basename(file_path)} - File {i+1}/{len(image_files)}")
                         
-                        # Use lightweight assessment that only checks public_id without resizing
-                        is_synced = self.image_assessment.check_cloudinary_sync_status_lightweight(file_path)
+                        # Get ALL metadata in one ExifTool call (replaces separate lightweight assessment + metadata extraction)
+                        comprehensive_metadata = self.get_comprehensive_metadata(file_path)
+                        cloudinary_sync_status[file_path] = comprehensive_metadata['cloudinary_synced']
                         
-                        if is_synced:
-                            debug_cloudinary(f"[LIGHTWEIGHT ASSESSMENT] {os.path.basename(file_path)} - Already synced with Cloudinary (SKIPPED)")
-                            debug_assessment(f"[LIGHTWEIGHT ASSESSMENT] {os.path.basename(file_path)} - Status: ALREADY_SYNCED")
-                            cloudinary_sync_status[file_path] = True  # Store sync status
+                        if comprehensive_metadata['cloudinary_synced']:
+                            debug_cloudinary(f"[UNIFIED ASSESSMENT] {os.path.basename(file_path)} - Already synced with Cloudinary (SKIPPED)")
+                            debug_assessment(f"[UNIFIED ASSESSMENT] {os.path.basename(file_path)} - Status: ALREADY_SYNCED")
                         else:
-                            debug_assessment(f"[LIGHTWEIGHT ASSESSMENT] {os.path.basename(file_path)} - Not synced, will be processed for upload later")
-                            debug_assessment(f"[LIGHTWEIGHT ASSESSMENT] {os.path.basename(file_path)} - Status: NEEDS_PROCESSING")
-                            cloudinary_sync_status[file_path] = False  # Store sync status
+                            debug_assessment(f"[UNIFIED ASSESSMENT] {os.path.basename(file_path)} - Not synced, will be processed for upload later")
+                            debug_assessment(f"[UNIFIED ASSESSMENT] {os.path.basename(file_path)} - Status: NEEDS_PROCESSING")
                             
                     except Exception as e:
-                        debug_errors(f"[LIGHTWEIGHT ASSESSMENT] Cloudinary assessment failed for {os.path.basename(file_path)}: {e}")
+                        debug_errors(f"[UNIFIED ASSESSMENT] Metadata extraction failed for {os.path.basename(file_path)}: {e}")
                         cloudinary_sync_status[file_path] = False  # Default to not synced on exception
+                        comprehensive_metadata = {'year': None, 'keywords': [], 'public_id': None, 'cloudinary_synced': False}
                 else:
-                    # Cloudinary not enabled - default to not synced
+                    # Cloudinary not enabled - still extract basic metadata but mark as not synced
+                    comprehensive_metadata = self.get_comprehensive_metadata(file_path)
                     cloudinary_sync_status[file_path] = False
                 
-                # Create preview and extract metadata
+                # Create preview and use already-extracted metadata
                 try:
                     preview = self.create_preview(file_path)
                     if preview:
-                        # Extract public_id during assessment phase to avoid redundant calls during widget creation
-                        cloudinary_public_id = None
-                        if cloudinary_enabled:
-                            try:
-                                from utilities.exiftool_utils import get_cloudinary_public_id_from_metadata
-                                cloudinary_public_id = get_cloudinary_public_id_from_metadata(file_path)
-                                debug_assessment(f"Extracted public_id for {os.path.basename(file_path)}: {cloudinary_public_id or 'None'}")
-                            except Exception as e:
-                                debug_errors(f"Failed to extract public_id for {os.path.basename(file_path)}: {e}")
+                        # Use metadata from comprehensive extraction (no redundant ExifTool calls)
+                        year = comprehensive_metadata['year']
+                        local_keywords = comprehensive_metadata['keywords']
+                        cloudinary_public_id = comprehensive_metadata['public_id']
                         
-                        year, local_keywords = self.get_image_metadata(file_path)
+                        # FALLBACK: If comprehensive metadata didn't find year, use the working get_image_metadata
+                        if year is None:
+                            debug_metadata(f"Comprehensive metadata missing year, using fallback for {os.path.basename(file_path)}")
+                            fallback_year, fallback_keywords = self.get_image_metadata(file_path)
+                            if fallback_year is not None:
+                                year = fallback_year
+                                debug_metadata(f"Fallback found year: {year}")
+                            if not local_keywords and fallback_keywords:
+                                local_keywords = fallback_keywords
+                                debug_metadata(f"Fallback found keywords: {local_keywords}")
+                        
+                        # DEBUG: Check what comprehensive metadata actually contains
+                        debug_metadata(f"Comprehensive metadata for {os.path.basename(file_path)}: year={year}, keywords={local_keywords}, public_id={cloudinary_public_id}")
                         
                         # Store ACTUAL local keywords as original for proper change detection
                         self.original_keywords[file_path] = local_keywords.copy()
                         
                         # Start with local keywords
                         keywords = local_keywords.copy()
+                        keywords_from_cloudinary = False  # Track if keywords came from Cloudinary import
                         
-                        # CLOUDINARY TAG IMPORT: Replace local tags with Cloudinary tags if public_id matches
-                        if cloudinary_enabled and self.cloudinary_updater:
-                            cloudinary_keywords = self._import_cloudinary_tags_for_file(file_path, local_keywords)
-                            if cloudinary_keywords is not None:
-                                keywords = cloudinary_keywords
-                                debug_cloudinary(f"Replaced local tags with Cloudinary tags for {os.path.basename(file_path)}")
-                                # Mark this file as having imported changes that need saving
-                                if not hasattr(self, 'cloudinary_imported_files'):
-                                    self.cloudinary_imported_files = set()
-                                self.cloudinary_imported_files.add(file_path)
-                                debug_cloudinary(f"Marked {os.path.basename(file_path)} as having imported Cloudinary changes")
+                        # CLOUDINARY TAG IMPORT: Get Cloudinary tags if available
+                        cloudinary_tags_list = []
+                        if cloudinary_enabled and self.cloudinary_updater and cloudinary_public_id:
+                            # Get Cloudinary tags from cache using already-extracted public_id
+                            if hasattr(self, 'cloudinary_files_cache') and self.cloudinary_files_cache:
+                                for cf in self.cloudinary_files_cache:
+                                    if cf.get('public_id') == cloudinary_public_id:
+                                        cloudinary_tags_list = cf.get('tags', [])
+                                        break
+                                
+                                if cloudinary_tags_list:
+                                    # Convert to same format as local keywords (list of strings)
+                                    cloudinary_keywords = [str(tag).strip() for tag in cloudinary_tags_list if str(tag).strip()]
+                                    
+                                    # Compare with local keywords to see if import is needed
+                                    local_set = set(local_keywords) if local_keywords else set()
+                                    cloudinary_set = set(cloudinary_keywords)
+                                    
+                                    if local_set != cloudinary_set:
+                                        keywords = cloudinary_keywords
+                                        keywords_from_cloudinary = True  # Mark that these came from Cloudinary
+                                        debug_cloudinary(f"Replaced local tags with Cloudinary tags for {os.path.basename(file_path)}")
+                                        debug_cloudinary(f"  Local tags: {local_keywords}")
+                                        debug_cloudinary(f"  Cloudinary tags: {cloudinary_keywords}")
+                                        # Mark this file as having imported changes that need saving
+                                        if not hasattr(self, 'cloudinary_imported_files'):
+                                            self.cloudinary_imported_files = set()
+                                        self.cloudinary_imported_files.add(file_path)
+                                        debug_cloudinary(f"Marked {os.path.basename(file_path)} as having imported Cloudinary changes")
+                                    else:
+                                        debug_cloudinary(f"Cloudinary tags match local tags for {os.path.basename(file_path)} - no import needed")
                         
                         # Prepare image data
                         image_data = {
@@ -3156,6 +3357,7 @@ class MainWindow(QMainWindow):
                             'preview': preview,
                             'year': year,
                             'keywords': keywords,
+                            'keywords_from_cloudinary': keywords_from_cloudinary,  # Track import source
                             'cloudinary_synced': cloudinary_sync_status.get(file_path, False),  # Include sync status
                             'cloudinary_public_id': cloudinary_public_id  # Cache for widget creation
                         }
@@ -3226,8 +3428,12 @@ class MainWindow(QMainWindow):
         # Store processed images
         self.image_files = [data['file_path'] for data in processed_data]
         self.image_previews = {data['file_path']: data['preview'] for data in processed_data}
-        self.image_metadata = {data['file_path']: {'year': data['year'], 'keywords': data['keywords'], 'cloudinary_synced': data.get('cloudinary_synced', False), 'cloudinary_public_id': data.get('cloudinary_public_id')} 
+        self.image_metadata = {data['file_path']: {'year': data['year'], 'keywords': data['keywords'], 'keywords_from_cloudinary': data.get('keywords_from_cloudinary', False), 'cloudinary_synced': data.get('cloudinary_synced', False), 'cloudinary_public_id': data.get('cloudinary_public_id')} 
                              for data in processed_data}
+        
+        # DEBUG: Check what gets stored in image_metadata
+        for file_path, metadata in self.image_metadata.items():
+            debug_metadata(f"Stored metadata for {os.path.basename(file_path)}: {metadata}")
         
         # Update layout with processed data
         if processed_data:

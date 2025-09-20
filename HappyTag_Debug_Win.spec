@@ -20,7 +20,7 @@ a = Analysis(
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['runtime_hook_debug.py'],
     excludes=[
         'pytest', '_pytest', 'py', 
         'pyinstaller_hooks_contrib.hooks.stdhooks.hook-pytest',

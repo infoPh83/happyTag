@@ -36,10 +36,9 @@ import sys
 # Import exiftool utilities
 from utilities.exiftool_utils import (
     write_cloudinary_metadata_to_file, 
-    get_cloudinary_public_id_from_metadata,
-    EXIFTOOL_AVAILABLE,
-    EXIFTOOL_PATH
+    get_cloudinary_public_id_from_metadata
 )
+from utilities.exiftool_detector import get_exiftool_info
 
 # Import filename sanitization utilities
 from utilities.filename_sanitizer import sanitize_filename_for_cloudinary, create_cloudinary_public_id
@@ -103,19 +102,22 @@ class CloudinaryUploadHandler(QObject):
         """
         if not self.metadata_write_failures:
             return None
+        # Get current ExifTool status
+        exiftool_info = get_exiftool_info()
             
         return {
             'count': len(self.metadata_write_failures),
             'files': [failure['file'] for failure in self.metadata_write_failures],
             'reasons': [failure['reason'] for failure in self.metadata_write_failures],
-            'exiftool_available': EXIFTOOL_AVAILABLE,
-            'exiftool_path': EXIFTOOL_PATH,
+            'exiftool_available': exiftool_info['available'],
+            'exiftool_path': exiftool_info['path'],
             'recommendation': self._get_metadata_failure_recommendation()
         }
     
     def _get_metadata_failure_recommendation(self):
         """Get recommendation for fixing metadata write failures"""
-        if not EXIFTOOL_AVAILABLE:
+        exiftool_info = get_exiftool_info()
+        if not exiftool_info['available']:
             return (
                 "ExifTool is not available. To save metadata to image files:\n"
                 "• Download ExifTool from https://exiftool.org/\n"
