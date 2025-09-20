@@ -1,0 +1,41 @@
+=== HappyTag Unified Session Log ===
+Session started: 2025-09-20 16:33:45
+Log file: D:\Python playfolder\happyTag\logs\happytag_session_2025-09-20_16-33-45.txt
+==================================================
+
+[16:33:45] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.32
+[16:34:21] [UPLOAD] NEW upload phase:
+[16:34:21] [UPLOAD]   Files for tag update only: 0
+[16:34:21] [UPLOAD]   Files not on Cloudinary (resize + upload): 28
+[16:34:21] [UPLOAD]   Files already synced (no action): 0
+[16:34:21] [UPLOAD] Total files to process: 28
+[16:34:21] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 01.JPG
+[16:34:26] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 02.JPG
+[16:34:29] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 03.JPG
+[16:34:32] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 04.JPG
+[16:34:36] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 05.JPG
+[16:34:39] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 06.JPG
+[16:34:42] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 07.JPG
+[16:34:45] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 08.JPG
+[16:34:49] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 09.JPG
+[16:34:52] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 10.JPG
+[16:34:56] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 11.JPG
+[16:34:59] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 12.JPG
+[16:35:03] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 13.JPG
+[16:35:07] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 14.JPG
+[16:35:11] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 15.JPG
+[16:35:15] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 16.JPG
+[16:35:19] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 17.JPG
+[16:35:23] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 18.JPG
+[16:35:27] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 19.JPG
+[16:35:31] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 20.JPG
+[16:35:35] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 21 - edit.tif
+[16:35:49] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 21.JPG
+[16:35:53] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 22.JPG
+[16:35:57] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 23.JPG
+[16:36:01] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 24.JPG
+[16:36:04] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 25 - edit.tif
+[16:36:17] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 25.JPG
+[16:36:20] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 26.JPG
+[16:36:25] [UPLOAD] NEW upload phase complete: 28 uploaded/updated, 0 errors, 0 metadata failures
+[16:36:26] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.341

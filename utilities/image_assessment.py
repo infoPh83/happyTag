@@ -15,6 +15,7 @@ from datetime import datetime
 from PIL import Image
 from io import BytesIO
 import logging
+from utilities.session_logger import get_session_logger, log_session_message
 from PyQt5.QtCore import QObject, pyqtSignal
 
 # Import debug utilities
@@ -118,32 +119,43 @@ class ImageAssessment(QObject):
     def setup_logging(self, log_folder):
         """Setup logging for assessment phase"""
         try:
-            self.log_folder = log_folder
-            if not log_folder:
-                print("[WARNING] No log folder specified - assessment logging disabled")
-                return
+            # Use session logger if available, otherwise fall back to old system
+            session_logger = get_session_logger()
+            current_log_file = session_logger.get_current_log_file()
             
-            # Create log folder if it doesn't exist
-            log_path = Path(log_folder)
-            log_path.mkdir(parents=True, exist_ok=True)
-            
-            # Create log filename with timestamp
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            log_filename = f"{LOG_NAME_PREFIX}{timestamp}.txt"
-            log_file_path = log_path / log_filename
-            
-            # Open log file for writing
-            self.log_file_handle = log_file_path.open("w", encoding="utf-8")
-            
-            # Write header
-            session_start = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self.log_file_handle.write(f"=== HappyTag Assessment Session ===\n")
-            self.log_file_handle.write(f"Session started: {session_start}\n")
-            self.log_file_handle.write(f"Log file: {log_file_path}\n")
-            self.log_file_handle.write("=" * 50 + "\n\n")
-            self.log_file_handle.flush()
-            
-            debug_assessment(f"Assessment logging enabled: {log_file_path}")
+            if current_log_file:
+                # Session logger is already active, just use it
+                self.log_folder = str(current_log_file.parent)
+                log_session_message("Assessment phase started", "ASSESSMENT")
+                debug_assessment(f"Assessment using session logger: {current_log_file}")
+            else:
+                # Fall back to creating our own log file
+                self.log_folder = log_folder
+                if not log_folder:
+                    print("[WARNING] No log folder specified - assessment logging disabled")
+                    return
+                
+                # Create log folder if it doesn't exist
+                log_path = Path(log_folder)
+                log_path.mkdir(parents=True, exist_ok=True)
+                
+                # Create log filename with timestamp
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                log_filename = f"{LOG_NAME_PREFIX}{timestamp}.txt"
+                log_file_path = log_path / log_filename
+                
+                # Open log file for writing
+                self.log_file_handle = log_file_path.open("w", encoding="utf-8")
+                
+                # Write header
+                session_start = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.log_file_handle.write(f"=== HappyTag Assessment Session ===\n")
+                self.log_file_handle.write(f"Session started: {session_start}\n")
+                self.log_file_handle.write(f"Log file: {log_file_path}\n")
+                self.log_file_handle.write("=" * 50 + "\n\n")
+                self.log_file_handle.flush()
+                
+                debug_assessment(f"Assessment logging enabled: {log_file_path}")
             
         except Exception as e:
             print(f"[ERROR] Failed to setup assessment logging: {e}")
@@ -157,7 +169,10 @@ class ImageAssessment(QObject):
         # Log to console
         print(f"[ASSESSMENT {level}] {message}")
         
-        # Log to file if handle exists
+        # Log to session logger (preferred method)
+        log_session_message(message, "ASSESSMENT")
+        
+        # Log to file if handle exists (fallback)
         if self.log_file_handle:
             try:
                 self.log_file_handle.write(f"{formatted_message}\n")

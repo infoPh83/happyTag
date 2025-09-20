@@ -1,0 +1,25 @@
+=== HappyTag Unified Session Log ===
+Session started: 2025-09-20 16:21:31
+Log file: D:\Python playfolder\happyTag\logs\happytag_session_2025-09-20_16-21-31.txt
+==================================================
+
+[16:21:31] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.288
+[16:22:03] [UPLOAD] NEW upload phase:
+[16:22:03] [UPLOAD]   Files for tag update only: 0
+[16:22:03] [UPLOAD]   Files not on Cloudinary (resize + upload): 12
+[16:22:03] [UPLOAD]   Files already synced (no action): 0
+[16:22:03] [UPLOAD] Total files to process: 12
+[16:22:03] [UPLOAD] Currently uploading: Uploading: gamesHighRes_01.jpg
+[16:22:09] [UPLOAD] Currently uploading: Uploading: gamesHighRes_02.jpg
+[16:22:14] [UPLOAD] Currently uploading: Uploading: gamesHighRes_03.jpg
+[16:22:18] [UPLOAD] Currently uploading: Uploading: gamesHighRes_04.jpg
+[16:22:22] [UPLOAD] Currently uploading: Uploading: gamesHighRes_05.jpg
+[16:22:26] [UPLOAD] Currently uploading: Uploading: gamesHighRes_06.jpg
+[16:22:31] [UPLOAD] Currently uploading: Uploading: gamesHighRes_07.jpg
+[16:22:34] [UPLOAD] Currently uploading: Uploading: gamesHighRes_08.jpg
+[16:22:38] [UPLOAD] Currently uploading: Uploading: gamesHighRes_09.jpg
+[16:22:42] [UPLOAD] Currently uploading: Uploading: gamesHighRes_10.jpg
+[16:22:47] [UPLOAD] Currently uploading: Uploading: gamesHighRes_11.jpg
+[16:22:50] [UPLOAD] Currently uploading: Uploading: gamesHighRes_12.jpg
+[16:22:54] [UPLOAD] NEW upload phase complete: 12 uploaded/updated, 0 errors, 0 metadata failures
+[16:22:56] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.314

@@ -7,9 +7,10 @@ from PIL import Image
 
 from PyQt5.QtWidgets import (QMainWindow, QApplication, QFileDialog, 
                            QWidget, QLabel, QTextEdit, QMessageBox,
-                           QVBoxLayout, QSizePolicy, QProgressBar, QRubberBand, QDialog)
-from PyQt5.QtCore import Qt, QTimer, QSize, QRect
-from PyQt5.QtGui import QPixmap, QImage
+                           QVBoxLayout, QSizePolicy, QProgressBar, QRubberBand, QDialog,
+                           QHBoxLayout, QPushButton)
+from PyQt5.QtCore import Qt, QTimer, QSize, QRect, QUrl
+from PyQt5.QtGui import QPixmap, QImage, QDesktopServices
 from PyQt5 import uic
 from utilities.tag_manager import TagManager
 from utilities.settings_dialog import SettingsDialog
@@ -26,6 +27,7 @@ from utilities.debug_utils import (
     debug_width_control, debug_ctrl_operations, debug_orientation, 
     debug_color_conversion, debug_file_dialogs, debug_tag_widgets, debug_temp_files
 )
+from utilities.session_logger import get_current_log_file, configure_session_logging, log_session_message
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -36,6 +38,73 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
     
     return os.path.join(base_path, relative_path)
+
+class UploadCompletionDialog(QDialog):
+    """Custom dialog for upload completion with clickable log link"""
+    
+    def __init__(self, parent, title, message, current_log_file=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.setMinimumWidth(500)
+        
+        # Create layout
+        layout = QVBoxLayout(self)
+        
+        # Add message label
+        message_label = QLabel(message)
+        message_label.setWordWrap(True)
+        layout.addWidget(message_label)
+        
+        # Add log file link if current log file exists
+        if current_log_file and os.path.exists(current_log_file):
+            log_container = QWidget()
+            log_layout = QHBoxLayout(log_container)
+            log_layout.setContentsMargins(0, 10, 0, 10)
+            
+            log_label = QLabel("Current log file:")
+            log_layout.addWidget(log_label)
+            
+            # Show just the filename
+            log_filename = os.path.basename(current_log_file)
+            log_link_button = QPushButton(log_filename)
+            log_link_button.setStyleSheet("""
+                QPushButton {
+                    color: #0066cc;
+                    border: none;
+                    text-decoration: underline;
+                    text-align: left;
+                    padding: 2px;
+                }
+                QPushButton:hover {
+                    color: #004499;
+                    background-color: #f0f0f0;
+                }
+            """)
+            log_link_button.setToolTip(f"Click to open current log file: {current_log_file}")
+            log_link_button.clicked.connect(lambda: self.open_log_file(current_log_file))
+            log_layout.addWidget(log_link_button)
+            log_layout.addStretch()
+            
+            layout.addWidget(log_container)
+        
+        # Add close button
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        close_button = QPushButton("OK")
+        close_button.clicked.connect(self.accept)
+        close_button.setMinimumWidth(80)
+        button_layout.addWidget(close_button)
+        layout.addLayout(button_layout)
+    
+    def open_log_file(self, log_file_path):
+        """Open the current log file in the default system application"""
+        try:
+            # Use QDesktopServices to open the file with the default application
+            url = QUrl.fromLocalFile(log_file_path)
+            QDesktopServices.openUrl(url)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Could not open log file:\n{e}")
 
 try:
     import exiftool
@@ -513,6 +582,10 @@ class MainWindow(QMainWindow):
         
         # Initialize components in order of importance
         try:
+            # 0. Initialize Session Logging
+            debug_startup("Configuring session logging...")
+            configure_session_logging()
+            
             # 1. Initialize Cloudinary (async)
             debug_startup("Initializing Cloudinary integration...")
             self._initialize_cloudinary_async()
@@ -624,7 +697,8 @@ class MainWindow(QMainWindow):
         if not hasattr(self, 'upload_handler') or self.upload_handler is None:
             self.upload_handler = CloudinaryUploadHandler(
                 cloudinary_updater=self.cloudinary_updater,
-                image_assessment=self.image_assessment
+                image_assessment=self.image_assessment,
+                main_app=self
             )
             self.setup_upload_handler_connections()
             debug_startup("Upload Handler initialized")
@@ -981,7 +1055,6 @@ class MainWindow(QMainWindow):
                 
                 # If still no year, use file creation date as final fallback
                 if result['year'] is None:
-                    import os
                     creation_time = os.path.getctime(file_path)
                     result['year'] = datetime.fromtimestamp(creation_time).year
                     debug_metadata(f"Using file creation year: {result['year']}")
@@ -3640,24 +3713,53 @@ class MainWindow(QMainWindow):
                 public_id = widget.get_cloudinary_public_id()
                 
                 if public_id:
-                    # Image is on Cloudinary - check if tags need updating
+                    # Image claims to have a public_id - check if it exists in Cloudinary cache
                     debug_upload(f"  Has public_id: {public_id}")
                     
-                    if widget.ui_tags_match_cloudinary():
-                        # Tags match - no action needed
-                        debug_upload(f"  Tags match Cloudinary - no action needed")
-                        already_synced_count += 1
+                    # Check if this public_id exists in the cached Cloudinary files
+                    public_id_exists_on_cloudinary = False
+                    if hasattr(self, 'cloudinary_files_cache') and self.cloudinary_files_cache:
+                        for cf in self.cloudinary_files_cache:
+                            if cf.get('public_id') == public_id:
+                                public_id_exists_on_cloudinary = True
+                                break
+                    
+                    if public_id_exists_on_cloudinary:
+                        # Public_id exists on Cloudinary - check if tags need updating
+                        if widget.ui_tags_match_cloudinary():
+                            # Tags match - no action needed
+                            debug_upload(f"  Public_id exists on Cloudinary, tags match - no action needed")
+                            already_synced_count += 1
+                        else:
+                            # Tags don't match - needs tag update only
+                            debug_upload(f"  Public_id exists on Cloudinary, tags differ - needs tag update")
+                            debug_upload(f"    UI tags: {ui_tags_list}")
+                            debug_upload(f"    Cloudinary tags: {widget.get_cloudinary_tags()}")
+                            
+                            files_for_tag_update_only.append({
+                                'file_path': file_path,
+                                'public_id': public_id,
+                                'ui_tags': ui_tags_list,
+                                'current_cloudinary_tags': widget.get_cloudinary_tags()
+                            })
                     else:
-                        # Tags don't match - needs tag update only
-                        debug_upload(f"  Tags differ from Cloudinary - needs tag update")
-                        debug_upload(f"    UI tags: {ui_tags_list}")
-                        debug_upload(f"    Cloudinary tags: {widget.get_cloudinary_tags()}")
+                        # Public_id is ORPHANED (not found in Cloudinary cache) - treat as new upload
+                        debug_upload(f"  Public_id is ORPHANED - not found in Cloudinary cache")
+                        debug_upload(f"  Reclassifying as 'not on Cloudinary' for full upload")
+                        log_session_message(f"Detected orphaned public_id during assessment: {public_id} for {os.path.basename(file_path)}", "UPLOAD")
                         
-                        files_for_tag_update_only.append({
+                        # Optionally clean the orphaned public_id immediately
+                        if hasattr(self, '_cleanup_orphaned_public_id'):
+                            cleanup_result = self._cleanup_orphaned_public_id(file_path)
+                            if cleanup_result:
+                                debug_upload(f"  Cleaned orphaned public_id from {os.path.basename(file_path)}")
+                                log_session_message(f"Cleaned orphaned public_id from {os.path.basename(file_path)} during assessment", "UPLOAD")
+                        
+                        # Treat as new upload
+                        files_not_on_cloudinary.append({
                             'file_path': file_path,
-                            'public_id': public_id,
                             'ui_tags': ui_tags_list,
-                            'current_cloudinary_tags': widget.get_cloudinary_tags()
+                            'original_size': os.path.getsize(file_path) if os.path.exists(file_path) else 0
                         })
                 else:
                     # Image is NOT on Cloudinary - needs full upload
@@ -3792,6 +3894,12 @@ class MainWindow(QMainWindow):
             file_path_obj = Path(first_original_file)
             folder_name = file_path_obj.parent.name
             
+            # If the folder name is "orphaned", it means files were moved to a subfolder
+            # during orphaned cleanup - use the parent folder instead
+            if folder_name == "orphaned":
+                folder_name = file_path_obj.parent.parent.name
+                debug_upload(f"Detected 'orphaned' subfolder, using parent folder: '{folder_name}'")
+            
             debug_upload(f"Extracted original folder name: '{folder_name}' from {first_original_file}")
             return folder_name
             
@@ -3812,6 +3920,10 @@ class MainWindow(QMainWindow):
             uploaded_count, error_count, metadata_failures = upload_data
         
         debug_upload(f"Upload complete: {uploaded_count} uploaded, {error_count} errors, {metadata_failures} metadata failures")
+        
+        # Update widget visual status for successfully uploaded files
+        if uploaded_count > 0:
+            self._update_widgets_after_upload()
         
         # Refresh Cloudinary status to update the asset count in the credits bar
         if uploaded_count > 0 and hasattr(self, 'cloudinary_updater') and self.cloudinary_updater:
@@ -3844,7 +3956,17 @@ class MainWindow(QMainWindow):
                 message += f"Reason: {metadata_failure_summary['reasons'][0] if metadata_failure_summary['reasons'] else 'Unknown'}\n\n"
                 message += metadata_failure_summary['recommendation']
             
-            QMessageBox.warning(self, "Upload Complete with Metadata Warnings", message)
+            # Get current log file from session logger
+            current_log_file = get_current_log_file()
+            
+            # Use custom dialog with clickable log link
+            dialog = UploadCompletionDialog(
+                self, 
+                "Upload Complete with Metadata Warnings", 
+                message, 
+                str(current_log_file) if current_log_file else None
+            )
+            dialog.exec_()
         else:
             # Upload errors (possibly with metadata issues too)
             message = f"Uploaded {uploaded_count} files with {error_count} upload errors."
@@ -3852,13 +3974,53 @@ class MainWindow(QMainWindow):
                 message += f"\nAdditionally, {metadata_failures} files had metadata writing issues."
             message += "\nCheck logs for details."
             
-            QMessageBox.warning(self, "Upload Complete with Errors", message)
+            # Get current log file from session logger
+            current_log_file = get_current_log_file()
+            
+            # Use custom dialog with clickable log link
+            dialog = UploadCompletionDialog(
+                self, 
+                "Upload Complete with Errors", 
+                message, 
+                str(current_log_file) if current_log_file else None
+            )
+            dialog.exec_()
     
     def on_upload_preview(self, file_path):
         """Handle upload preview updates"""
-        debug_upload(f"Currently uploading: {file_path}")
+        upload_msg = f"Currently uploading: {file_path}"
+        debug_upload(upload_msg)
+        log_session_message(upload_msg, "UPLOAD")
         # Update UI to show which file is currently being uploaded
         # This could update a preview widget or status bar
+    
+    def _update_widgets_after_upload(self):
+        """Update widget visual status after successful uploads"""
+        if not hasattr(self, 'image_flow_manager') or not self.image_flow_manager:
+            debug_upload("No image_flow_manager available for widget update")
+            return
+            
+        debug_upload("Updating widget visual status after upload completion...")
+        updated_count = 0
+        
+        for file_path, widget in self.image_flow_manager.image_widgets.items():
+            # Check if widget now has a public_id (indicating successful upload)
+            public_id = widget.get_cloudinary_public_id()
+            if public_id:
+                # Update widget to show "on cloudinary" styling
+                if hasattr(widget, 'set_cloudinary_status'):
+                    widget.set_cloudinary_status(True)
+                    debug_upload(f"Updated visual status for {os.path.basename(file_path)} - now shows as 'on Cloudinary'")
+                    updated_count += 1
+                else:
+                    debug_upload(f"Widget for {os.path.basename(file_path)} has no set_cloudinary_status method")
+        
+        debug_upload(f"Widget visual update complete: {updated_count} widgets updated to 'on Cloudinary' styling")
+        
+        # Force immediate visual refresh of all widgets
+        for widget in self.image_flow_manager.image_widgets.values():
+            if hasattr(widget, 'update'):
+                widget.update()
     
     def update_progress_label(self, message):
         """Update the progress label with a custom message"""
@@ -4118,16 +4280,23 @@ class MainWindow(QMainWindow):
     def on_tag_clicked(self, tag_text):
         debug_tags(f"Tag clicked: '{tag_text}' | Selected images: {self.selected_images}")
         if not self.selected_images:
+            debug_tags("No selected images - returning early")
             return
 
-        # Update each selected image's input field
-        for widget in self.image_widgets:
-            if hasattr(widget, 'file_path') and widget.file_path in self.selected_images:
+        # Update each selected image's input field using image_flow_manager
+        if not hasattr(self, 'image_flow_manager') or not self.image_flow_manager.image_widgets:
+            debug_tags("No image_flow_manager or widgets available")
+            return
+            
+        for file_path, widget in self.image_flow_manager.image_widgets.items():
+            if file_path in self.selected_images:
+                debug_tags(f"Processing widget for file: {file_path}")
                 current_text = self.get_widget_text(widget)
-                debug_tags(f"Before append | file_path: {widget.file_path} | current_text: '{current_text}'")
-                # Split tags, strip whitespace, and ensure uniqueness
-                tags = [t.strip() for t in current_text.split(',') if t.strip()]
+                debug_tags(f"Before append | file_path: {file_path} | current_text: '{current_text}'")
+                # Split tags by semicolons, strip whitespace, and ensure uniqueness
+                tags = [t.strip() for t in current_text.split(';') if t.strip()]
                 if tag_text in tags:
+                    debug_tags(f"Tag '{tag_text}' already present in tags: {tags}")
                     continue  # Skip if already present
                 tags.append(tag_text)
                 unique_tags = []
@@ -4136,11 +4305,12 @@ class MainWindow(QMainWindow):
                     if t not in seen:
                         unique_tags.append(t)
                         seen.add(t)
-                new_text = ', '.join(unique_tags)
+                new_text = ';'.join(unique_tags)
                 
+                debug_tags(f"About to set new text: '{new_text}' for widget type: {type(widget)}")
                 # Use helper function to set the text (handles both ImageCardWidget and legacy widgets)
                 self.set_widget_text(widget, new_text)
-                debug_tags(f"After append | file_path: {widget.file_path} | new_text: '{new_text}'")
+                debug_tags(f"After append | file_path: {file_path} | new_text: '{new_text}'")
     
     def on_business_clicked(self, business_button):
         """Handle business button clicks and add business description to selected images with field-level duplicate checking"""
@@ -4150,11 +4320,15 @@ class MainWindow(QMainWindow):
         if not self.selected_images:
             return
 
-        # Update each selected image's text field
-        for widget in self.image_widgets:
-            if hasattr(widget, 'file_path') and widget.file_path in self.selected_images:
+        # Update each selected image's text field using image_flow_manager
+        if not hasattr(self, 'image_flow_manager') or not self.image_flow_manager.image_widgets:
+            debug_tags("No image_flow_manager or widgets available")
+            return
+            
+        for file_path, widget in self.image_flow_manager.image_widgets.items():
+            if file_path in self.selected_images:
                 current_text = self.get_widget_text(widget)
-                debug_tags(f"Before append | file_path: {widget.file_path} | current_text: '{current_text}'")
+                debug_tags(f"Before append | file_path: {file_path} | current_text: '{current_text}'")
                 
                 # Advanced duplicate checking: check each field individually
                 duplicate_fields = []
@@ -4175,40 +4349,44 @@ class MainWindow(QMainWindow):
                 if missing_fields:
                     if duplicate_fields:
                         debug_tags(f"Partial duplicates found: {duplicate_fields}. Adding missing fields: {missing_fields}")
-                        new_business_text = ", ".join(missing_fields)  # Add commas between fields
+                        new_business_text = ";".join(missing_fields)  # Add semicolons between fields
                     else:
                         debug_tags(f"No duplicates found. Adding all fields: {missing_fields}")
-                        new_business_text = ", ".join(business_fields)  # Add commas between all fields
+                        new_business_text = ";".join(business_fields)  # Add semicolons between all fields
                 else:
                     debug_tags(f"All fields already present, skipping")
                     continue
                 
-                # Add the new business text (handle comma duplication)
+                # Add the new business text (handle semicolon duplication)
                 if current_text:
-                    # Check if current text already ends with comma or space
-                    if current_text.rstrip().endswith(','):
-                        new_text = f"{current_text} {new_business_text}"
+                    # Check if current text already ends with semicolon or space
+                    if current_text.rstrip().endswith(';'):
+                        new_text = f"{current_text}{new_business_text}"
                     else:
-                        new_text = f"{current_text}, {new_business_text}"
+                        new_text = f"{current_text};{new_business_text}"
                 else:
                     new_text = new_business_text
                 
                 # Use helper function to set the text (handles both ImageCardWidget and legacy widgets)
                 self.set_widget_text(widget, new_text)
-                debug_tags(f"After append | file_path: {widget.file_path} | new_text: '{new_text}'")
+                debug_tags(f"After append | file_path: {file_path} | new_text: '{new_text}'")
 
     def on_building_clicked(self, building_button):
         """Handle building button clicks and add building description to selected images"""
-        building_text = f"{building_button.building_name}, {building_button.street_address}"
+        building_text = f"{building_button.building_name};{building_button.street_address}"
         debug_tags(f"Building clicked: '{building_text}' | Selected images: {self.selected_images}")
         if not self.selected_images:
             return
 
-        # Update each selected image's input field
-        for widget in self.image_widgets:
-            if hasattr(widget, 'file_path') and widget.file_path in self.selected_images:
+        # Update each selected image's input field using image_flow_manager
+        if not hasattr(self, 'image_flow_manager') or not self.image_flow_manager.image_widgets:
+            debug_tags("No image_flow_manager or widgets available")
+            return
+            
+        for file_path, widget in self.image_flow_manager.image_widgets.items():
+            if file_path in self.selected_images:
                 current_text = self.get_widget_text(widget)
-                debug_tags(f"Before append | file_path: {widget.file_path} | current_text: '{current_text}'")
+                debug_tags(f"Before append | file_path: {file_path} | current_text: '{current_text}'")
                 
                 # Check for duplicates
                 if building_text in current_text:
@@ -4217,16 +4395,16 @@ class MainWindow(QMainWindow):
                 
                 # Add the building text
                 if current_text:
-                    if current_text.rstrip().endswith(','):
-                        new_text = f"{current_text} {building_text}"
+                    if current_text.rstrip().endswith(';'):
+                        new_text = f"{current_text}{building_text}"
                     else:
-                        new_text = f"{current_text}, {building_text}"
+                        new_text = f"{current_text};{building_text}"
                 else:
                     new_text = building_text
                 
                 # Use helper function to set the text (handles both ImageCardWidget and legacy widgets)
                 self.set_widget_text(widget, new_text)
-                debug_tags(f"After append | file_path: {widget.file_path} | new_text: '{new_text}'")
+                debug_tags(f"After append | file_path: {file_path} | new_text: '{new_text}'")
 
     def on_street_clicked(self, street_button):
         """Handle street button clicks and add street name to selected images"""
@@ -4235,71 +4413,35 @@ class MainWindow(QMainWindow):
         if not self.selected_images:
             return
 
-        # Update each selected image's text field
-        for widget in self.image_widgets:
-            if hasattr(widget, 'file_path') and widget.file_path in self.selected_images:
-                # For ImageCardWidget, use text_edit instead of input_field
-                if hasattr(widget, 'text_edit'):
-                    text_field = widget.text_edit
-                    current_text = text_field.toPlainText().strip()
-                    debug_tags(f"Before append | file_path: {widget.file_path} | current_text: '{current_text}'")
-                    
-                    # Check for duplicates
-                    if street_text in current_text:
-                        debug_tags(f" Street already present, skipping")
-                        continue
-                    
-                    # Add the street text
-                    if current_text:
-                        if current_text.rstrip().endswith(','):
-                            new_text = f"{current_text} {street_text}"
-                        else:
-                            new_text = f"{current_text}, {street_text}"
-                    else:
-                        new_text = street_text
-                    
-                    # For ImageCardWidget, use set_tags method which handles text properly
-                    # Convert current text to list, add street, and set back
-                    current_tags = [tag.strip() for tag in current_text.split(',') if tag.strip()] if current_text else []
-                    if street_text not in current_tags:
-                        current_tags.append(street_text)
-                        widget.set_tags(', '.join(current_tags))
-                        debug_tags(f"After append | file_path: {widget.file_path} | new_tags: '{', '.join(current_tags)}'")
+        # Update each selected image's text field using image_flow_manager
+        if not hasattr(self, 'image_flow_manager') or not self.image_flow_manager.image_widgets:
+            debug_tags("No image_flow_manager or widgets available")
+            return
+            
+        for file_path, widget in self.image_flow_manager.image_widgets.items():
+            if file_path in self.selected_images:
+                current_text = self.get_widget_text(widget)
+                debug_tags(f"Before append | file_path: {file_path} | current_text: '{current_text}'")
                 
-                # Handle legacy widget types (if any still exist)
-                elif hasattr(widget, 'input_field'):
-                    input_field = widget.input_field
-                    current_text = input_field.toPlainText().strip()
-                    
-                    # Check for duplicates
-                    if street_text in current_text:
-                        continue
-                    
-                    # Add the street text
-                    if current_text:
-                        if current_text.rstrip().endswith(','):
-                            new_text = f"{current_text} {street_text}"
-                        else:
-                            new_text = f"{current_text}, {street_text}"
+                # Check for duplicates
+                if street_text in current_text:
+                    debug_tags(f" Street already present, skipping")
+                    continue
+                
+                # Add the street text
+                if current_text:
+                    if current_text.rstrip().endswith(';'):
+                        new_text = f"{current_text}{street_text}"
                     else:
-                        new_text = street_text
-                    
-                    # Prevent real-time sync during programmatic text setting
-                    input_field._updating = True
-                    input_field.setText(new_text)
-                    input_field._updating = False
-                    debug_tags(f"After append | file_path: {widget.file_path} | new_text: '{new_text}'")
-                    
-                    # Apply proper height calculation
-                    input_field.document().adjustSize()
-                    doc_height = int(input_field.document().size().height())
-                    margins = input_field.contentsMargins()
-                    padding = 8
-                    new_height = doc_height + margins.top() + margins.bottom() + padding
-                    final_height = max(28, new_height)
-                    input_field.setFixedHeight(final_height)
-                    
-                    # Update container height if function is available
+                        new_text = f"{current_text};{street_text}"
+                else:
+                    new_text = street_text
+                
+                # Use helper function to set the text (handles both ImageCardWidget and legacy widgets)
+                self.set_widget_text(widget, new_text)
+                debug_tags(f"After append | file_path: {file_path} | new_text: '{new_text}'")
+
+    def update_height_for_widget(self, widget):
                     if hasattr(widget, 'updateContainerHeight'):
                         widget.updateContainerHeight()
 

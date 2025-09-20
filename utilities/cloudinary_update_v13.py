@@ -61,6 +61,7 @@ total_original_size = 0
 
 # utilities/cloudinary_update_v13.py
 from PyQt5.QtCore import QObject, pyqtSignal
+from utilities.session_logger import get_session_logger, log_session_message
 
 class CloudinaryUpdater(QObject):
     # Define signals to update the UI
@@ -169,7 +170,10 @@ class CloudinaryUpdater(QObject):
         else:
             logging.info(message)
         
-        # Log to dedicated file logger if available
+        # Log to session logger (preferred method)
+        log_session_message(message, "UPLOAD")
+        
+        # Log to dedicated file logger if available (fallback)
         if self.file_logger:
             if level == "ERROR":
                 self.file_logger.error(message)
@@ -207,7 +211,7 @@ class CloudinaryUpdater(QObject):
         if data[0] == True:  # Check if the status retrieval was successful
             self.update_ui_signal.emit("Cloudinary account connected")  # Emit the update_ui_signal
 
-            logging.info(f"\nSETTING TRANSFORMATION CREDITS: {data[9]}")
+            self.log_message(f"SETTING TRANSFORMATION CREDITS: {data[9]}")
             self.currentStorageCredits = data[8]  # Update the current storage value
             self.currentTransformations = data[9]  # Update the current transformations value
             self.currentBandwidth = data[10]  # Update the current bandwidth value
@@ -218,30 +222,29 @@ class CloudinaryUpdater(QObject):
         self.update_ui_signal.emit(message)
 
     def sync_files(self, local_directory, sync_files_mode):
-        logging.info(f"\nSYNC_FILES")
-        logging.info(f"\n--- Cloudinary upload v13 --- CloudinaryUpdater with {sync_files_mode}")
-        logging.info(f"\nUploading all images  : {local_directory}")
-        short_timestamp = datetime.now().strftime("%Y-%m-%d %H-%M")
-        log_filename = f"{LOG_NAME}{short_timestamp}.txt"
+        self.log_message(f"SYNC_FILES")
+        self.log_message(f"--- Cloudinary upload v13 --- CloudinaryUpdater with {sync_files_mode}")
+        self.log_message(f"Uploading all images  : {local_directory}")
+        
+        # Ensure session logging is available and get log folder for database
+        session_logger = get_session_logger()
+        current_log_file = session_logger.get_or_create_session()
+        
+        if current_log_file:
+            # Set the log file path for this updater to match session logger folder
+            self.logFilePath = str(current_log_file.parent)
+        else:
+            # Fallback to default if session logger not available
+            from utilities.settings_dialog import SettingsDialog
+            settings = SettingsDialog.get_saved_settings()
+            if settings.get('cloudinary_log_folder'):
+                self.logFilePath = settings['cloudinary_log_folder']
+            else:
+                # Ultimate fallback to logs subdirectory
+                self.logFilePath = str(Path.cwd() / "logs")
+                Path(self.logFilePath).mkdir(parents=True, exist_ok=True)
 
-        # log_file_path = Path(LOG_FILE_PATH) / log_filename
-        # database_file_path = Path(LOG_FILE_PATH) / DATABASE_FILE_NAME
-        log_file_path = Path(self.logFilePath) / log_filename
         database_file_path = Path(self.logFilePath) / DATABASE_FILE_NAME
-
-        log_file_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Setup file logging for this upload session
-        self.setup_file_logging(log_file_path)
-        
-        # Log session header
-        session_start = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.log_message("=" * 50)
-        self.log_message("CLOUDINARY UPLOAD SESSION")
-        self.log_message(f"Session started: {session_start}")
-        self.log_message(f"Log file: {log_file_path}")
-        self.log_message("=" * 50)
-
         self.database = load_csv_database(database_file_path)
 
         self.mode = sync_files_mode
@@ -258,11 +261,6 @@ class CloudinaryUpdater(QObject):
         self.resized_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            # Open log file and store handle for consistent logging
-            self.log_file_handle = log_file_path.open("a")
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self.log_file_handle.write(f"\n--- Upload Session Log: {timestamp} ---\n")
-            
             self.log_message("Starting assessment phase")
             
             # Log mode and directory/files info in a cleaner way
@@ -278,7 +276,7 @@ class CloudinaryUpdater(QObject):
                 self.log_message(f"Mode: {sync_files_mode} | Directory: {local_directory}")
 
             debug_cloudinary("")
-            logging.info("Checking the folder...")
+            self.log_message("Checking the folder...")
 
             # List all files from Cloudinary
             self.cloudinary_files = list_all_files()
@@ -338,17 +336,17 @@ class CloudinaryUpdater(QObject):
                 self.upload_complete_signal.emit([0, 0])  # 0 uploaded, 0 errors
                 return
 
-            logging.info(f"\n\n--- Upload Summary ---")
+            self.log_message(f"--- Upload Summary ---")
 
-            logging.info(f"Transformation credits retrieved: {self.currentTransformations}")
+            self.log_message(f"Transformation credits retrieved: {self.currentTransformations}")
 
-            logging.info(f"Number of files already synced: {self.already_synced_count}")
-            logging.info(f"Number of files to upload: {numberOfTotalFilesToUpload}")
-            logging.info(f"Total size to upload: {convert_bytes(self.total_upload_size)} (original size: {convert_bytes(total_original_size)})")
-            logging.info(f"Available storage on Cloudinary: {convert_bytes(cloudinaryAvailableStorage)}")
+            self.log_message(f"Number of files already synced: {self.already_synced_count}")
+            self.log_message(f"Number of files to upload: {numberOfTotalFilesToUpload}")
+            self.log_message(f"Total size to upload: {convert_bytes(self.total_upload_size)} (original size: {convert_bytes(total_original_size)})")
+            self.log_message(f"Available storage on Cloudinary: {convert_bytes(cloudinaryAvailableStorage)}")
             afterUploadStorage = cloudinaryAvailableStorage - self.total_upload_size - (numberOfTotalFilesToUpload * 1024 * 1024)
-            logging.info(f"Estimated storage transformation consumed: {convert_bytes(numberOfTotalFilesToUpload * 1024 * 1024)}")
-            logging.info(f"Estimated storage on Cloudinary after upload: {convert_bytes(afterUploadStorage)}")
+            self.log_message(f"Estimated storage transformation consumed: {convert_bytes(numberOfTotalFilesToUpload * 1024 * 1024)}")
+            self.log_message(f"Estimated storage on Cloudinary after upload: {convert_bytes(afterUploadStorage)}")
 
             # Check if the total upload size exceeds the quota
             if self.total_upload_size > cloudinaryAvailableStorage:
@@ -372,7 +370,7 @@ class CloudinaryUpdater(QObject):
             transformationsCreditsPerc = (transformationCreditsAfterUpload / CREDITS_MAX) * 100
             bandwidthCreditsPerc = (self.currentBandwidth / CREDITS_MAX) * 100          # Bandwidth doesn't change with upload
 
-            logging.info(f"Storage Credits Percentage: {storageCreditsPerc}%, transformation Credits Percentage: {transformationsCreditsPerc}%, Bandwidth Credits Percentage: {bandwidthCreditsPerc}%")
+            self.log_message(f"Storage Credits Percentage: {storageCreditsPerc}%, transformation Credits Percentage: {transformationsCreditsPerc}%, Bandwidth Credits Percentage: {bandwidthCreditsPerc}%")
 
 
             # credits breakdown for bar
@@ -447,9 +445,9 @@ class CloudinaryUpdater(QObject):
         self.log_message("="*80)
         
         # Legacy logging for compatibility
-        logging.info(f"Already synced: {self.already_synced_count}")
-        logging.info(f"Uploaded: {uploaded_count}")
-        logging.info(f"Errors: {len(error_files)}")
+        self.log_message(f"Already synced: {self.already_synced_count}")
+        self.log_message(f"Uploaded: {uploaded_count}")
+        self.log_message(f"Errors: {len(error_files)}")
         
         # Log session end
         session_end = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

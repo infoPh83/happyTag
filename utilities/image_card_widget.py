@@ -660,7 +660,7 @@ class ImageCardWidget(QWidget):
         new_text = self.text_edit.toPlainText()
         
         # Update UI tags - parse the current text into tags list
-        self.ui_tags = [tag.strip() for tag in new_text.split(',') if tag.strip()] if new_text else []
+        self.ui_tags = [tag.strip() for tag in new_text.split(';') if tag.strip()] if new_text else []
         
         self.text_changed.emit(self.file_path, new_text)
         
@@ -880,7 +880,7 @@ class ImageCardWidget(QWidget):
         elif isinstance(tags, list):
             # Filter out empty/whitespace-only tags
             valid_tags = [tag.strip() for tag in tags if tag and str(tag).strip()]
-            tags_text = ', '.join(valid_tags) if valid_tags else ""
+            tags_text = ';'.join(valid_tags) if valid_tags else ""
         else:
             tags_text = str(tags).strip() if tags else ""
             
@@ -917,7 +917,7 @@ class ImageCardWidget(QWidget):
         text = self.text_edit.toPlainText().strip()
         if not text:
             return []
-        return [tag.strip() for tag in text.split(',') if tag.strip()]
+        return [tag.strip() for tag in text.split(';') if tag.strip()]
     
     def set_metadata(self, metadata):
         """Set metadata dictionary"""

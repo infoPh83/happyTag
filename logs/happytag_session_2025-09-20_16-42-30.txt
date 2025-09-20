@@ -1,0 +1,51 @@
+=== HappyTag Unified Session Log ===
+Session started: 2025-09-20 16:42:30
+Log file: D:\Python playfolder\happyTag\logs\happytag_session_2025-09-20_16-42-30.txt
+==================================================
+
+[16:42:30] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.35
+[16:43:00] [UPLOAD] Detected orphaned public_id during assessment: Uploads/2020.03 Yi Zou E17 Hoffmans Road/Yi Zou E17 Hoffmans Road 02.JPG for Yi Zou E17 Hoffmans Road 02.JPG
+[16:43:00] [UPLOAD] Cleaned orphaned public_id from Yi Zou E17 Hoffmans Road 02.JPG during assessment
+[16:43:00] [UPLOAD] Detected orphaned public_id during assessment: Uploads/2020.03 Yi Zou E17 Hoffmans Road/Yi Zou E17 Hoffmans Road 04.JPG for Yi Zou E17 Hoffmans Road 04.JPG
+[16:43:01] [UPLOAD] Cleaned orphaned public_id from Yi Zou E17 Hoffmans Road 04.JPG during assessment
+[16:43:01] [UPLOAD] Detected orphaned public_id during assessment: Uploads/2020.03 Yi Zou E17 Hoffmans Road/Yi Zou E17 Hoffmans Road 06.JPG for Yi Zou E17 Hoffmans Road 06.JPG
+[16:43:01] [UPLOAD] Cleaned orphaned public_id from Yi Zou E17 Hoffmans Road 06.JPG during assessment
+[16:43:01] [UPLOAD] Detected orphaned public_id during assessment: Uploads/2020.03 Yi Zou E17 Hoffmans Road/Yi Zou E17 Hoffmans Road 08.JPG for Yi Zou E17 Hoffmans Road 08.JPG
+[16:43:02] [UPLOAD] Cleaned orphaned public_id from Yi Zou E17 Hoffmans Road 08.JPG during assessment
+[16:43:02] [UPLOAD] Detected orphaned public_id during assessment: Uploads/2020.03 Yi Zou E17 Hoffmans Road/Yi Zou E17 Hoffmans Road 10.JPG for Yi Zou E17 Hoffmans Road 10.JPG
+[16:43:02] [UPLOAD] Cleaned orphaned public_id from Yi Zou E17 Hoffmans Road 10.JPG during assessment
+[16:43:02] [UPLOAD] Detected orphaned public_id during assessment: Uploads/2020.03 Yi Zou E17 Hoffmans Road/Yi Zou E17 Hoffmans Road 21 - edit.tif for Yi Zou E17 Hoffmans Road 21 - edit.tif
+[16:43:02] [UPLOAD] Cleaned orphaned public_id from Yi Zou E17 Hoffmans Road 21 - edit.tif during assessment
+[16:43:02] [UPLOAD] Detected orphaned public_id during assessment: Uploads/2020.03 Yi Zou E17 Hoffmans Road/Yi Zou E17 Hoffmans Road 22.JPG for Yi Zou E17 Hoffmans Road 22.JPG
+[16:43:03] [UPLOAD] Cleaned orphaned public_id from Yi Zou E17 Hoffmans Road 22.JPG during assessment
+[16:43:03] [UPLOAD] Detected orphaned public_id during assessment: Uploads/2020.03 Yi Zou E17 Hoffmans Road/Yi Zou E17 Hoffmans Road 24.JPG for Yi Zou E17 Hoffmans Road 24.JPG
+[16:43:03] [UPLOAD] Cleaned orphaned public_id from Yi Zou E17 Hoffmans Road 24.JPG during assessment
+[16:43:03] [UPLOAD] Detected orphaned public_id during assessment: Uploads/2020.03 Yi Zou E17 Hoffmans Road/Yi Zou E17 Hoffmans Road 25.JPG for Yi Zou E17 Hoffmans Road 25.JPG
+[16:43:03] [UPLOAD] Cleaned orphaned public_id from Yi Zou E17 Hoffmans Road 25.JPG during assessment
+[16:43:03] [UPLOAD] NEW upload phase:
+[16:43:03] [UPLOAD]   Files for tag update only: 2
+[16:43:03] [UPLOAD]   Files not on Cloudinary (resize + upload): 9
+[16:43:03] [UPLOAD]   Files already synced (no action): 17
+[16:43:03] [UPLOAD] Files needing tag updates only:
+[16:43:03] [UPLOAD]   1. Yi Zou E17 Hoffmans Road 21.JPG - Tags: ['2025, Simone Morciano Photography'] - ID: Uploads/2020.03 Yi Zou E17 Hoffmans Road/Yi Zou E17 Hoffmans Road 21.JPG
+[16:43:03] [UPLOAD]   2. Yi Zou E17 Hoffmans Road 25 - edit.tif - Tags: ['2025, Simone Morciano Photography'] - ID: Uploads/2020.03 Yi Zou E17 Hoffmans Road/Yi Zou E17 Hoffmans Road 25 - edit.tif
+[16:43:03] [UPLOAD] Total files to process: 11
+[16:43:03] [UPLOAD] Updating tags for existing Cloudinary file: Yi Zou E17 Hoffmans Road 21.JPG
+[16:43:03] [UPLOAD] Currently uploading: Updating tags: Yi Zou E17 Hoffmans Road 21.JPG
+[16:43:03] [UPLOAD] Tag-only update for public_id Uploads/2020.03 Yi Zou E17 Hoffmans Road/Yi Zou E17 Hoffmans Road 21.JPG: ['2025, Simone Morciano Photography']
+[16:43:04] [UPLOAD] Tag update successful for Yi Zou E17 Hoffmans Road 21.JPG
+[16:43:04] [UPLOAD] Updating tags for existing Cloudinary file: Yi Zou E17 Hoffmans Road 25 - edit.tif
+[16:43:04] [UPLOAD] Currently uploading: Updating tags: Yi Zou E17 Hoffmans Road 25 - edit.tif
+[16:43:04] [UPLOAD] Tag-only update for public_id Uploads/2020.03 Yi Zou E17 Hoffmans Road/Yi Zou E17 Hoffmans Road 25 - edit.tif: ['2025, Simone Morciano Photography']
+[16:43:04] [UPLOAD] Tag update successful for Yi Zou E17 Hoffmans Road 25 - edit.tif
+[16:43:04] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 02.JPG
+[16:43:09] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 04.JPG
+[16:43:14] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 06.JPG
+[16:43:18] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 08.JPG
+[16:43:22] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 10.JPG
+[16:43:25] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 21 - edit.tif
+[16:43:40] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 22.JPG
+[16:43:44] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 24.JPG
+[16:43:47] [UPLOAD] Currently uploading: Uploading: Yi Zou E17 Hoffmans Road 25.JPG
+[16:43:51] [UPLOAD] NEW upload phase complete: 11 uploaded/updated, 0 errors, 0 metadata failures
+[16:43:53] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.353

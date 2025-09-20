@@ -29,6 +29,7 @@ from cloudinary.exceptions import Error as CloudinaryError
 from PyQt5.QtCore import QObject, pyqtSignal
 
 from utilities.debug_utils import debug_upload, debug_assessment
+from utilities.session_logger import log_session_message
 from utilities.image_assessment import ImageAssessment
 import subprocess
 import sys
@@ -84,10 +85,11 @@ class CloudinaryUploadHandler(QObject):
     upload_complete_signal = pyqtSignal(list) # [uploaded_count, error_count]
     upload_preview_signal = pyqtSignal(str)   # Current file being processed
     
-    def __init__(self, cloudinary_updater=None, image_assessment=None):
+    def __init__(self, cloudinary_updater=None, image_assessment=None, main_app=None):
         super().__init__()
         self.cloudinary_updater = cloudinary_updater
         self.image_assessment = image_assessment  # Add reference to ImageAssessment for shared resize logic
+        self.main_app = main_app  # Add reference to main app for orphaned cleanup
         self.assessment_data = None
         self.tag_widgets = []  # Will store references to tag input widgets
         self.source_folder_name = None  # Will store the folder name extracted from first file
@@ -169,25 +171,36 @@ class CloudinaryUploadHandler(QObject):
                     # This is a QPlainTextEdit or QTextEdit widget
                     tag_text = str(widget.toPlainText()).strip()
                     if tag_text:
-                        # Split by commas and clean up each tag
-                        widget_tags = [tag.strip() for tag in tag_text.split(',') if tag.strip()]
+                        # Split by semicolons only and clean up each tag
+                        widget_tags = [tag.strip() for tag in tag_text.split(';') if tag.strip()]
                         tags.extend(widget_tags)
                         debug_upload(f"Extracted tags from text widget: {widget_tags}")
                 elif hasattr(widget, 'text') and callable(widget.text):
                     # This is a QLineEdit or similar widget
                     tag_text = str(widget.text()).strip()
                     if tag_text:
-                        widget_tags = [tag.strip() for tag in tag_text.split(',') if tag.strip()]
+                        # Split by semicolons only and clean up each tag
+                        widget_tags = [tag.strip() for tag in tag_text.split(';') if tag.strip()]
                         tags.extend(widget_tags)
                         debug_upload(f"Extracted tags from line widget: {widget_tags}")
                 elif hasattr(widget, 'get_tags') and callable(widget.get_tags):
                     # This is an ImageCardWidget with get_tags method
                     widget_tags = widget.get_tags()
                     if isinstance(widget_tags, list):
-                        tags.extend(widget_tags)
+                        # If it's a list, check each item for semicolon separation
+                        for tag_item in widget_tags:
+                            if isinstance(tag_item, str) and ';' in tag_item:
+                                # Split semicolon-separated tags
+                                for tag in tag_item.split(';'):
+                                    clean_tag = tag.strip()
+                                    if clean_tag:
+                                        tags.append(clean_tag)
+                            else:
+                                tags.append(tag_item)
                         debug_upload(f"Extracted tags from card widget: {widget_tags}")
                     elif isinstance(widget_tags, str) and widget_tags.strip():
-                        widget_tags_list = [tag.strip() for tag in widget_tags.split(',') if tag.strip()]
+                        # Split by semicolons only for string tags
+                        widget_tags_list = [tag.strip() for tag in widget_tags.split(';') if tag.strip()]
                         tags.extend(widget_tags_list)
                         debug_upload(f"Extracted tags from card widget (string): {widget_tags_list}")
                 elif hasattr(widget, 'currentText') and callable(widget.currentText):
@@ -244,19 +257,26 @@ class CloudinaryUploadHandler(QObject):
             already_synced_count = self.assessment_data.get('already_synced_count', 0)
             
             debug_upload(f"NEW upload phase:")
+            log_session_message(f"NEW upload phase:", "UPLOAD")
             debug_upload(f"  Files for tag update only: {len(files_for_tag_update)}")
+            log_session_message(f"  Files for tag update only: {len(files_for_tag_update)}", "UPLOAD")
             debug_upload(f"  Files not on Cloudinary (resize + upload): {len(files_not_on_cloudinary)}")
+            log_session_message(f"  Files not on Cloudinary (resize + upload): {len(files_not_on_cloudinary)}", "UPLOAD")
             debug_upload(f"  Files already synced (no action): {already_synced_count}")
+            log_session_message(f"  Files already synced (no action): {already_synced_count}", "UPLOAD")
             
             # Show detailed file information for each category
                     
             if files_for_tag_update:
                 debug_upload("Files needing tag updates only:")
+                log_session_message("Files needing tag updates only:", "UPLOAD")
                 for i, file_data in enumerate(files_for_tag_update, 1):
                     file_path = file_data.get('file_path', 'Unknown')
                     ui_tags = file_data.get('ui_tags', [])
                     public_id = file_data.get('public_id', 'Unknown')
-                    debug_upload(f"  {i}. {Path(file_path).name} - Tags: {ui_tags} - ID: {public_id}")
+                    file_msg = f"  {i}. {Path(file_path).name} - Tags: {ui_tags} - ID: {public_id}"
+                    debug_upload(file_msg)
+                    log_session_message(file_msg, "UPLOAD")
                     
             if files_not_on_cloudinary:
                 debug_upload("Files not on Cloudinary needing full upload:")
@@ -266,7 +286,9 @@ class CloudinaryUploadHandler(QObject):
                     debug_upload(f"  {i}. {Path(file_path).name} - Tags: {ui_tags}")
             
             total_files_to_process = len(files_for_tag_update) + len(files_not_on_cloudinary)
-            debug_upload(f"Total files to process: {total_files_to_process}")
+            total_msg = f"Total files to process: {total_files_to_process}"
+            debug_upload(total_msg)
+            log_session_message(total_msg, "UPLOAD")
             
             if total_files_to_process == 0:
                 debug_upload("No files to process - all files already synced")
@@ -289,7 +311,9 @@ class CloudinaryUploadHandler(QObject):
                 for failure in self.metadata_write_failures:
                     debug_upload(f"  - {failure['file']}: {failure['reason']}")
             
-            debug_upload(f"NEW upload phase complete: {uploaded_count} uploaded/updated, {error_count} errors, {metadata_failures_count} metadata failures")
+            completion_msg = f"NEW upload phase complete: {uploaded_count} uploaded/updated, {error_count} errors, {metadata_failures_count} metadata failures"
+            debug_upload(completion_msg)
+            log_session_message(completion_msg, "UPLOAD")
             
             # Create detailed status message
             status_msg = f"Upload complete: {uploaded_count} files processed"
@@ -346,16 +370,41 @@ class CloudinaryUploadHandler(QObject):
                     ui_tags = file_data.get('ui_tags', [])
                     public_id = file_data.get('public_id')
                     
-                    debug_upload(f"Updating tags for existing Cloudinary file: {Path(file_path).name}")
+                    updating_msg = f"Updating tags for existing Cloudinary file: {Path(file_path).name}"
+                    debug_upload(updating_msg)
+                    log_session_message(updating_msg, "UPLOAD")
                     self.upload_preview_signal.emit(f"Updating tags: {Path(file_path).name}")
                     
                     success = self._update_cloudinary_tags_only(public_id, ui_tags)
-                    if success:
+                    if success == True:
                         uploaded_count += 1
                         debug_upload(f"Tag update successful for {Path(file_path).name}")
+                        log_session_message(f"Tag update successful for {Path(file_path).name}", "UPLOAD")
+                    elif success == "ORPHANED_404":
+                        # Handle orphaned public_id - clean metadata and treat as new upload
+                        orphan_msg = f"File {Path(file_path).name} has orphaned public_id - cleaning and re-uploading as new file"
+                        debug_upload(orphan_msg)
+                        log_session_message(orphan_msg, "UPLOAD")
+                        
+                        # Clean the orphaned public_id from metadata if main_app is available
+                        if hasattr(self, 'main_app') and self.main_app and hasattr(self.main_app, '_cleanup_orphaned_public_id'):
+                            cleanup_result = self.main_app._cleanup_orphaned_public_id(file_path)
+                            if cleanup_result:
+                                debug_upload(f"Successfully cleaned orphaned public_id from {Path(file_path).name}")
+                                log_session_message(f"Cleaned orphaned public_id from {Path(file_path).name}", "UPLOAD")
+                            else:
+                                debug_upload(f"Failed to clean orphaned public_id from {Path(file_path).name}")
+                                log_session_message(f"Failed to clean orphaned public_id from {Path(file_path).name}", "UPLOAD")
+                        
+                        # TODO: Ideally we would re-process this file as a new upload
+                        # For now, count it as an error but with special handling
+                        error_count += 1
+                        log_session_message(f"File {Path(file_path).name} needs manual re-upload after orphaned cleanup", "UPLOAD")
                     else:
                         error_count += 1
-                        debug_upload(f"Tag update failed for {Path(file_path).name}")
+                        error_msg = f"Tag update failed for {Path(file_path).name}"
+                        debug_upload(error_msg)
+                        log_session_message(error_msg, "UPLOAD")
                     
                     processed_files += 1
                     progress = int((processed_files / total_files) * 100)
@@ -594,7 +643,9 @@ class CloudinaryUploadHandler(QObject):
     def _update_cloudinary_tags_only(self, public_id, ui_tags):
         """Update tags on Cloudinary for an existing file without reuploading"""
         try:
-            debug_upload(f"Tag-only update for public_id {public_id}: {ui_tags}")
+            tag_msg = f"Tag-only update for public_id {public_id}: {ui_tags}"
+            debug_upload(tag_msg)
+            log_session_message(tag_msg, "UPLOAD")
             
             # Use Cloudinary Admin API to update tags for existing resource
             # First, remove all existing tags, then add the new ones
@@ -618,11 +669,27 @@ class CloudinaryUploadHandler(QObject):
                 return True
                 
             except CloudinaryError as ce:
-                debug_upload(f"Cloudinary API error updating tags for {public_id}: {ce}")
+                error_msg = f"Cloudinary API error updating tags for {public_id}: {ce}"
+                debug_upload(error_msg)
+                log_session_message(error_msg, "UPLOAD")
+                
+                # Check if this is a 404 error (resource not found) - indicates orphaned public_id
+                if "404" in str(ce) or "Resource not found" in str(ce):
+                    orphan_msg = f"Detected orphaned public_id {public_id} - resource no longer exists on Cloudinary"
+                    debug_upload(orphan_msg)
+                    log_session_message(orphan_msg, "UPLOAD")
+                    log_session_message(f"This file should be treated as a new upload with fresh public_id", "UPLOAD")
+                    
+                    # Set a flag to indicate this was an orphaned file error
+                    # The caller can check this and potentially re-process as new upload
+                    return "ORPHANED_404"
+                
                 return False
                 
         except Exception as e:
-            debug_upload(f"Error updating tags for {public_id}: {e}")
+            error_msg = f"Error updating tags for {public_id}: {e}"
+            debug_upload(error_msg)
+            log_session_message(error_msg, "UPLOAD")
             return False
             
             
@@ -704,6 +771,11 @@ class CloudinaryUploadHandler(QObject):
                     debug_upload(f"❌ Metadata write failed for {os.path.basename(metadata_file_path)}: {metadata_result['message']}")
                 else:
                     debug_upload(f"✅ Metadata written successfully for {os.path.basename(metadata_file_path)}")
+                
+                # Update the widget's public_id immediately after successful metadata write
+                # Use the original file path that serves as the widget key
+                widget_key_path = original_file_path if original_file_path else str(file_path_obj)
+                self._update_widget_public_id(widget_key_path, final_public_id)
                 
             return True
             
@@ -823,3 +895,55 @@ class CloudinaryUploadHandler(QObject):
             
         except Exception as e:
             debug_upload(f"Warning: Failed to save database to CSV after upload: {e}")
+    
+    def _update_widget_public_id(self, file_path, public_id):
+        """
+        Update the widget's public_id immediately after successful upload.
+        This keeps the in-memory widget state synchronized with the metadata.
+        
+        Args:
+            file_path: Path to the uploaded file (should match image_widgets key)
+            public_id: The Cloudinary public_id returned from the upload
+        """
+        try:
+            # Check if we have access to the main app and its image flow manager
+            if not self.main_app or not hasattr(self.main_app, 'image_flow_manager'):
+                debug_upload("No main_app or image_flow_manager available for widget update")
+                return
+                
+            image_flow_manager = self.main_app.image_flow_manager
+            if not image_flow_manager or not hasattr(image_flow_manager, 'image_widgets'):
+                debug_upload("No image_widgets available in image_flow_manager")
+                return
+                
+            # Convert file_path to string for comparison
+            file_path_str = str(file_path)
+            
+            # DEBUG: Show what keys are available and what we're looking for
+            debug_upload(f"Looking for widget with key: {file_path_str}")
+            debug_upload(f"Available widget keys: {list(image_flow_manager.image_widgets.keys())[:3]}...")  # Show first 3 for brevity
+            
+            # Find the widget corresponding to this file
+            widget = image_flow_manager.image_widgets.get(file_path_str)
+            if widget and hasattr(widget, 'set_cloudinary_public_id'):
+                widget.set_cloudinary_public_id(public_id)
+                debug_upload(f"✅ Updated widget public_id for {os.path.basename(file_path_str)}: {public_id}")
+            elif widget:
+                debug_upload(f"⚠️ Widget found but missing set_cloudinary_public_id method for {os.path.basename(file_path_str)}")
+            else:
+                debug_upload(f"⚠️ Widget not found for {os.path.basename(file_path_str)}")
+                # Try to find a partial match (in case of path normalization issues)
+                basename = os.path.basename(file_path_str)
+                matching_keys = [k for k in image_flow_manager.image_widgets.keys() if os.path.basename(k) == basename]
+                if matching_keys:
+                    debug_upload(f"Found potential matches by basename: {matching_keys}")
+                    # Use the first match
+                    widget = image_flow_manager.image_widgets[matching_keys[0]]
+                    if hasattr(widget, 'set_cloudinary_public_id'):
+                        widget.set_cloudinary_public_id(public_id)
+                        debug_upload(f"✅ Updated widget public_id via basename match for {basename}: {public_id}")
+                    else:
+                        debug_upload(f"⚠️ Matching widget missing set_cloudinary_public_id method for {basename}")
+                
+        except Exception as e:
+            debug_upload(f"Error updating widget public_id for {os.path.basename(str(file_path))}: {e}")

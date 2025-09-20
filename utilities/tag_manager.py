@@ -7,7 +7,7 @@ from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from .tag_widgets import TagButton, FlowLayout
 from .business_widgets import BusinessButton, BusinessCategoryHeader
 from .settings_dialog import SettingsDialog
-from .debug_utils import debug_tag_widgets, debug_business, debug_errors, debug_ui_events
+from .debug_utils import debug_tag_widgets, debug_errors, debug_ui_events
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -417,37 +417,37 @@ class TagManager(QDialog):
     def load_businesses_from_file(self, file_path):
         """Load businesses from both the B2B + B2C final ODS file and NON TLE tenants list ODS file"""
         try:
-            debug_business(f"Starting business loading process...")
+            debug_tag_widgets(f"Starting business loading process...")
             # Clear existing business items
             self.clear_business_layout()
-            debug_business(f"Cleared existing business layout")
-            
+            debug_tag_widgets(f"Cleared existing business layout")
+
             # Debug print for B2B + B2C final.ods loading
-            debug_business(f"Loading businesses from B2B + B2C final.ods: {file_path}")
+            debug_tag_widgets(f"Loading businesses from B2B + B2C final.ods: {file_path}")
             # Read business data from the main B2B + B2C final ODS file
             business_data = self.read_businesses_from_ods(file_path)
             b2b_count = len(business_data) if business_data else 0
-            debug_business(f"Loaded {b2b_count} businesses from B2B + B2C final.ods")
-            
+            debug_tag_widgets(f"Loaded {b2b_count} businesses from B2B + B2C final.ods")
+
             # Try to read from NON TLE tenants list.ods file
             non_tle_path = os.path.join(os.path.dirname(file_path), "NON TLE tenants list.ods")
             non_tle_data = []
             non_tle_count = 0
             
             if os.path.exists(non_tle_path):
-                debug_business(f"Loading NON TLE businesses from: {non_tle_path}")
+                debug_tag_widgets(f"Loading NON TLE businesses from: {non_tle_path}")
                 non_tle_data = self.read_non_tle_businesses_from_ods(non_tle_path)
                 non_tle_count = len(non_tle_data) if non_tle_data else 0
-                debug_business(f"Loaded {non_tle_count} businesses from NON TLE tenants list.ods")
+                debug_tag_widgets(f"Loaded {non_tle_count} businesses from NON TLE tenants list.ods")
             else:
-                debug_business(f"NON TLE tenants list.ods not found at: {non_tle_path}")
+                debug_errors(f"NON TLE tenants list.ods not found at: {non_tle_path}")
             
             # Merge the data by category
-            debug_business(f"Merging business data...")
+            debug_tag_widgets(f"Merging business data...")
             merged_data = self.merge_business_data(business_data, non_tle_data)
             total_merged_count = sum(len(businesses) for category_name, category_color, businesses in merged_data) if merged_data else 0
-            debug_business(f"Total businesses after merging: {total_merged_count}")
-            
+            debug_tag_widgets(f"Total businesses after merging: {total_merged_count}")
+
             # Store original data for potential filtering later
             self.original_business_data = merged_data if merged_data else []
             
@@ -460,16 +460,16 @@ class TagManager(QDialog):
                 self.show_partial_loading_warning(b2b_count, non_tle_count, non_tle_path)
             
             # Display the businesses
-            debug_business(f"Starting to display businesses...")
+            debug_tag_widgets(f"Starting to display businesses...")
             self.display_businesses(merged_data if merged_data else [])
             
             if not merged_data:
-                print("[DEBUG] Could not read business data from any file")
+                debug_errors("Could not read business data from any file")
             else:
-                print(f"[DEBUG] Business loading process completed successfully")
-                
+                debug_tag_widgets("Business loading process completed successfully")
+
         except Exception as e:
-            print(f"Error loading businesses from file: {e}")
+            debug_errors(f"Error loading businesses from file: {e}")
 
     def show_no_businesses_notification(self, b2b_count, non_tle_count, non_tle_path):
         """Show user notification when no businesses are found from either source"""
@@ -579,18 +579,18 @@ class TagManager(QDialog):
         """Display businesses from the given data"""
         total_widgets_created = 0
         if business_data:
-            print(f"[DEBUG] Creating widgets for {len(business_data)} business categories")
+            debug_tag_widgets(f"Creating widgets for {len(business_data)} business categories")
             # Note: Don't overwrite original_business_data here as this method
             # is used for both original data and filtered data
             for category_name, category_color, businesses in business_data:
-                print(f"[DEBUG] Creating category '{category_name}' with {len(businesses)} businesses")
+                debug_tag_widgets(f"Creating category '{category_name}' with {len(businesses)} businesses")
                 # Create a container for this business category
                 category_container = self.create_business_category_container(category_name, category_color, businesses)
                 self.business_vertical_layout.addWidget(category_container)
                 total_widgets_created += len(businesses)
-            print(f"[DEBUG] Total business widgets created: {total_widgets_created}")
+            debug_tag_widgets(f"Total business widgets created: {total_widgets_created}")
         else:
-            print(f"[DEBUG] No business data to display")
+            debug_tag_widgets(f"No business data to display")
                                     
                                     
     def load_tags_from_file(self, file_path):
@@ -610,11 +610,11 @@ class TagManager(QDialog):
             
             if not tags_data:
                 # Fallback to sample tags if file reading fails
-                print("Could not read tags from file, using sample tags")
+                debug_tag_widgets("Could not read tags from file, using sample tags")
                 self.create_sample_tags()
                 
         except Exception as e:
-            print(f"Error loading tags from file: {e}")
+            debug_errors(f"Error loading tags from file: {e}")
             # Fallback to sample tags
             self.create_sample_tags()
             
@@ -803,7 +803,7 @@ class TagManager(QDialog):
                 # Use the ODF method for ODS files
                 return self.read_tags_from_ods_alternative(file_path)
         except Exception as e:
-            print(f"Error reading file with primary method: {e}")
+            debug_errors(f"Error reading file with primary method: {e}")
             # Fallback to pandas method with default colors
             return self.read_tags_from_ods_pandas(file_path)
             
@@ -813,12 +813,12 @@ class TagManager(QDialog):
             from openpyxl import load_workbook
             from openpyxl.styles import PatternFill
             
-            print(f"[DEBUG] Reading XLSX file: {file_path}")
+            debug_tag_widgets(f"Reading XLSX file: {file_path}")
             
             workbook = load_workbook(file_path)
             
             if 'TAGs' not in workbook.sheetnames:
-                print("[ERROR] TAGs sheet not found in XLSX file")
+                debug_errors("TAGs sheet not found in XLSX file")
                 return []
                 
             worksheet = workbook['TAGs']
@@ -869,11 +869,11 @@ class TagManager(QDialog):
                                 if len(argb) == 8:  # ARGB format (FF123456)
                                     category_color = f"#{argb[2:]}"  # Remove alpha channel
                                     color_found = True
-                                    print(f"[DEBUG] Extracted ARGB color: {category_color}")
+                                    debug_tag_widgets(f"Extracted ARGB color: {category_color}")
                                 elif len(argb) == 6:  # RGB format (123456)
                                     category_color = f"#{argb}"
                                     color_found = True
-                                    print(f"[DEBUG] Extracted RGB color: {category_color}")
+                                    debug_tag_widgets(f"Extracted RGB color: {category_color}")
                     
                     # Method 2: Check if color is stored as cell value
                     if not color_found and color_cell.value and isinstance(color_cell.value, str):
@@ -881,7 +881,7 @@ class TagManager(QDialog):
                         if cell_value.startswith('#') and len(cell_value) in [7, 9]:  # #RRGGBB or #AARRGGBB
                             category_color = cell_value[:7]  # Take only #RRGGBB part
                             color_found = True
-                            print(f"[DEBUG] Using color from cell value: {category_color}")
+                            debug_tag_widgets(f"Using color from cell value: {category_color}")
                     
                     # Method 3: Use category-specific default if no color found
                     if not color_found:
@@ -890,14 +890,14 @@ class TagManager(QDialog):
                             if key.lower() in category_lower or category_lower in key.lower():
                                 category_color = default_color
                                 color_found = True
-                                print(f"[DEBUG] Using category-specific default color: {category_color}")
+                                debug_tag_widgets(f"Using category-specific default color: {category_color}")
                                 break
                         
                         if not color_found:
-                            print(f"[DEBUG] Using fallback default color: {category_color}")
+                            debug_tag_widgets(f"Using fallback default color: {category_color}")
                 
                 except Exception as color_error:
-                    print(f"[DEBUG] Error extracting color: {color_error}")
+                    debug_tag_widgets(f"Error extracting color: {color_error}")
                     # Use category-specific default on error
                     category_lower = category_name.lower()
                     for key, default_color in category_colors_map.items():
@@ -905,7 +905,7 @@ class TagManager(QDialog):
                             category_color = default_color
                             break
                 
-                print(f"[DEBUG] Final category color for '{category_name}': {category_color}")
+                debug_tag_widgets(f"Final category color for '{category_name}': {category_color}")
                 
                 # Collect tags from columns D onwards
                 tags_in_category = []
@@ -916,14 +916,14 @@ class TagManager(QDialog):
                 
                 if tags_in_category:  # Only add if there are tags
                     categories_data.append((category_name, category_color, tags_in_category))
-                    print(f"[DEBUG] XLSX: Found category '{category_name}' with {len(tags_in_category)} tags")
+                    debug_tag_widgets(f"XLSX: Found category '{category_name}' with {len(tags_in_category)} tags")
             
             workbook.close()
-            print(f"[DEBUG] Successfully loaded {len(categories_data)} categories from XLSX")
+            debug_tag_widgets(f"Successfully loaded {len(categories_data)} categories from XLSX")
             return categories_data
             
         except Exception as e:
-            print(f"[ERROR] Error reading XLSX file: {e}")
+            debug_errors(f"Error reading XLSX file: {e}")
             import traceback
             traceback.print_exc()
             return []
@@ -973,7 +973,7 @@ class TagManager(QDialog):
             return categories_data
             
         except Exception as e:
-            print(f"Error reading ODS file with pandas: {e}")
+            debug_errors(f"Error reading ODS file with pandas: {e}")
             return []
     
     def read_tags_from_ods_alternative(self, file_path):
@@ -995,7 +995,7 @@ class TagManager(QDialog):
                     break
                     
             if not tags_sheet:
-                print("TAGs sheet not found in the file")
+                debug_tag_widgets("TAGs sheet not found in the file")
                 return []
                 
             categories_data = []
@@ -1051,10 +1051,10 @@ class TagManager(QDialog):
             return categories_data
             
         except ImportError:
-            print("odfpy not available. Please install: pip install odfpy")
+            debug_errors("odfpy not available. Please install: pip install odfpy")
             return []
         except Exception as e:
-            print(f"Error reading ODS file with odfpy: {e}")
+            debug_errors(f"Error reading ODS file with odfpy: {e}")
             return []
             
     def extract_cell_background_color(self, cell, doc=None):
@@ -1092,7 +1092,7 @@ class TagManager(QDialog):
             return "#E6E6FA"  # Light lavender if no background color found
             
         except Exception as e:
-            print(f"Error extracting background color: {e}")
+            debug_errors(f"Error extracting background color: {e}")
             return "#E6E6FA"  # Light lavender on error
             
     def create_category_container(self, category_name, category_color, tags):
@@ -1169,24 +1169,24 @@ class TagManager(QDialog):
         """Find column indexes by header names"""
         indexes = {}
         headers = df.columns.tolist()
-        print(f"[DEBUG] Available headers: {headers}")
+        debug_tag_widgets(f"Available headers: {headers}")
         
         for col_name in column_names:
             # Try exact match first
             if col_name in headers:
                 indexes[col_name] = headers.index(col_name)
-                print(f"[DEBUG] Found column '{col_name}' at index {indexes[col_name]}")
+                debug_tag_widgets(f"Found column '{col_name}' at index {indexes[col_name]}")
             else:
                 # Try case-insensitive match
                 found = False
                 for i, header in enumerate(headers):
                     if str(header).lower().strip() == col_name.lower().strip():
                         indexes[col_name] = i
-                        print(f"[DEBUG] Found column '{col_name}' (case-insensitive) at index {i}")
+                        debug_tag_widgets(f"Found column '{col_name}' (case-insensitive) at index {i}")
                         found = True
                         break
                 if not found:
-                    print(f"[DEBUG] WARNING: Column '{col_name}' not found in headers")
+                    debug_tag_widgets(f"WARNING: Column '{col_name}' not found in headers")
                     indexes[col_name] = None
         
         return indexes
@@ -1194,28 +1194,28 @@ class TagManager(QDialog):
     def read_businesses_from_ods(self, file_path):
         """Read business data from the B2B + B2C final file (supports ODS, Excel XLSX, and Excel XLSM formats), Table1 sheet"""
         try:
-            print(f"[DEBUG] Starting to read file: {file_path}")
+            debug_tag_widgets(f"Starting to read file: {file_path}")
             import pandas as pd
             
             # Determine the appropriate engine based on file extension
             file_extension = file_path.lower().split('.')[-1]
             if file_extension == 'ods':
                 engine = 'odf'
-                print(f"[DEBUG] Detected ODS file, using 'odf' engine")
+                debug_tag_widgets(f"Detected ODS file, using 'odf' engine")
             elif file_extension in ['xlsx', 'xlsm']:
                 engine = 'openpyxl'  # openpyxl handles both xlsx and xlsm
-                print(f"[DEBUG] Detected Excel file (.{file_extension}), using 'openpyxl' engine")
+                debug_tag_widgets(f"Detected Excel file (.{file_extension}), using 'openpyxl' engine")
             elif file_extension == 'xls':
                 engine = 'xlrd'
-                print(f"[DEBUG] Detected legacy Excel file (.xls), using 'xlrd' engine")
+                debug_tag_widgets(f"Detected legacy Excel file (.xls), using 'xlrd' engine")
             else:
-                print(f"[DEBUG] Unknown file extension '{file_extension}', trying 'odf' engine as default")
+                debug_tag_widgets(f"Unknown file extension '{file_extension}', trying 'odf' engine as default")
                 engine = 'odf'
             
             # Read the Table1 sheet
-            print(f"[DEBUG] Reading Table1 sheet from file...")
+            debug_tag_widgets(f"Reading Table1 sheet from file...")
             df = pd.read_excel(file_path, sheet_name='Table1', engine=engine)
-            print(f"[DEBUG] File loaded, total rows: {len(df)}")
+            debug_tag_widgets(f"File loaded, total rows: {len(df)}")
             
             # Find column indexes by header names
             required_columns = ["Tenant Name", "Property", "Street name", "Category", "B2B/B2C", "Trading As"]
@@ -1224,13 +1224,13 @@ class TagManager(QDialog):
             # Check if all required columns were found
             missing_columns = [col for col, idx in col_indexes.items() if idx is None]
             if missing_columns:
-                print(f"[DEBUG] ERROR: Missing required columns: {missing_columns}")
+                debug_errors(f"Missing required columns: {missing_columns}")
                 return []
             
             # Filter rows where B2B/B2C column = "B2C"
             b2c_col_idx = col_indexes["B2B/B2C"]
             b2c_rows = df[df.iloc[:, b2c_col_idx] == 'B2C']
-            print(f"[DEBUG] Found {len(b2c_rows)} B2C rows after filtering")
+            debug_tag_widgets(f"Found {len(b2c_rows)} B2C rows after filtering")
             
             # Category colors mapping
             category_colors = {
@@ -1275,7 +1275,7 @@ class TagManager(QDialog):
                     })
                     
                 except Exception as e:
-                    print(f"Error processing row {index}: {e}")
+                    debug_errors(f"Error processing row {index}: {e}")
                     continue
             
             # Convert to the expected format: [(category_name, category_color, businesses)]
@@ -1295,41 +1295,41 @@ class TagManager(QDialog):
                 
                 business_data.append((category_name, data['color'], businesses))
             
-            print(f"[DEBUG] Processed {len(business_data)} categories from B2B + B2C final.ods")
+            debug_tag_widgets(f"Processed {len(business_data)} categories from B2B + B2C final.ods")
             for category_name, color, businesses in business_data:
-                print(f"[DEBUG]   Category '{category_name}': {len(businesses)} businesses")
+                debug_tag_widgets(f"  Category '{category_name}': {len(businesses)} businesses")
             
             return business_data
             
         except Exception as e:
-            print(f"[DEBUG] Error reading business data from file: {e}")
+            debug_errors(f"Error reading business data from file: {e}")
             return []
 
     def read_non_tle_businesses_from_ods(self, file_path):
         """Read non-TLE business data from the NON TLE tenants list file (supports ODS, Excel XLSX, and Excel XLSM formats)"""
         try:
-            print(f"[DEBUG] Starting to read NON TLE file: {file_path}")
+            debug_tag_widgets(f"Starting to read NON TLE file: {file_path}")
             import pandas as pd
             
             # Determine the appropriate engine based on file extension
             file_extension = file_path.lower().split('.')[-1]
             if file_extension == 'ods':
                 engine = 'odf'
-                print(f"[DEBUG] Detected ODS file, using 'odf' engine")
+                debug_tag_widgets(f"Detected ODS file, using 'odf' engine")
             elif file_extension in ['xlsx', 'xlsm']:
                 engine = 'openpyxl'  # openpyxl handles both xlsx and xlsm
-                print(f"[DEBUG] Detected Excel file (.{file_extension}), using 'openpyxl' engine")
+                debug_tag_widgets(f"Detected Excel file (.{file_extension}), using 'openpyxl' engine")
             elif file_extension == 'xls':
                 engine = 'xlrd'
-                print(f"[DEBUG] Detected legacy Excel file (.xls), using 'xlrd' engine")
+                debug_tag_widgets(f"Detected legacy Excel file (.xls), using 'xlrd' engine")
             else:
-                print(f"[DEBUG] Unknown file extension '{file_extension}', trying 'odf' engine as default")
+                debug_tag_widgets(f"Unknown file extension '{file_extension}', trying 'odf' engine as default")
                 engine = 'odf'
             
             # Read the default sheet (usually Sheet1)
-            print(f"[DEBUG] Reading default sheet from NON TLE file...")
+            debug_tag_widgets(f"Reading default sheet from NON TLE file...")
             df = pd.read_excel(file_path, engine=engine)
-            print(f"[DEBUG] NON TLE file loaded, total rows: {len(df)}")
+            debug_tag_widgets(f"NON TLE file loaded, total rows: {len(df)}")
             
             # Find column indexes by header names (NON TLE file has different headers)
             required_columns = ["Non-TLE Businesses", "Street", "Address", "B2B/B2C", "Category"]
@@ -1340,13 +1340,13 @@ class TagManager(QDialog):
             # Check if all required columns were found
             missing_columns = [col for col, idx in col_indexes.items() if idx is None]
             if missing_columns:
-                print(f"[DEBUG] ERROR: Missing required columns in NON TLE file: {missing_columns}")
+                debug_errors(f"Missing required columns in NON TLE file: {missing_columns}")
                 return []
             
             # Filter rows where B2B/B2C column = "B2C"
             b2c_col_idx = col_indexes["B2B/B2C"]
             b2c_rows = df[df.iloc[:, b2c_col_idx] == 'B2C']
-            print(f"[DEBUG] Found {len(b2c_rows)} B2C rows in NON TLE after filtering")
+            debug_tag_widgets(f"Found {len(b2c_rows)} B2C rows in NON TLE after filtering")
             
             # Category colors mapping (same as existing ones for consistency)
             category_colors = {
@@ -1397,7 +1397,7 @@ class TagManager(QDialog):
                     })
                     
                 except Exception as e:
-                    print(f"Error processing non-TLE row {index}: {e}")
+                    debug_errors(f"Error processing non-TLE row {index}: {e}")
                     continue
             
             # Convert to the expected format: [(category_name, category_color, businesses)]
@@ -1417,14 +1417,14 @@ class TagManager(QDialog):
                 
                 business_data.append((category_name, data['color'], businesses))
             
-            print(f"[DEBUG] Processed {len(business_data)} categories from NON TLE tenants list.ods")
+            debug_tag_widgets(f"Processed {len(business_data)} categories from NON TLE tenants list.ods")
             for category_name, color, businesses in business_data:
-                print(f"[DEBUG]   NON TLE Category '{category_name}': {len(businesses)} businesses")
+                debug_tag_widgets(f"  NON TLE Category '{category_name}': {len(businesses)} businesses")
             
             return business_data
             
         except Exception as e:
-            print(f"[DEBUG] Error reading non-TLE business data from file: {e}")
+            debug_errors(f"Error reading non-TLE business data from file: {e}")
             return []
     
     def create_business_category_container(self, category_name, category_color, businesses):
@@ -1470,62 +1470,62 @@ class TagManager(QDialog):
     def on_business_clicked(self, business_button):
         """Handle business button click"""
         business_description = business_button.get_full_description()
-        print(f"Business clicked: {business_description}")
+        debug_tag_widgets(f"Business clicked: {business_description}")
         self.businessClicked.emit(business_button)  # Pass the button object instead of description
 
     # Street and Building related methods
     def load_streets_from_file(self, file_path):
         """Load streets and buildings from the Buildings and Streets ODS file"""
         try:
-            print(f"[DEBUG] Starting street/building loading process...")
+            debug_tag_widgets(f"Starting street/building loading process...")
             # Clear existing street items
             self.clear_street_layout()
-            print(f"[DEBUG] Cleared existing street layout")
-            
-            print(f"[DEBUG] Loading streets and buildings from: {file_path}")
+            debug_tag_widgets(f"Cleared existing street layout")
+
+            debug_tag_widgets(f"Loading streets and buildings from: {file_path}")
             # Read data from the Buildings and Streets ODS file
             street_data = self.read_streets_from_ods(file_path)
             if street_data:
-                print(f"[DEBUG] Successfully loaded street data")
+                debug_tag_widgets(f"Successfully loaded street data")
                 # Store original data for potential filtering later
                 self.original_street_data = street_data
                 # Display the streets and buildings
                 self.display_streets(street_data)
-                print(f"[DEBUG] Street/building loading process completed successfully")
+                debug_tag_widgets(f"Street/building loading process completed successfully")
             else:
-                print(f"[DEBUG] No street data could be loaded")
+                debug_tag_widgets(f"No street data could be loaded")
                 self.original_street_data = []
                 self.show_street_no_data_notification(file_path)
                 
         except Exception as e:
-            print(f"[DEBUG] Error loading streets from file: {e}")
+            debug_tag_widgets(f"Error loading streets from file: {e}")
 
     def read_streets_from_ods(self, file_path):
         """Read street and building data from the Buildings and Streets file (supports both ODS and Excel formats)"""
         try:
-            print(f"[DEBUG] Starting to read Buildings and Streets file: {file_path}")
+            debug_tag_widgets(f"Starting to read Buildings and Streets file: {file_path}")
             import pandas as pd
             
             # Determine the appropriate engine based on file extension
             file_extension = file_path.lower().split('.')[-1]
             if file_extension == 'ods':
                 engine = 'odf'
-                print(f"[DEBUG] Detected ODS file, using 'odf' engine")
+                debug_tag_widgets(f"Detected ODS file, using 'odf' engine")
             elif file_extension in ['xlsx', 'xlsm']:
                 engine = 'openpyxl'  # openpyxl handles both xlsx and xlsm
-                print(f"[DEBUG] Detected Excel file (.{file_extension}), using 'openpyxl' engine")
+                debug_tag_widgets(f"Detected Excel file (.{file_extension}), using 'openpyxl' engine")
             elif file_extension == 'xls':
                 engine = 'xlrd'
-                print(f"[DEBUG] Detected legacy Excel file (.xls), using 'xlrd' engine")
+                debug_tag_widgets(f"Detected legacy Excel file (.xls), using 'xlrd' engine")
             else:
-                print(f"[DEBUG] Unknown file extension '{file_extension}', trying 'odf' engine as default")
+                debug_tag_widgets(f"Unknown file extension '{file_extension}', trying 'odf' engine as default")
                 engine = 'odf'
             
             # Read the Buildings and Streets sheet
-            print(f"[DEBUG] Reading 'Buildings and Streets' sheet from file...")
+            debug_tag_widgets(f"Reading 'Buildings and Streets' sheet from file...")
             df = pd.read_excel(file_path, sheet_name='Buildings and Streets', engine=engine)
-            print(f"[DEBUG] Buildings and Streets file loaded, total rows: {len(df)}")
-            
+            debug_tag_widgets(f"Buildings and Streets file loaded, total rows: {len(df)}")
+
             # Find column indexes by header names
             required_columns = ["BUILDINGS", "STREET"]
             col_indexes = self.find_column_indexes(df, required_columns)
@@ -1533,16 +1533,16 @@ class TagManager(QDialog):
             # Check if all required columns were found
             missing_columns = [col for col, idx in col_indexes.items() if idx is None]
             if missing_columns:
-                print(f"[DEBUG] ERROR: Missing required columns in Buildings and Streets file: {missing_columns}")
+                debug_tag_widgets(f"ERROR: Missing required columns in Buildings and Streets file: {missing_columns}")
                 return None
             
             # Extract colors from headers (first row of data contains header colors)
             buildings_header_color = self.extract_header_color(df, col_indexes["BUILDINGS"])
             street_header_color = self.extract_header_color(df, col_indexes["STREET"])
-            
-            print(f"[DEBUG] Building header color: {buildings_header_color}")
-            print(f"[DEBUG] Street header color: {street_header_color}")
-            
+
+            debug_tag_widgets(f"Building header color: {buildings_header_color}")
+            debug_tag_widgets(f"Street header color: {street_header_color}")
+
             # Process buildings
             buildings = []
             buildings_col_idx = col_indexes["BUILDINGS"]
@@ -1558,11 +1558,11 @@ class TagManager(QDialog):
                         buildings.append((building_name.strip(), street_address.strip()))
                         
                 except Exception as e:
-                    print(f"[DEBUG] Error processing buildings row {index}: {e}")
+                    debug_tag_widgets(f"Error processing buildings row {index}: {e}")
                     continue
-            
-            print(f"[DEBUG] Found {len(buildings)} buildings")
-            
+
+            debug_tag_widgets(f"Found {len(buildings)} buildings")
+
             # Process unique streets
             unique_streets = set()
             for index, row in df.iterrows():
@@ -1573,11 +1573,11 @@ class TagManager(QDialog):
                         unique_streets.add(street_name.strip())
                         
                 except Exception as e:
-                    print(f"[DEBUG] Error processing streets row {index}: {e}")
+                    debug_errors(f"Error processing streets row {index}: {e}")
                     continue
-            
-            print(f"[DEBUG] Found {len(unique_streets)} unique streets")
-            
+
+            debug_tag_widgets(f"Found {len(unique_streets)} unique streets")
+
             # Return data in the format: [(category_name, category_color, items)]
             result = []
             # Streets first, then Buildings
@@ -1589,7 +1589,7 @@ class TagManager(QDialog):
             return result
             
         except Exception as e:
-            print(f"[DEBUG] Error reading Buildings and Streets data from file: {e}")
+            debug_errors(f"Error reading Buildings and Streets data from file: {e}")
             return None
 
     def extract_header_color(self, df, col_index):
@@ -1605,16 +1605,16 @@ class TagManager(QDialog):
         """Display streets and buildings from the given data"""
         total_widgets_created = 0
         if street_data:
-            print(f"[DEBUG] Creating widgets for {len(street_data)} street/building categories")
+            debug_tag_widgets(f"Creating widgets for {len(street_data)} street/building categories")
             for category_name, category_color, items in street_data:
-                print(f"[DEBUG] Creating category '{category_name}' with {len(items)} items")
+                debug_tag_widgets(f"Creating category '{category_name}' with {len(items)} items")
                 # Create a container for this category
                 category_container = self.create_street_category_container(category_name, category_color, items)
                 self.street_vertical_layout.addWidget(category_container)
                 total_widgets_created += len(items)
-            print(f"[DEBUG] Total street/building widgets created: {total_widgets_created}")
+            debug_tag_widgets(f"Total street/building widgets created: {total_widgets_created}")
         else:
-            print(f"[DEBUG] No street data to display")
+            debug_tag_widgets(f"No street data to display")
 
     def create_street_category_container(self, category_name, category_color, items):
         """Create a container widget for a street/building category with its header and items"""
@@ -1656,13 +1656,13 @@ class TagManager(QDialog):
     def on_building_clicked(self, building_button):
         """Handle building button click"""
         building_description = f"{building_button.building_name}, {building_button.street_address}"
-        print(f"Building clicked: {building_description}")
+        debug_tag_widgets(f"Building clicked: {building_description}")
         self.buildingClicked.emit(building_button)
 
     def on_street_clicked(self, street_button):
         """Handle street button click"""
         street_description = street_button.street_name
-        print(f"Street clicked: {street_description}")
+        debug_tag_widgets(f"Street clicked: {street_description}")
         self.streetClicked.emit(street_button)
 
     def clear_street_layout(self):

@@ -1,0 +1,15 @@
+=== HappyTag Unified Session Log ===
+Session started: 2025-09-20 16:37:58
+Log file: D:\Python playfolder\happyTag\logs\happytag_session_2025-09-20_16-37-58.txt
+==================================================
+
+[16:37:58] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.348
+[16:38:34] [UPLOAD] NEW upload phase:
+[16:38:34] [UPLOAD]   Files for tag update only: 0
+[16:38:34] [UPLOAD]   Files not on Cloudinary (resize + upload): 2
+[16:38:34] [UPLOAD]   Files already synced (no action): 0
+[16:38:34] [UPLOAD] Total files to process: 2
+[16:38:34] [UPLOAD] Currently uploading: Uploading: _MG_6312-Edit.tif
+[16:38:52] [UPLOAD] Currently uploading: Uploading: _MG_6326-Edit.tif
+[16:39:10] [UPLOAD] NEW upload phase complete: 2 uploaded/updated, 0 errors, 0 metadata failures
+[16:39:11] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.348
