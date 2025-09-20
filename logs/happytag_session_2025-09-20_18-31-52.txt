@@ -1,0 +1,31 @@
+=== HappyTag Unified Session Log ===
+Session started: 2025-09-20 18:31:52
+Log file: D:\Python playfolder\happyTag\logs\happytag_session_2025-09-20_18-31-52.txt
+==================================================
+
+[18:31:52] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.444
+[18:32:20] [UPLOAD] NEW upload phase:
+[18:32:20] [UPLOAD]   Files for tag update only: 0
+[18:32:20] [UPLOAD]   Files not on Cloudinary (resize + upload): 18
+[18:32:20] [UPLOAD]   Files already synced (no action): 0
+[18:32:20] [UPLOAD] Total files to process: 18
+[18:32:20] [UPLOAD] Currently uploading: Uploading: LittleTurnstile detail 01.jpg
+[18:32:23] [UPLOAD] Currently uploading: Uploading: LittleTurnstile detail 02.jpg
+[18:32:25] [UPLOAD] Currently uploading: Uploading: LittleTurnstile detail 03.jpg
+[18:32:26] [UPLOAD] Currently uploading: Uploading: LittleTurnstile detail 04.jpg
+[18:32:28] [UPLOAD] Currently uploading: Uploading: LittleTurnstile detail 05.jpg
+[18:32:30] [UPLOAD] Currently uploading: Uploading: LittleTurnstile detail 06.jpg
+[18:32:32] [UPLOAD] Currently uploading: Uploading: LittleTurnstile detail 07.jpg
+[18:32:33] [UPLOAD] Currently uploading: Uploading: LittleTurnstile detail 08.jpg
+[18:32:35] [UPLOAD] Currently uploading: Uploading: LittleTurnstile detail 09.jpg
+[18:32:37] [UPLOAD] Currently uploading: Uploading: LittleTurnstile detail 10.jpg
+[18:32:38] [UPLOAD] Currently uploading: Uploading: LittleTurnstile detail 11.jpg
+[18:32:40] [UPLOAD] Currently uploading: Uploading: LittleTurnstile detail 12.jpg
+[18:32:42] [UPLOAD] Currently uploading: Uploading: LittleTurnstile detail 13.jpg
+[18:32:44] [UPLOAD] Currently uploading: Uploading: LittleTurnstile detail 14.jpg
+[18:32:45] [UPLOAD] Currently uploading: Uploading: LittleTurnstile detail 15.jpg
+[18:32:47] [UPLOAD] Currently uploading: Uploading: LittleTurnstile detail 16.jpg
+[18:32:49] [UPLOAD] Currently uploading: Uploading: LittleTurnstile detail 17.jpg
+[18:32:50] [UPLOAD] Currently uploading: Uploading: LittleTurnstile detail 18.jpg
+[18:32:52] [UPLOAD] NEW upload phase complete: 18 uploaded/updated, 0 errors, 0 metadata failures
+[18:32:54] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.448

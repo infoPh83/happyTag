@@ -4,6 +4,7 @@ import re
 import subprocess
 from datetime import datetime
 from PIL import Image
+import time
 
 from PyQt5.QtWidgets import (QMainWindow, QApplication, QFileDialog, 
                            QWidget, QLabel, QTextEdit, QMessageBox,
@@ -23,9 +24,9 @@ from utilities.debug_utils import (
     debug_startup, debug_layout, debug_tags, 
     debug_metadata, debug_cloudinary, debug_memory, debug_errors,
     debug_file_ops, debug_assessment, debug_ui_events, print_debug_status, debug, debug_upload,
-    debug_image_loading, debug_exiftool, debug_layout_fix, debug_business, debug_print,
+    debug_image_loading, debug_exiftool, debug_layout_fix, debug_print,
     debug_width_control, debug_ctrl_operations, debug_orientation, 
-    debug_color_conversion, debug_file_dialogs, debug_tag_widgets, debug_temp_files
+    debug_color_conversion, debug_file_dialogs, debug_tag_widgets, debug_temp_files, debug_timings
 )
 from utilities.session_logger import get_current_log_file, configure_session_logging, log_session_message
 
@@ -252,6 +253,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'actionSynch_with_Cloudinary'):
             self.actionSynch_with_Cloudinary.triggered.connect(self.start_cloudinary_upload)
             self.actionSynch_with_Cloudinary.setEnabled(False)  # Disable until Cloudinary is ready
+            self.uploadButton.clicked.connect(self.start_cloudinary_upload)
+            self.uploadButton.setEnabled(False)  # Disable until Cloudinary is ready
         
         # Hide Cloudinary UI area initially (shows placeholder text and confusing values)
         self._hide_cloudinary_ui_area()
@@ -349,6 +352,15 @@ class MainWindow(QMainWindow):
         self.problematic_files = set()
         self.enable_metadata_reading = True
         
+        # Upload performance timing
+        self.upload_timing = {
+            'pre_loading_time': 0.0,
+            'assessment_time': 0.0,
+            'upload_time': 0.0,
+            'post_upload_time': 0.0,
+            'total_start_time': None
+        }
+        
         debug_startup("Basic application state initialized")
 
     def _hide_cloudinary_ui_area(self):
@@ -398,8 +410,8 @@ class MainWindow(QMainWindow):
             
             debug_startup(f"Shown Cloudinary widgets: {shown_widgets}")
             
-            # Set proper text for the labels after making them visible
-            self._update_cloudinary_label_text()
+            # Labels will be populated with real data via pre-population before visibility
+            # No need for placeholder text updates
             
             # Force layout update to recalculate size after widgets become visible
             # Use a timer to ensure the visibility changes are processed first
@@ -408,23 +420,6 @@ class MainWindow(QMainWindow):
             debug_startup("Cloudinary UI widgets shown after initialization")
         except Exception as e:
             debug_errors(f"Error showing Cloudinary UI area: {e}")
-
-    def _update_cloudinary_label_text(self):
-        """Update Cloudinary labels with proper text instead of 'TextLabel'"""
-        try:
-            if hasattr(self, 'storageLabel') and self.storageLabel:
-                self.storageLabel.setText("Storage: 0.0%")
-                debug_startup("Updated storageLabel text")
-            
-            if hasattr(self, 'transformationsLabel') and self.transformationsLabel:
-                self.transformationsLabel.setText("Transformations: 4.9%")
-                debug_startup("Updated transformationsLabel text")
-                
-            if hasattr(self, 'bandwidthLabel') and self.bandwidthLabel:
-                self.bandwidthLabel.setText("Bandwidth: 0.0%")
-                debug_startup("Updated bandwidthLabel text")
-        except Exception as e:
-            debug_errors(f"Error updating Cloudinary label text: {e}")
 
     def _refresh_ui_layout(self):
         """Force refresh of UI layout to accommodate newly visible widgets"""
@@ -523,12 +518,13 @@ class MainWindow(QMainWindow):
                 if hasattr(self, 'label') and self.label:
                     self.label.setText("Current Credits Usage")
                 
-                # NOTE: Do NOT update the other labels here - that's handled by update_credits_bar()
-                # when real data arrives. This prevents showing placeholder text.
+                # Labels are already populated with real data via _pre_populate_cloudinary_labels
+                # No need to set placeholder text here
                 
                 # Enable Cloudinary sync action if available
                 if hasattr(self, 'actionSynch_with_Cloudinary'):
                     self.actionSynch_with_Cloudinary.setEnabled(True)
+                    self.uploadButton.setEnabled(True)
                     debug_startup("Enabled Cloudinary sync action")
                     
             else:
@@ -557,6 +553,7 @@ class MainWindow(QMainWindow):
                 # Disable Cloudinary sync action        
                 if hasattr(self, 'actionSynch_with_Cloudinary'):
                     self.actionSynch_with_Cloudinary.setEnabled(False)
+                    self.uploadButton.setEnabled(False)
                 
                 debug_startup(f"Cloudinary UI updated with error status: {status_message}")
                 
@@ -571,6 +568,49 @@ class MainWindow(QMainWindow):
             
         except Exception as e:
             debug_errors(f"Error updating Cloudinary UI status: {e}")
+
+    def _pre_populate_cloudinary_labels(self, storage_percent, transformations_percent, bandwidth_percent):
+        """Pre-populate Cloudinary labels with real data before making them visible to prevent layout glitch"""
+        try:
+            debug_startup("Pre-populating Cloudinary labels with real data...")
+            
+            # Define colors matching the original Cloudinary app (same as credits bar)
+            STORAGE_COLOUR = "#b83232"      # Red
+            TRANSFORMATIONS_COLOUR = "#32a4ba"  # Blue  
+            BANDWIDTH_COLOUR = "#dbde3e"    # Yellow
+            
+            # Set the percentage labels with colored squares and real data while they're still hidden
+            if hasattr(self, 'storageLabel') and self.storageLabel:
+                storage_text = self.create_colored_label_text(STORAGE_COLOUR, "Storage", storage_percent)
+                self.storageLabel.setText(storage_text)
+                debug_startup(f"Pre-populated storageLabel with colored square: {storage_text}")
+            
+            if hasattr(self, 'transformationsLabel') and self.transformationsLabel:
+                transformations_text = self.create_colored_label_text(TRANSFORMATIONS_COLOUR, "Transformations", transformations_percent)
+                self.transformationsLabel.setText(transformations_text)
+                debug_startup(f"Pre-populated transformationsLabel with colored square: {transformations_text}")
+                
+            if hasattr(self, 'bandwidthLabel') and self.bandwidthLabel:
+                bandwidth_text = self.create_colored_label_text(BANDWIDTH_COLOUR, "Bandwidth", bandwidth_percent)
+                self.bandwidthLabel.setText(bandwidth_text)
+                debug_startup(f"Pre-populated bandwidthLabel with colored square: {bandwidth_text}")
+            
+            # Also pre-configure the credits bar if it exists
+            if hasattr(self, 'creditsBar') and self.creditsBar:
+                self.creditsBar.setColors(STORAGE_COLOUR, TRANSFORMATIONS_COLOUR, BANDWIDTH_COLOUR)
+                
+                # Set the percentages
+                storage_perc = float(storage_percent) if isinstance(storage_percent, (int, float)) else 0
+                transformations_perc = float(transformations_percent) if isinstance(transformations_percent, (int, float)) else 0
+                bandwidth_perc = float(bandwidth_percent) if isinstance(bandwidth_percent, (int, float)) else 0
+                
+                self.creditsBar.setPercentages(storage_perc, transformations_perc, bandwidth_perc)
+                debug_startup("Pre-configured credits bar with real data")
+            
+            debug_startup("Pre-population complete - widgets ready to be shown with colored squares")
+            
+        except Exception as e:
+            debug_errors(f"Error pre-populating Cloudinary labels: {e}")
 
     def _initialize_heavy_components(self):
         """Initialize heavy components in background after window is shown"""
@@ -3493,7 +3533,7 @@ class MainWindow(QMainWindow):
             else:
                 debug_assessment("No sync status data available")
             
-            debug_assessment("Note: Resizing and database operations deferred to upload phase for faster loading")
+            debug_assessment("Note: Resizing operations deferred to upload phase for faster loading")
             debug_assessment("=== END LIGHTWEIGHT ASSESSMENT SUMMARY ===")
         else:
             debug_assessment("Cloudinary disabled - all files will be processed locally only")
@@ -3699,15 +3739,25 @@ class MainWindow(QMainWindow):
             files_not_on_cloudinary = []
             already_synced_count = 0
             
-            debug_upload(f"Analyzing {len(self.image_flow_manager.image_widgets)} widgets for upload...")
+            total_widgets = len(self.image_flow_manager.image_widgets)
+            debug_upload(f"Analyzing {total_widgets} widgets for upload...")
+            
+            # Update progress to show analysis phase
+            self.update_progress_label(f"Analyzing {total_widgets} files...")
             
             # Analyze each widget to determine upload needs
-            for file_path, widget in self.image_flow_manager.image_widgets.items():
+            for i, (file_path, widget) in enumerate(self.image_flow_manager.image_widgets.items(), 1):
+                # Update progress periodically during analysis
+                if i % 5 == 0 or i == total_widgets:  # Update every 5 files or on last file
+                    self.update_progress_label(f"Analyzing files... ({i}/{total_widgets})")
+                
                 # Get current UI tags
                 ui_tags = widget.get_tags()
                 ui_tags_list = [tag.strip() for tag in ui_tags] if isinstance(ui_tags, list) else [tag.strip() for tag in str(ui_tags).split(',') if tag.strip()]
                 
-                debug_upload(f"Widget analysis for {os.path.basename(file_path)}: UI tags = {ui_tags_list}")
+                # Reduce debug logging during assessment for speed (only log every 10th file)
+                if i % 10 == 0 or i == total_widgets:
+                    debug_upload(f"Widget analysis for {os.path.basename(file_path)}: UI tags = {ui_tags_list}")
                 
                 # Check if image has a public_id (is on Cloudinary)
                 public_id = widget.get_cloudinary_public_id()
@@ -3748,12 +3798,8 @@ class MainWindow(QMainWindow):
                         debug_upload(f"  Reclassifying as 'not on Cloudinary' for full upload")
                         log_session_message(f"Detected orphaned public_id during assessment: {public_id} for {os.path.basename(file_path)}", "UPLOAD")
                         
-                        # Optionally clean the orphaned public_id immediately
-                        if hasattr(self, '_cleanup_orphaned_public_id'):
-                            cleanup_result = self._cleanup_orphaned_public_id(file_path)
-                            if cleanup_result:
-                                debug_upload(f"  Cleaned orphaned public_id from {os.path.basename(file_path)}")
-                                log_session_message(f"Cleaned orphaned public_id from {os.path.basename(file_path)} during assessment", "UPLOAD")
+                        # NOTE: Orphaned cleanup is handled during the loading phase
+                        # No need to flag or handle it during upload
                         
                         # Treat as new upload
                         files_not_on_cloudinary.append({
@@ -3790,16 +3836,44 @@ class MainWindow(QMainWindow):
     
     def start_cloudinary_upload(self):
         """Start the Cloudinary upload phase using the upload handler"""
+        
+        # START TIMING: Reset all timing counters and start total timer
+        self.upload_timing = {
+            'pre_loading_time': 0.0,
+            'assessment_time': 0.0,
+            'upload_time': 0.0,
+            'post_upload_time': 0.0,
+            'total_start_time': time.time()
+        }
+        pre_loading_start = time.time()
+        debug_timings("=== UPLOAD PERFORMANCE TIMING STARTED ===")
+        
+        # Show progress dialog IMMEDIATELY for instant user feedback
+        self.show_progress(1, "Starting upload...")
+        
+        # Force immediate UI update to ensure progress dialog appears instantly
+        QApplication.processEvents()
+        
         debug_upload("Starting Cloudinary upload phase from UI action")
         
         if not self.upload_handler:
             debug_upload("ERROR: Upload handler not initialized")
+            self.hide_progress()
             return
         
+        # END PRE-LOADING TIMING: Initial UI setup and validation
+        self.upload_timing['pre_loading_time'] = time.time() - pre_loading_start
+        debug_timings(f"Pre-loading phase completed in {self.upload_timing['pre_loading_time']:.3f} seconds")
+        
+        # START ASSESSMENT TIMING
+        assessment_start = time.time()
+        
         # Run on-demand assessment for upload phase
+        self.update_progress_label("Analyzing files for upload...")
         debug_upload("Running on-demand assessment for upload...")
         if not self.run_upload_assessment():
             debug_upload("ERROR: Upload assessment failed")
+            self.hide_progress()
             QMessageBox.warning(self, "Upload Error", 
                               "Assessment failed. Please check that images are loaded and Cloudinary is configured.")
             return
@@ -3807,6 +3881,7 @@ class MainWindow(QMainWindow):
         # Verify NEW assessment results are now available
         if not hasattr(self.image_assessment, 'files_for_tag_update_only'):
             debug_upload("ERROR: NEW assessment structure not available")
+            self.hide_progress()
             QMessageBox.warning(self, "Upload Error", 
                               "Assessment failed. Please check that images are loaded and Cloudinary is configured.")
             return
@@ -3820,11 +3895,16 @@ class MainWindow(QMainWindow):
         total_work = len(files_for_tag_update) + len(files_not_on_cloudinary)
         if total_work == 0:
             debug_upload("No files need uploading or updating after NEW assessment")
+            self.hide_progress()
             message = f"All {already_synced_count} images are already perfectly synced with Cloudinary. No upload needed."
             QMessageBox.information(self, "Upload Info", message)
             return
         
-        # Show progress bar for upload phase
+        # END ASSESSMENT TIMING
+        self.upload_timing['assessment_time'] = time.time() - assessment_start
+        debug_timings(f"Assessment phase completed in {self.upload_timing['assessment_time']:.3f} seconds")
+        
+        # Update progress bar with correct total and message now that assessment is done
         upload_message = f"Uploading to Cloudinary...\n{total_work} files to process"
         self.show_progress(total_work, upload_message)
         
@@ -3912,6 +3992,9 @@ class MainWindow(QMainWindow):
         # Hide the progress bar first
         self.hide_progress()
         
+        # Generate performance timing report
+        self._generate_performance_report()
+        
         # Handle both old format (2 values) and new format (3 values)
         if len(upload_data) == 2:
             uploaded_count, error_count = upload_data
@@ -3986,6 +4069,60 @@ class MainWindow(QMainWindow):
             )
             dialog.exec_()
     
+    def _generate_performance_report(self):
+        """Generate a detailed performance timing report for the upload process"""
+        if not hasattr(self, 'upload_timing') or not self.upload_timing.get('total_start_time'):
+            debug_timings("No timing data available for performance report")
+            return
+        
+        # Calculate total time
+        total_time = time.time() - self.upload_timing['total_start_time']
+        self.upload_timing['total_time'] = total_time
+        
+        # Generate detailed performance report
+        debug_timings("=" * 60)
+        debug_timings("UPLOAD PERFORMANCE TIMING REPORT")
+        debug_timings("=" * 60)
+        debug_timings(f"1. Pre-loading Phase:   {self.upload_timing['pre_loading_time']:.3f} seconds")
+        debug_timings(f"   - Component initialization and file validation")
+        debug_timings(f"2. Assessment Phase:    {self.upload_timing['assessment_time']:.3f} seconds")
+        debug_timings(f"   - Image analysis, resizing checks, and upload necessity determination")
+        debug_timings(f"3. Upload Phase:        {self.upload_timing['upload_time']:.3f} seconds")
+        debug_timings(f"   - Actual API calls, image processing, and metadata writing")
+        debug_timings(f"4. Post-upload Phase:   {self.upload_timing['post_upload_time']:.3f} seconds")
+        debug_timings(f"   - Widget updates and metadata persistence (included in upload phase)")
+        debug_timings("-" * 60)
+        debug_timings(f"TOTAL UPLOAD TIME:      {total_time:.3f} seconds")
+        debug_timings("=" * 60)
+        
+        # Calculate percentages
+        if total_time > 0:
+            pre_loading_pct = (self.upload_timing['pre_loading_time'] / total_time) * 100
+            assessment_pct = (self.upload_timing['assessment_time'] / total_time) * 100
+            upload_pct = (self.upload_timing['upload_time'] / total_time) * 100
+            post_upload_pct = (self.upload_timing['post_upload_time'] / total_time) * 100
+            
+            debug_timings("PERFORMANCE BREAKDOWN:")
+            debug_timings(f"  Pre-loading:  {pre_loading_pct:5.1f}% of total time")
+            debug_timings(f"  Assessment:   {assessment_pct:5.1f}% of total time")
+            debug_timings(f"  Upload:       {upload_pct:5.1f}% of total time")
+            debug_timings(f"  Post-upload:  {post_upload_pct:5.1f}% of total time")
+            debug_timings("=" * 60)
+            
+            # Performance recommendations
+            debug_timings("PERFORMANCE ANALYSIS:")
+            if assessment_pct > 50:
+                debug_timings("⚠️  Assessment phase is taking >50% of time - consider optimizing image analysis")
+            if upload_pct > 70:
+                debug_timings("⚠️  Upload phase is taking >70% of time - may be network or image size related")
+            if pre_loading_pct > 20:
+                debug_timings("⚠️  Pre-loading phase is taking >20% of time - component initialization could be optimized")
+            
+            if assessment_pct < 30 and upload_pct < 50:
+                debug_timings("✅ Good performance balance across all phases")
+                
+            debug_timings("=" * 60)
+    
     def on_upload_preview(self, file_path):
         """Handle upload preview updates"""
         upload_msg = f"Currently uploading: {file_path}"
@@ -4029,16 +4166,15 @@ class MainWindow(QMainWindow):
     
     def on_cloudinary_status_received(self, data):
         """Handle Cloudinary status data received from cloud_status"""
-        debug_business(f"[UPLOAD REFRESH] on_cloudinary_status_received called with data length: {len(data) if data else 0}")
+        debug_layout(f"[UPLOAD REFRESH] on_cloudinary_status_received called with data length: {len(data) if data else 0}")
         debug_cloudinary(f" Cloudinary status received: {data}")
         if data and len(data) > 0:
             if data[0] == True:  # Status retrieval successful
                 debug_cloudinary(f"✅ Cloudinary connection successful!")
-                debug_startup("Showing Cloudinary UI after successful connection")
+                debug_layout("Showing Cloudinary UI after successful connection")
                 
                 # IMPORTANT: Set the connection flag to True
                 self.cloudinary_connected = True
-                self._update_cloudinary_ui_status(True, "Connected")
                 
                 # Retrieve Cloudinary files list once at initialization
                 self._retrieve_cloudinary_files_cache()
@@ -4054,10 +4190,19 @@ class MainWindow(QMainWindow):
                     transformations_percent = data[5] if len(data) > 5 else 0  # Transformations % is at index 5
                     bandwidth_percent = data[7] if len(data) > 7 else 0        # Bandwidth % is at index 7
                     
+                    # Pre-populate the labels with real data BEFORE making them visible
+                    self._pre_populate_cloudinary_labels(storage_percent, transformations_percent, bandwidth_percent)
+                    
+                    # NOW show the UI widgets with real data already populated
+                    self._update_cloudinary_ui_status(True, "Connected")
+                    
                     # Update the CloudinaryCreditsBar if it exists
                     resources_count = data[4] if len(data) > 4 else 0  # Get number of files from index 4
-                    debug_business(f"[UPLOAD REFRESH] Calling update_credits_bar with resources_count: {resources_count}")
+                    debug_layout(f"[UPLOAD REFRESH] Calling update_credits_bar with resources_count: {resources_count}")
                     self.update_credits_bar(storage_percent, transformations_percent, bandwidth_percent, resources_count)
+                else:
+                    # No data available - show UI with placeholder data
+                    self._update_cloudinary_ui_status(True, "Connected")
             else:
                 debug_cloudinary(f"❌ Cloudinary connection failed: {data}")
                 self.cloudinary_connected = False
@@ -4166,30 +4311,9 @@ class MainWindow(QMainWindow):
                     break
             
             if credits_bar is not None:
-                debug_business(f"[UPLOAD REFRESH] Credits bar found, updating...")
-                # Define colors matching the original Cloudinary app
-                STORAGE_COLOUR = "#b83232"      # Red
-                TRANSFORMATIONS_COLOUR = "#32a4ba"  # Blue  
-                BANDWIDTH_COLOUR = "#dbde3e"    # Yellow
+                debug_layout(f"[UPLOAD REFRESH] Credits bar found, updating overlay text...")
                 
-                # Only set colors if this is the first time or they're not set
-                if not self.credits_bar_initialized:
-                    debug_cloudinary(f"First-time credits bar initialization")
-                    credits_bar.setColors(STORAGE_COLOUR, TRANSFORMATIONS_COLOUR, BANDWIDTH_COLOUR)
-                    self.credits_bar_initialized = True
-                
-                # Use the percentages directly (they're already calculated correctly in the Cloudinary data)
-                storage_perc = float(storage_percent) if isinstance(storage_percent, (int, float)) else 0
-                transformations_perc = float(transformations_percent) if isinstance(transformations_percent, (int, float)) else 0
-                bandwidth_perc = float(bandwidth_percent) if isinstance(bandwidth_percent, (int, float)) else 0
-                
-                debug_tags(f"Converted percentages - Storage: {storage_perc}, Transformations: {transformations_perc}, Bandwidth: {bandwidth_perc}")
-                
-                # Set the percentages (this will handle caching internally)
-                debug_tags(f"Calling setPercentages on credits bar")
-                credits_bar.setPercentages(storage_perc, transformations_perc, bandwidth_perc)
-                
-                # Set the overlay text with resources count
+                # Credits bar was already configured in pre-population, just update overlay text and resources count
                 if resources_count > 0:
                     overlay_text = f"{resources_count} online images"
                     debug_cloudinary(f"Setting overlay text: '{overlay_text}'")
@@ -4198,57 +4322,13 @@ class MainWindow(QMainWindow):
                     debug_cloudinary(f"No overlay text set (resources_count: {resources_count})")
                     credits_bar.setOverlayText("")  # Clear overlay if no resources
                 
-                # Update the colored legend labels
-                try:
-                    # First, ensure the labels are visible (they might be hidden from startup)
-                    cloudinary_widgets = [
-                        ('storageLabel', getattr(self, 'storageLabel', None)),
-                        ('transformationsLabel', getattr(self, 'transformationsLabel', None)), 
-                        ('bandwidthLabel', getattr(self, 'bandwidthLabel', None)),
-                        ('label', getattr(self, 'label', None))  # "Current Credits Usage" label
-                    ]
-                    
-                    # Make widgets visible and update their text
-                    for widget_name, widget in cloudinary_widgets:
-                        if widget:
-                            if not widget.isVisible():
-                                widget.setVisible(True)
-                                debug_layout_fix(f"Made {widget_name} visible")
-                            else:
-                                debug_layout_fix(f"{widget_name} was already visible")
-                        else:
-                            debug_layout_fix(f"Widget {widget_name} not found")
-                    
-                    if hasattr(self, 'storageLabel'):
-                        storage_text = self.create_colored_label_text(STORAGE_COLOUR, "Storage", storage_perc)
-                        self.storageLabel.setText(storage_text)
-                        debug_layout_fix(f"Updated storageLabel: {storage_text}")
-                    
-                    if hasattr(self, 'transformationsLabel'):
-                        transformations_text = self.create_colored_label_text(TRANSFORMATIONS_COLOUR, "Transformations", transformations_perc)
-                        self.transformationsLabel.setText(transformations_text)
-                        debug_layout_fix(f"Updated transformationsLabel: {transformations_text}")
-                    
-                    if hasattr(self, 'bandwidthLabel'):
-                        bandwidth_text = self.create_colored_label_text(BANDWIDTH_COLOUR, "Bandwidth", bandwidth_perc)
-                        self.bandwidthLabel.setText(bandwidth_text)
-                        debug_layout_fix(f"Updated bandwidthLabel: {bandwidth_text}")
-                        
-                    # Force layout refresh after making widgets visible and updating text
-                    debug_layout_fix("Calling layout refresh...")
-                    self._force_layout_refresh_after_visibility_change()
-                        
-                except Exception as label_error:
-                    debug_layout_fix(f"Error updating legend labels: {label_error}")
-                    debug_cloudinary(f"Error updating legend labels: {label_error}")
-                
                 # Store values to prevent duplicate updates
                 self._last_credits_values = current_values
                 
-                debug_cloudinary(f"📊 Credits bar updated - Storage: {storage_perc:.2f}%, Transformations: {transformations_perc:.2f}%, Bandwidth: {bandwidth_perc:.2f}%")
+                debug_cloudinary(f"📊 Credits bar overlay updated - Resources: {resources_count}")
                 
             else:
-                debug_business(f"[UPLOAD REFRESH] Credits bar widget not found!")
+                debug_layout(f"[UPLOAD REFRESH] Credits bar widget not found!")
                 debug_cloudinary(f"⚠️ Credits bar widget not found in main window")
                 # List all widget attributes for debugging
                 widget_attrs = [attr for attr in dir(self) if not attr.startswith('_') and hasattr(getattr(self, attr, None), 'setVisible')]

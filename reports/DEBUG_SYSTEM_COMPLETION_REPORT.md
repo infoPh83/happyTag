@@ -17,7 +17,6 @@ Successfully completed comprehensive categorization of all debug output in the H
   - Layout fixes → `debug_layout_fix()`
   - Image loading → `debug_image_loading()`
   - File dialogs → `debug_file_dialogs()`
-  - Business data → `debug_business()`
   - Color conversion → `debug_color_conversion()`
   - Temporary files → `debug_temp_files()`
   - Orientation handling → `debug_orientation()`
@@ -26,7 +25,7 @@ Successfully completed comprehensive categorization of all debug output in the H
 
 #### Utilities Files
 - **utilities/tag_widgets.py**: Tag button creation debug → `debug_tag_widgets()`
-- **utilities/tag_manager.py**: Tag management and business loading → `debug_tag_widgets()`, `debug_business()`, `debug_errors()`, `debug_ui_events()`
+- **utilities/tag_manager.py**: Tag management and business loading → `debug_tag_widgets()`, `debug_errors()`, `debug_ui_events()`
 - **utilities/settings_dialog.py**: Settings operations → `debug_ui_events()`, `debug_errors()`
 
 #### Debug System Core
@@ -37,7 +36,6 @@ Successfully completed comprehensive categorization of all debug output in the H
 debug_image_loading()      # Image preview and loading operations
 debug_exiftool()          # ExifTool command execution
 debug_layout_fix()        # Layout problem resolution
-debug_business()          # Business data processing
 debug_width_control()     # Widget width adjustments
 debug_ctrl_operations()   # Ctrl+click and modifier operations
 debug_orientation()       # Image orientation correction

@@ -92,21 +92,17 @@ class TagManager(QDialog):
         
         self.street_container = self.street_scroll_area
         
-        # Get the grid layout containing tagsList
-        grid_layout = self.gridLayout
+        # Access the GroupBox containers instead of gridLayout
+        # The UI now uses QGroupBox containers with collapsible functionality
+        self.business_group = self.BusinessesGroupBox
+        self.street_group = self.StreetsGroupBox
+        self.tags_group = self.TagsGroupBox
         
-        # Find tagsList, businessList, and streetList positions
-        self.tags_list_position = None
-        self.business_list_position = None
-        self.street_list_position = None
-        for i in range(grid_layout.count()):
-            item = grid_layout.itemAt(i)
-            if item.widget() == self.tagsList:
-                self.tags_list_position = grid_layout.getItemPosition(i)
-            elif item.widget() == self.businessList:
-                self.business_list_position = grid_layout.getItemPosition(i)
-            elif item.widget() == self.streetList:
-                self.street_list_position = grid_layout.getItemPosition(i)
+        # Setup true collapsible behavior for GroupBoxes
+        self.setup_collapsible_groupboxes()
+        
+        # Store references to the list widgets (they're now inside GroupBoxes)
+        # These references are used for scroll area management later in the code
                 
         # Keep dialog open when clicking buttons
         self.setModal(False)
@@ -210,6 +206,81 @@ class TagManager(QDialog):
         self.populate_business_list()
         self.populate_street_list()
         self.populate_tags_list()
+        
+    def setup_collapsible_groupboxes(self):
+        """Setup true collapsible behavior for GroupBoxes"""
+        # Connect signals for each GroupBox to handle collapse/expand
+        self.business_group.toggled.connect(lambda checked: self.toggle_groupbox_visibility(self.business_group, checked))
+        self.street_group.toggled.connect(lambda checked: self.toggle_groupbox_visibility(self.street_group, checked))
+        self.tags_group.toggled.connect(lambda checked: self.toggle_groupbox_visibility(self.tags_group, checked))
+        
+        # Store original size policies for restoration
+        self.original_size_policies = {
+            self.business_group: self.business_group.sizePolicy(),
+            self.street_group: self.street_group.sizePolicy(),
+            self.tags_group: self.tags_group.sizePolicy()
+        }
+        
+    def toggle_groupbox_visibility(self, groupbox, checked):
+        """Toggle GroupBox content visibility and adjust layout stretch"""
+        from PyQt5.QtWidgets import QSizePolicy, QHBoxLayout
+        
+        # Get the main horizontal layout that contains all GroupBoxes
+        main_layout = self.layout()
+        
+        if checked:
+            # Expand: Show content and set normal stretch factor
+            self.show_groupbox_content(groupbox, True)
+            groupbox.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            # Set stretch factor to 1 (normal) if it's a horizontal layout
+            if isinstance(main_layout, QHBoxLayout):
+                groupbox_index = self.get_groupbox_index(groupbox)
+                if groupbox_index >= 0:
+                    main_layout.setStretch(groupbox_index, 1)
+        else:
+            # Collapse: Hide content and set minimal stretch factor
+            self.show_groupbox_content(groupbox, False)
+            groupbox.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+            # Set stretch factor to 0 (minimal width) if it's a horizontal layout
+            if isinstance(main_layout, QHBoxLayout):
+                groupbox_index = self.get_groupbox_index(groupbox)
+                if groupbox_index >= 0:
+                    main_layout.setStretch(groupbox_index, 0)
+                    
+        # Force layout update
+        self.update()
+        self.adjustSize()
+        
+    def get_groupbox_index(self, groupbox):
+        """Get the index of a GroupBox in the main layout"""
+        main_layout = self.layout()
+        if main_layout:
+            for i in range(main_layout.count()):
+                item = main_layout.itemAt(i)
+                if item and item.widget() == groupbox:
+                    return i
+        return -1
+        
+    def show_groupbox_content(self, groupbox, visible):
+        """Show or hide all widgets inside a GroupBox (recursively)"""
+        layout = groupbox.layout()
+        if layout:
+            self.set_layout_visibility(layout, visible)
+    
+    def set_layout_visibility(self, layout, visible):
+        """Recursively set visibility for all widgets in a layout"""
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            if item:
+                widget = item.widget()
+                if widget:
+                    # Hide/show the widget
+                    widget.setVisible(visible)
+                else:
+                    # If it's a nested layout, recurse into it
+                    nested_layout = item.layout()
+                    if nested_layout:
+                        self.set_layout_visibility(nested_layout, visible)
         
     def configure_list_widgets(self):
         """Configure list widgets to prevent horizontal scrollbars and enable text wrapping"""
@@ -343,76 +414,82 @@ class TagManager(QDialog):
                 self.openAddKeywordDialogButton.setToolTip("Add a new keyword to the tags file")
             
     def show_tags_list_widget(self):
-        """Show the QListWidget for tags (for error messages)"""
-        if self.tags_list_position and self.tagsList.parent() is None:
+        """Show the original tags list widget (for error messages)"""
+        # Get the tags GroupBox layout
+        tags_layout = self.tags_group.layout()
+        if tags_layout:
             # Remove flow layout container if it's there
-            self.tags_container.setParent(None)
-            # Add the list widget back
-            self.gridLayout.addWidget(self.tagsList, 
-                                    self.tags_list_position[0], 
-                                    self.tags_list_position[1], 
-                                    self.tags_list_position[2], 
-                                    self.tags_list_position[3])
+            if self.tags_container.parent() == self.tags_group:
+                tags_layout.removeWidget(self.tags_container)
+                self.tags_container.setParent(None)
+            # Add the list widget back if not already there
+            if self.tagsList.parent() != self.tags_group:
+                tags_layout.addWidget(self.tagsList)
             
     def show_tags_flow_layout(self):
         """Show the flow layout container for tags (for actual tag buttons)"""
-        if self.tags_list_position:
-            # Remove list widget
-            self.tagsList.setParent(None)
-            # Add the flow layout container
-            self.gridLayout.addWidget(self.tags_container, 
-                                    self.tags_list_position[0], 
-                                    self.tags_list_position[1], 
-                                    self.tags_list_position[2], 
-                                    self.tags_list_position[3])
+        # Get the tags GroupBox layout  
+        tags_layout = self.tags_group.layout()
+        if tags_layout:
+            # Remove list widget if it's there
+            if self.tagsList.parent() == self.tags_group:
+                tags_layout.removeWidget(self.tagsList)
+                self.tagsList.setParent(None)
+            # Add the flow layout container if not already there
+            if self.tags_container.parent() != self.tags_group:
+                tags_layout.addWidget(self.tags_container)
                                     
     def show_business_list_widget(self):
         """Show the original business list widget (for error messages)"""
-        if self.business_list_position:
+        # Get the business GroupBox layout
+        business_layout = self.business_group.layout()
+        if business_layout:
             # Remove flow layout container if it's there
-            self.business_container.setParent(None)
-            # Add the list widget back
-            self.gridLayout.addWidget(self.businessList, 
-                                    self.business_list_position[0], 
-                                    self.business_list_position[1], 
-                                    self.business_list_position[2], 
-                                    self.business_list_position[3])
+            if self.business_container.parent() == self.business_group:
+                business_layout.removeWidget(self.business_container)
+                self.business_container.setParent(None)
+            # Add the list widget back if not already there
+            if self.businessList.parent() != self.business_group:
+                business_layout.addWidget(self.businessList)
             
     def show_business_flow_layout(self):
         """Show the flow layout container for business items"""
-        if self.business_list_position:
-            # Remove list widget
-            self.businessList.setParent(None)
-            # Add the flow layout container
-            self.gridLayout.addWidget(self.business_container, 
-                                    self.business_list_position[0], 
-                                    self.business_list_position[1], 
-                                    self.business_list_position[2], 
-                                    self.business_list_position[3])
+        # Get the business GroupBox layout
+        business_layout = self.business_group.layout()
+        if business_layout:
+            # Remove list widget if it's there
+            if self.businessList.parent() == self.business_group:
+                business_layout.removeWidget(self.businessList)
+                self.businessList.setParent(None)
+            # Add the flow layout container if not already there
+            if self.business_container.parent() != self.business_group:
+                business_layout.addWidget(self.business_container)
                                     
     def show_street_list_widget(self):
         """Show the street list widget instead of flow layout"""
-        if self.street_list_position:
+        # Get the street GroupBox layout
+        street_layout = self.street_group.layout()
+        if street_layout:
             # Remove flow layout container if it's there
-            self.street_container.setParent(None)
-            # Add the list widget back
-            self.gridLayout.addWidget(self.streetList, 
-                                    self.street_list_position[0], 
-                                    self.street_list_position[1], 
-                                    self.street_list_position[2], 
-                                    self.street_list_position[3])
+            if self.street_container.parent() == self.street_group:
+                street_layout.removeWidget(self.street_container)
+                self.street_container.setParent(None)
+            # Add the list widget back if not already there
+            if self.streetList.parent() != self.street_group:
+                street_layout.addWidget(self.streetList)
             
     def show_street_flow_layout(self):
         """Show the flow layout container for street items"""
-        if self.street_list_position:
-            # Remove list widget
-            self.streetList.setParent(None)
-            # Add the flow layout container
-            self.gridLayout.addWidget(self.street_container, 
-                                    self.street_list_position[0], 
-                                    self.street_list_position[1], 
-                                    self.street_list_position[2], 
-                                    self.street_list_position[3])
+        # Get the street GroupBox layout
+        street_layout = self.street_group.layout()
+        if street_layout:
+            # Remove list widget if it's there
+            if self.streetList.parent() == self.street_group:
+                street_layout.removeWidget(self.streetList)
+                self.streetList.setParent(None)
+            # Add the flow layout container if not already there
+            if self.street_container.parent() != self.street_group:
+                street_layout.addWidget(self.street_container)
                                     
     def load_businesses_from_file(self, file_path):
         """Load businesses from both the B2B + B2C final ODS file and NON TLE tenants list ODS file"""
@@ -835,7 +912,7 @@ class TagManager(QDialog):
                 
                 # Get category color from column A or use default
                 color_cell = worksheet.cell(row=row_idx, column=1)
-                category_color = "#DDA0DD"  # Default color
+                category_color = "#B2B5E76F"  # Default color
                 
                 # Define category-specific default colors
                 category_colors_map = {
@@ -1234,13 +1311,16 @@ class TagManager(QDialog):
             
             # Category colors mapping
             category_colors = {
-                'lifestyle': '#F8F8F0',    # Off-white
-                'shopping': '#FFF9E6',     # Light yellow
-                'wellness': '#E6FFE6',     # Light green
-                'dining': '#FFE6F3',       # Light pink
-                'services': '#F3E6FF',     # Light purple
-                'entertainment': '#FFE6E6', # Light red
-                'fitness': '#E6FFF9',      # Light mint
+                'creative industry': '#F8F8F0',     # Off-white
+                'food & drink': '#FFF9E6',          # Light yellow
+                'healthcare': '#E6FFE6',            # Light green
+                'lifestyle': "#BFE5EE",             # Light pink
+                'professional services': '#F3E6FF', # Light purple
+                'wellness': '#FFE6E6',               # Light red
+                'shopping': "#D8E9E5",               # Light mint
+                'unknown category': "#CAE4F5",        # Light gray
+                'other': "#D4CED3",                   # Light gray
+                'shopping-fashion': "#C8D6CC"         # Light gray
             }
             
             # Group businesses by category
@@ -1350,13 +1430,16 @@ class TagManager(QDialog):
             
             # Category colors mapping (same as existing ones for consistency)
             category_colors = {
-                'lifestyle': '#F8F8F0',    # Off-white
-                'shopping': '#FFF9E6',     # Light yellow
-                'wellness': '#E6FFE6',     # Light green
-                'dining': '#FFE6F3',       # Light pink
-                'services': '#F3E6FF',     # Light purple
-                'entertainment': '#FFE6E6', # Light red
-                'fitness': '#E6FFF9',      # Light mint
+                'creative industry': '#F8F8F0',     # Off-white
+                'food & drink': '#FFF9E6',          # Light yellow
+                'healthcare': '#E6FFE6',            # Light green
+                'lifestyle': "#BFE5EE",             # Light pink
+                'professional services': '#F3E6FF', # Light purple
+                'wellness': '#FFE6E6',               # Light red
+                'shopping': "#D8E9E5",               # Light mint
+                'unknown category': "#CAE4F5",        # Light gray
+                'other': "#D4CED3",                   # Light gray
+                'shopping-fashion': "#C8D6CC"         # Light gray
             }
             
             # Group businesses by category
@@ -1597,9 +1680,9 @@ class TagManager(QDialog):
         # TODO: Implement actual color extraction from ODS headers
         # For now, return default colors
         if col_index == 0:  # BUILDINGS column
-            return "#E6F3FF"  # Light blue
+            return "#D6E5F3"  # Light blue
         else:  # STREET column
-            return "#E6FFE6"  # Light green
+            return "#CED1CE"  # Light green
 
     def display_streets(self, street_data):
         """Display streets and buildings from the given data"""

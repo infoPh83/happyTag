@@ -19,8 +19,6 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 
-# Import CSV database functions
-from utilities.cloudinary_update_v13 import update_csv_database, DATABASE_FILE_NAME
 from PIL import Image
 import cloudinary
 import cloudinary.uploader
@@ -28,7 +26,7 @@ import cloudinary.api
 from cloudinary.exceptions import Error as CloudinaryError
 from PyQt5.QtCore import QObject, pyqtSignal
 
-from utilities.debug_utils import debug_upload, debug_assessment
+from utilities.debug_utils import debug_upload, debug_assessment, debug_timings
 from utilities.session_logger import log_session_message
 from utilities.image_assessment import ImageAssessment
 import subprocess
@@ -249,6 +247,9 @@ class CloudinaryUploadHandler(QObject):
             
         debug_upload("Starting NEW Cloudinary upload phase")
         self.upload_status_signal.emit("Uploading on Cloudinary...")
+        
+        # START UPLOAD TIMING
+        upload_start = time.time()
 
         try:
             # Extract data from NEW assessment structure
@@ -301,9 +302,6 @@ class CloudinaryUploadHandler(QObject):
                 files_for_tag_update, files_not_on_cloudinary
             )
             
-            # Save updated database to CSV after uploads complete
-            self._save_database_after_upload()
-            
             # Report metadata write failures if any
             metadata_failures_count = len(self.metadata_write_failures)
             if metadata_failures_count > 0:
@@ -314,6 +312,13 @@ class CloudinaryUploadHandler(QObject):
             completion_msg = f"NEW upload phase complete: {uploaded_count} uploaded/updated, {error_count} errors, {metadata_failures_count} metadata failures"
             debug_upload(completion_msg)
             log_session_message(completion_msg, "UPLOAD")
+            
+            # END UPLOAD TIMING and update main app
+            upload_time = time.time() - upload_start
+            debug_upload(f"Upload and post-upload phases completed in {upload_time:.3f} seconds")
+            if self.main_app and hasattr(self.main_app, 'upload_timing'):
+                self.main_app.upload_timing['upload_time'] = upload_time
+                self.main_app.upload_timing['post_upload_time'] = 0.0  # Post-upload included in upload timing
             
             # Create detailed status message
             status_msg = f"Upload complete: {uploaded_count} files processed"
@@ -343,6 +348,14 @@ class CloudinaryUploadHandler(QObject):
         """
         uploaded_count = 0
         error_count = 0
+        
+        # Initialize detailed timing counters for upload phase breakdown
+        detailed_timing = {
+            'total_resize_time': 0.0,
+            'total_upload_api_time': 0.0,
+            'total_metadata_write_time': 0.0,
+            'total_widget_update_time': 0.0
+        }
         
         # Calculate total work for progress tracking
         total_files = len(files_for_tag_update) + len(files_not_on_cloudinary)
@@ -381,23 +394,14 @@ class CloudinaryUploadHandler(QObject):
                         debug_upload(f"Tag update successful for {Path(file_path).name}")
                         log_session_message(f"Tag update successful for {Path(file_path).name}", "UPLOAD")
                     elif success == "ORPHANED_404":
-                        # Handle orphaned public_id - clean metadata and treat as new upload
-                        orphan_msg = f"File {Path(file_path).name} has orphaned public_id - cleaning and re-uploading as new file"
+                        # Handle orphaned public_id - this should be rare since orphaned cleanup
+                        # happens during the loading phase, but handle gracefully if it occurs
+                        orphan_msg = f"File {Path(file_path).name} has orphaned public_id - re-uploading as new file"
                         debug_upload(orphan_msg)
                         log_session_message(orphan_msg, "UPLOAD")
                         
-                        # Clean the orphaned public_id from metadata if main_app is available
-                        if hasattr(self, 'main_app') and self.main_app and hasattr(self.main_app, '_cleanup_orphaned_public_id'):
-                            cleanup_result = self.main_app._cleanup_orphaned_public_id(file_path)
-                            if cleanup_result:
-                                debug_upload(f"Successfully cleaned orphaned public_id from {Path(file_path).name}")
-                                log_session_message(f"Cleaned orphaned public_id from {Path(file_path).name}", "UPLOAD")
-                            else:
-                                debug_upload(f"Failed to clean orphaned public_id from {Path(file_path).name}")
-                                log_session_message(f"Failed to clean orphaned public_id from {Path(file_path).name}", "UPLOAD")
-                        
-                        # TODO: Ideally we would re-process this file as a new upload
-                        # For now, count it as an error but with special handling
+                        # Note: No cleanup needed here since it's already done during loading phase
+                        # Just treat this as a new upload and let the upload process handle it
                         error_count += 1
                         log_session_message(f"File {Path(file_path).name} needs manual re-upload after orphaned cleanup", "UPLOAD")
                     else:
@@ -424,11 +428,21 @@ class CloudinaryUploadHandler(QObject):
                     debug_upload(f"Full upload for new file: {Path(file_path).name}")
                     self.upload_preview_signal.emit(f"Uploading: {Path(file_path).name}")
                     
-                    # Resize the file first
+                    # TIMING: Resize phase
+                    resize_start = time.time()
                     resized_path = self._resize_file_for_upload(file_path, temp_dir)
+                    resize_time = time.time() - resize_start
+                    detailed_timing['total_resize_time'] += resize_time
+                    debug_timings(f"Resize time for {Path(file_path).name}: {resize_time:.3f}s")
+                    
                     if resized_path:
-                        # Upload resized file with individual tags
+                        # TIMING: Upload API phase
+                        upload_start = time.time()
                         success = self._upload_file_to_cloudinary(resized_path, ui_tags, original_file_path=file_path)
+                        upload_time = time.time() - upload_start
+                        detailed_timing['total_upload_api_time'] += upload_time
+                        debug_timings(f"Upload API time for {Path(file_path).name}: {upload_time:.3f}s")
+                        
                         if success:
                             uploaded_count += 1
                             debug_upload(f"Full upload successful for {Path(file_path).name}")
@@ -457,6 +471,9 @@ class CloudinaryUploadHandler(QObject):
                     debug_upload(f"Cleaned up temporary directory: {temp_dir}")
                 except Exception as e:
                     debug_upload(f"Warning: Failed to clean up temp directory {temp_dir}: {e}")
+        
+        # Generate detailed upload phase timing report
+        self._generate_detailed_upload_report(detailed_timing, total_files, uploaded_count, error_count)
         
         return uploaded_count, error_count
             
@@ -740,12 +757,6 @@ class CloudinaryUploadHandler(QObject):
             final_public_id = response.get('public_id', '')
             debug_upload(f"Upload successful - public_id: {final_public_id}, url: {cloudinary_url}")
             
-            # Update database if available
-            if self.cloudinary_updater and hasattr(self.cloudinary_updater, 'database'):
-                # Use original file path if provided, otherwise use the uploaded file path
-                db_file_path = Path(original_file_path) if original_file_path else file_path_obj
-                self._update_database_entry(db_file_path, response, resized_file_path=file_path_obj)
-            
             # Write both public_id and tags to image metadata for future reference
             if final_public_id:
                 # Always write to the original file, not the resized temporary file
@@ -806,96 +817,6 @@ class CloudinaryUploadHandler(QObject):
                 debug_upload(f"Using default folder: '{folder}'")
         return folder
         
-    def _update_database_entry(self, file_path, cloudinary_response, resized_file_path=None):
-        """
-        Update the local database with upload information.
-        Handles duplicate (size+filetype) keys by using incremental identifiers.
-        Args:
-            file_path: Path to the original file
-            cloudinary_response: Response from Cloudinary upload
-            resized_file_path: Path to the resized file that was actually uploaded
-        """
-        try:
-            if not self.cloudinary_updater or not hasattr(self.cloudinary_updater, 'database'):
-                debug_upload("Warning: CloudinaryUpdater database not available")
-                return
-                
-            original_size = file_path.stat().st_size
-            # Calculate resized size - use resized file if available, otherwise use original
-            if resized_file_path and resized_file_path.exists():
-                resized_size = resized_file_path.stat().st_size
-            else:
-                resized_size = original_size
-            filetype = file_path.suffix.lower()
-            base_key = (original_size, filetype)
-            
-            # Extract auto-generated public_id and URL from Cloudinary response
-            auto_public_id = cloudinary_response.get('public_id', '')
-            cloudinary_url = cloudinary_response.get('secure_url', cloudinary_response.get('url', ''))
-            
-            # Handle duplicate keys: Check if this (size+filetype) already exists
-            if base_key in self.cloudinary_updater.database:
-                existing_entry = self.cloudinary_updater.database[base_key]
-                existing_public_id = existing_entry.get('public_id', '')
-                
-                if existing_public_id != auto_public_id:
-                    # Different file with same size+type - use incremental key
-                    counter = 1
-                    while (base_key, counter) in self.cloudinary_updater.database:
-                        counter += 1
-                    db_key = (base_key, counter)
-                    debug_upload(f"Duplicate key detected: {base_key} -> using incremental key: {db_key}")
-                else:
-                    # Same file (same public_id) - update existing entry
-                    db_key = base_key
-                    debug_upload(f"Updating existing entry for same file: {base_key}")
-            else:
-                # New unique key
-                db_key = base_key
-                debug_upload(f"Using new unique key: {db_key}")
-            
-            # Store entry with resolved key
-            self.cloudinary_updater.database[db_key] = {
-                'file_name': file_path.name,
-                'original_size': original_size,
-                'resized_size': resized_size,
-                'filetype': filetype,
-                'public_id': auto_public_id,  # Store auto-generated public_id
-                'url': cloudinary_url,        # Store Cloudinary URL
-                'upload_date': datetime.now().isoformat()
-            }
-            
-            debug_upload(f"Updated database entry for {file_path.name} - key: {db_key}, public_id: {auto_public_id}")
-            
-        except Exception as e:
-            debug_upload(f"Warning: Could not update database entry for {file_path}: {e}")
-    
-    def _save_database_after_upload(self):
-        """Save the updated database to CSV after upload completion"""
-        try:
-            if not self.cloudinary_updater or not hasattr(self.cloudinary_updater, 'database'):
-                debug_upload("Warning: CloudinaryUpdater database not available for CSV save")
-                return
-                
-            # Determine the database file path
-            if hasattr(self.cloudinary_updater, 'logFilePath') and self.cloudinary_updater.logFilePath:
-                database_path = Path(self.cloudinary_updater.logFilePath) / DATABASE_FILE_NAME
-            else:
-                # Fallback to logs directory if logFilePath not set
-                database_path = Path("logs") / DATABASE_FILE_NAME
-            
-            # Ensure directory exists
-            database_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Save database to CSV with new public_id and url data
-            update_csv_database(database_path, self.cloudinary_updater.database)
-            
-            debug_upload(f"Database saved to CSV: {database_path} with {len(self.cloudinary_updater.database)} entries")
-            debug_upload("CSV now includes public_id and URL data from Cloudinary uploads")
-            
-        except Exception as e:
-            debug_upload(f"Warning: Failed to save database to CSV after upload: {e}")
-    
     def _update_widget_public_id(self, file_path, public_id):
         """
         Update the widget's public_id immediately after successful upload.
@@ -947,3 +868,62 @@ class CloudinaryUploadHandler(QObject):
                 
         except Exception as e:
             debug_upload(f"Error updating widget public_id for {os.path.basename(str(file_path))}: {e}")
+    
+    def _generate_detailed_upload_report(self, detailed_timing, total_files, uploaded_count, error_count):
+        """Generate a detailed timing breakdown report for the upload phase"""
+        try:
+            debug_timings("=" * 60)
+            debug_timings("DETAILED UPLOAD PHASE TIMING BREAKDOWN")
+            debug_timings("=" * 60)
+            debug_timings(f"Files processed: {total_files} total, {uploaded_count} successful, {error_count} errors")
+            debug_timings("-" * 60)
+            
+            # Show individual phase timings
+            debug_timings(f"1. Image Resizing:      {detailed_timing['total_resize_time']:.3f} seconds")
+            debug_timings(f"2. Cloudinary API:      {detailed_timing['total_upload_api_time']:.3f} seconds")
+            debug_timings(f"3. Metadata Writing:    {detailed_timing['total_metadata_write_time']:.3f} seconds")
+            debug_timings(f"4. Widget Updates:      {detailed_timing['total_widget_update_time']:.3f} seconds")
+            
+            # Calculate total and per-file averages
+            total_detailed_time = sum(detailed_timing.values())
+            debug_timings("-" * 60)
+            debug_timings(f"Total detailed time:    {total_detailed_time:.3f} seconds")
+            
+            if total_files > 0:
+                avg_per_file = total_detailed_time / total_files
+                debug_timings(f"Average per file:       {avg_per_file:.3f} seconds/file")
+            
+            # Performance analysis for each phase
+            if total_detailed_time > 0:
+                debug_timings("-" * 60)
+                debug_timings("UPLOAD PHASE BREAKDOWN:")
+                
+                resize_pct = (detailed_timing['total_resize_time'] / total_detailed_time) * 100
+                api_pct = (detailed_timing['total_upload_api_time'] / total_detailed_time) * 100
+                metadata_pct = (detailed_timing['total_metadata_write_time'] / total_detailed_time) * 100
+                widget_pct = (detailed_timing['total_widget_update_time'] / total_detailed_time) * 100
+                
+                debug_timings(f"  Resizing:     {resize_pct:5.1f}% of upload time")
+                debug_timings(f"  API calls:    {api_pct:5.1f}% of upload time")
+                debug_timings(f"  Metadata:     {metadata_pct:5.1f}% of upload time")
+                debug_timings(f"  Widgets:      {widget_pct:5.1f}% of upload time")
+                
+                # Specific recommendations
+                debug_timings("-" * 60)
+                debug_timings("BOTTLENECK ANALYSIS:")
+                if api_pct > 60:
+                    debug_timings("🔥 Cloudinary API calls are the main bottleneck (>60%)")
+                    debug_timings("   → Consider: image optimization, network connection, or API performance")
+                elif resize_pct > 30:
+                    debug_timings("🔥 Image resizing is taking significant time (>30%)")
+                    debug_timings("   → Consider: pre-processing images or optimizing resize algorithm")
+                elif metadata_pct > 20:
+                    debug_timings("🔥 Metadata writing is slow (>20%)")
+                    debug_timings("   → Consider: ExifTool optimization or batch operations")
+                else:
+                    debug_timings("✅ No major bottlenecks detected - good performance balance")
+                    
+            debug_timings("=" * 60)
+            
+        except Exception as e:
+            debug_upload(f"Error generating detailed upload report: {e}")

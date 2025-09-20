@@ -45,7 +45,8 @@ DEBUG_CONFIG: Dict[str, bool] = {
 
     # Performance and resources
     'memory': True,           # Memory usage, resource monitoring
-    'timers': True,           # Timer operations, callbacks, cleanup
+    'timers': True,           # Performance timing analysis, QTimer operations, callbacks
+    'timings': True,          # Detailed upload phase timing breakdown and reports
 
     # User interactions
     'ui_events': True,        # Mouse clicks, selections, user actions
@@ -318,6 +319,9 @@ def debug_memory(message: str, *, level: str = "INFO"):
 def debug_timers(message: str, *, level: str = "INFO"):
     debug('timers', message, level=level)
 
+def debug_timings(message: str, *, level: str = "INFO"):
+    debug('timings', message, level=level)
+
 def debug_ui_events(message: str, *, level: str = "INFO"):
     debug('ui_events', message, level=level)
 
@@ -339,9 +343,6 @@ def debug_exiftool(message: str, *, level: str = "INFO"):
 
 def debug_layout_fix(message: str, *, level: str = "INFO"):
     debug('layout_fix', message, level=level)
-
-def debug_business(message: str, *, level: str = "INFO"):
-    debug('business', message, level=level)
 
 def debug_width_control(message: str, *, level: str = "INFO"):
     debug('width_control', message, level=level)

@@ -1,0 +1,33 @@
+=== HappyTag Unified Session Log ===
+Session started: 2025-09-20 18:28:32
+Log file: D:\Python playfolder\happyTag\logs\happytag_session_2025-09-20_18-28-32.txt
+==================================================
+
+[18:28:32] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.424
+[18:29:05] [UPLOAD] NEW upload phase:
+[18:29:05] [UPLOAD]   Files for tag update only: 0
+[18:29:05] [UPLOAD]   Files not on Cloudinary (resize + upload): 20
+[18:29:05] [UPLOAD]   Files already synced (no action): 0
+[18:29:05] [UPLOAD] Total files to process: 20
+[18:29:05] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot001 (0061).jpg
+[18:29:07] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot002 (0151).jpg
+[18:29:09] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot003 (0227).jpg
+[18:29:11] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot004 (0268).jpg
+[18:29:13] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot005 (0424).jpg
+[18:29:15] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot006 (0445).jpg
+[18:29:17] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot007 (0980).jpg
+[18:29:19] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot008 (1025).jpg
+[18:29:21] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot009 (1028).jpg
+[18:29:23] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot010 (1039).jpg
+[18:29:25] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot011 (1051).jpg
+[18:29:28] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot012 (1079).jpg
+[18:29:31] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot013 (1106).jpg
+[18:29:32] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot014 (1109).jpg
+[18:29:34] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot015 (1130).jpg
+[18:29:37] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot016 (1132).jpg
+[18:29:39] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot017 (1148).jpg
+[18:29:42] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot018 (1157).jpg
+[18:29:45] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot019 (1178).jpg
+[18:29:47] [UPLOAD] Currently uploading: Uploading: ODAC_v1_shot020 (1205).jpg
+[18:29:49] [UPLOAD] NEW upload phase complete: 20 uploaded/updated, 0 errors, 0 metadata failures
+[18:29:51] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.432

@@ -40,7 +40,6 @@ def demo_all_categories():
     debug_image_loading("Loading image preview...")
     debug_exiftool("Running ExifTool command...")
     debug_layout_fix("Fixing layout issue...")
-    debug_business("Processing business data...")
     debug_width_control("Adjusting widget width...")
     debug_ctrl_operations("Ctrl+click operation...")
     debug_orientation("Correcting image orientation...")

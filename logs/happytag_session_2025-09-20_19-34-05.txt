@@ -1,0 +1,30 @@
+=== HappyTag Unified Session Log ===
+Session started: 2025-09-20 19:34:05
+Log file: D:\Python playfolder\happyTag\logs\happytag_session_2025-09-20_19-34-05.txt
+==================================================
+
+[19:34:05] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.679
+[19:37:49] [UPLOAD] NEW upload phase:
+[19:37:49] [UPLOAD]   Files for tag update only: 0
+[19:37:49] [UPLOAD]   Files not on Cloudinary (resize + upload): 17
+[19:37:49] [UPLOAD]   Files already synced (no action): 0
+[19:37:49] [UPLOAD] Total files to process: 17
+[19:37:49] [UPLOAD] Currently uploading: Uploading: Storehouse_01.jpg
+[19:37:52] [UPLOAD] Currently uploading: Uploading: Storehouse_02.jpg
+[19:37:54] [UPLOAD] Currently uploading: Uploading: Storehouse_03.jpg
+[19:37:57] [UPLOAD] Currently uploading: Uploading: Storehouse_04.jpg
+[19:37:59] [UPLOAD] Currently uploading: Uploading: Storehouse_05.jpg
+[19:38:02] [UPLOAD] Currently uploading: Uploading: Storehouse_06.jpg
+[19:38:04] [UPLOAD] Currently uploading: Uploading: Storehouse_07.jpg
+[19:38:07] [UPLOAD] Currently uploading: Uploading: Storehouse_08.jpg
+[19:38:09] [UPLOAD] Currently uploading: Uploading: Storehouse_09.jpg
+[19:38:11] [UPLOAD] Currently uploading: Uploading: Storehouse_10.jpg
+[19:38:14] [UPLOAD] Currently uploading: Uploading: Storehouse_11.jpg
+[19:38:17] [UPLOAD] Currently uploading: Uploading: Storehouse_12.jpg
+[19:38:19] [UPLOAD] Currently uploading: Uploading: Storehouse_13.jpg
+[19:38:22] [UPLOAD] Currently uploading: Uploading: Storehouse_14.jpg
+[19:38:24] [UPLOAD] Currently uploading: Uploading: Storehouse_15.jpg
+[19:38:27] [UPLOAD] Currently uploading: Uploading: Storehouse_16.jpg
+[19:38:29] [UPLOAD] Currently uploading: Uploading: Storehouse_17.jpg
+[19:38:32] [UPLOAD] NEW upload phase complete: 17 uploaded/updated, 0 errors, 0 metadata failures
+[19:38:35] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.683

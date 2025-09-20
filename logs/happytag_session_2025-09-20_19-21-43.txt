@@ -1,0 +1,30 @@
+=== HappyTag Unified Session Log ===
+Session started: 2025-09-20 19:21:43
+Log file: D:\Python playfolder\happyTag\logs\happytag_session_2025-09-20_19-21-43.txt
+==================================================
+
+[19:21:43] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.543
+[19:22:12] [UPLOAD] NEW upload phase:
+[19:22:12] [UPLOAD]   Files for tag update only: 0
+[19:22:12] [UPLOAD]   Files not on Cloudinary (resize + upload): 17
+[19:22:12] [UPLOAD]   Files already synced (no action): 0
+[19:22:12] [UPLOAD] Total files to process: 17
+[19:22:12] [UPLOAD] Currently uploading: Uploading: woodstreet_01.jpg
+[19:22:18] [UPLOAD] Currently uploading: Uploading: woodstreet_02.jpg
+[19:22:25] [UPLOAD] Currently uploading: Uploading: woodstreet_03.jpg
+[19:22:31] [UPLOAD] Currently uploading: Uploading: woodstreet_04.jpg
+[19:22:37] [UPLOAD] Currently uploading: Uploading: woodstreet_05.jpg
+[19:22:42] [UPLOAD] Currently uploading: Uploading: woodstreet_06.jpg
+[19:22:48] [UPLOAD] Currently uploading: Uploading: woodstreet_07.jpg
+[19:22:53] [UPLOAD] Currently uploading: Uploading: woodstreet_08.jpg
+[19:23:00] [UPLOAD] Currently uploading: Uploading: woodstreet_09.jpg
+[19:23:06] [UPLOAD] Currently uploading: Uploading: woodstreet_10.jpg
+[19:23:12] [UPLOAD] Currently uploading: Uploading: woodstreet_11.jpg
+[19:23:17] [UPLOAD] Currently uploading: Uploading: woodstreet_12.jpg
+[19:23:21] [UPLOAD] Currently uploading: Uploading: woodstreet_13.jpg
+[19:23:27] [UPLOAD] Currently uploading: Uploading: woodstreet_14.jpg
+[19:23:33] [UPLOAD] Currently uploading: Uploading: woodstreet_15.jpg
+[19:23:38] [UPLOAD] Currently uploading: Uploading: woodstreet_16.jpg
+[19:23:43] [UPLOAD] Currently uploading: Uploading: woodstreet_17.jpg
+[19:23:49] [UPLOAD] NEW upload phase complete: 17 uploaded/updated, 0 errors, 0 metadata failures
+[19:23:51] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.675

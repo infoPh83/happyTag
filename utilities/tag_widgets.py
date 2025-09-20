@@ -36,6 +36,7 @@ class TagButton(QPushButton):
             }}
             QPushButton:hover {{
                 background-color: {hover_color.name(QColor.HexArgb)} !important;
+                border: 2px solid #0078d4 !important;
                 border-radius: 15px !important;
             }}
             QPushButton:pressed {{

@@ -97,6 +97,7 @@ class BusinessButton(QPushButton):
             }}
             QPushButton:hover {{
                 background-color: {hover_color.name(QColor.HexArgb)};
+                border: 2px solid #0078d4;
                 border-radius: 8px;
             }}
             QPushButton:pressed {{
@@ -233,7 +234,7 @@ class BuildingButton(QPushButton):
                 color: black;
             }}
             QPushButton:hover {{
-                background-color: #CCE7FF;
+                background-color: #CDE2F5;
                 border: 2px solid #0078d4;
             }}
             QPushButton:pressed {{
@@ -283,6 +284,7 @@ class StreetButton(QPushButton):
             }}
             QPushButton:hover {{
                 background-color: #CCE7FF;
+                border: 2px solid #0078d4;
                 border-radius: 15px;
             }}
             QPushButton:pressed {{

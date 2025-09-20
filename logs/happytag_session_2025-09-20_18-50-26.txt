@@ -1,0 +1,32 @@
+=== HappyTag Unified Session Log ===
+Session started: 2025-09-20 18:50:26
+Log file: D:\Python playfolder\happyTag\logs\happytag_session_2025-09-20_18-50-26.txt
+==================================================
+
+[18:50:26] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.462
+[18:51:38] [UPLOAD] NEW upload phase:
+[18:51:38] [UPLOAD]   Files for tag update only: 0
+[18:51:38] [UPLOAD]   Files not on Cloudinary (resize + upload): 19
+[18:51:38] [UPLOAD]   Files already synced (no action): 0
+[18:51:38] [UPLOAD] Total files to process: 19
+[18:51:38] [UPLOAD] Currently uploading: Uploading: julco01.jpg
+[18:51:43] [UPLOAD] Currently uploading: Uploading: julco02.jpg
+[18:51:46] [UPLOAD] Currently uploading: Uploading: julco03.jpg
+[18:51:50] [UPLOAD] Currently uploading: Uploading: julco04.jpg
+[18:51:53] [UPLOAD] Currently uploading: Uploading: julco05.jpg
+[18:51:56] [UPLOAD] Currently uploading: Uploading: julco06.jpg
+[18:52:00] [UPLOAD] Currently uploading: Uploading: julco07.jpg
+[18:52:03] [UPLOAD] Currently uploading: Uploading: julco08.jpg
+[18:52:06] [UPLOAD] Currently uploading: Uploading: julco09.jpg
+[18:52:09] [UPLOAD] Currently uploading: Uploading: julco10.jpg
+[18:52:13] [UPLOAD] Currently uploading: Uploading: julco11.jpg
+[18:52:16] [UPLOAD] Currently uploading: Uploading: julco12.jpg
+[18:52:19] [UPLOAD] Currently uploading: Uploading: julco13.jpg
+[18:52:22] [UPLOAD] Currently uploading: Uploading: julco14.jpg
+[18:52:25] [UPLOAD] Currently uploading: Uploading: julco15.jpg
+[18:52:29] [UPLOAD] Currently uploading: Uploading: julco16.jpg
+[18:52:32] [UPLOAD] Currently uploading: Uploading: julco17.jpg
+[18:52:34] [UPLOAD] Currently uploading: Uploading: julco18.jpg
+[18:52:38] [UPLOAD] Currently uploading: Uploading: julco19.jpg
+[18:52:41] [UPLOAD] NEW upload phase complete: 19 uploaded/updated, 0 errors, 0 metadata failures
+[18:52:43] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.476

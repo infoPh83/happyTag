@@ -136,8 +136,8 @@
         <rect>
          <x>0</x>
          <y>0</y>
-         <width>1040</width>
-         <height>618</height>
+         <width>1046</width>
+         <height>664</height>
         </rect>
        </property>
        <layout class="QVBoxLayout" name="verticalLayout">
@@ -149,7 +149,7 @@
      </widget>
     </item>
     <item>
-     <layout class="QHBoxLayout" name="horizontalLayout">
+     <layout class="QHBoxLayout" name="horizontalLayout" stretch="2,3,1,1">
       <item>
        <spacer name="horizontalSpacer">
         <property name="orientation">
@@ -183,6 +183,13 @@
         </property>
        </spacer>
       </item>
+      <item>
+       <widget class="QPushButton" name="uploadButton">
+        <property name="text">
+         <string>Upload on Cloudinary</string>
+        </property>
+       </widget>
+      </item>
      </layout>
     </item>
    </layout>
@@ -193,7 +200,7 @@
      <x>0</x>
      <y>0</y>
      <width>1066</width>
-     <height>24</height>
+     <height>21</height>
     </rect>
    </property>
    <widget class="QMenu" name="menuFile">
@@ -257,6 +264,9 @@
   <action name="actionSynch_with_Cloudinary">
    <property name="text">
     <string>Synch with Cloudinary</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+U</string>
    </property>
   </action>
  </widget>

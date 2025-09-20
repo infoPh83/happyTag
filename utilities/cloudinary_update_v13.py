@@ -8,7 +8,7 @@ import cloudinary.uploader
 import cloudinary.api
 from cloudinary.api import usage
 import requests
-from .debug_utils import debug_cloudinary, debug_business, debug_errors
+from .debug_utils import debug_cloudinary, debug_errors
 from requests.auth import HTTPBasicAuth
 import os
 import sys
@@ -508,13 +508,13 @@ class CloudinaryUpdater(QObject):
 def get_actual_resource_count(cloudinary_updater_instance):
     """Get the actual count of resources by fetching and counting them ourselves."""
     try:
-        debug_business(f"Getting actual resource count by fetching all assets...")
+        debug_cloudinary(f"Getting actual resource count by fetching all assets...")
         
         total_assets = 0
         
         # Method 1: Count all assets by actually fetching them (most reliable)
         try:
-            debug_business(f"Fetching all resources to count them...")
+            debug_cloudinary(f"Fetching all resources to count them...")
             next_cursor = None
             batch_count = 0
             
@@ -533,7 +533,7 @@ def get_actual_resource_count(cloudinary_updater_instance):
                 total_assets += assets_in_batch
                 batch_count += 1
                 
-                debug_business(f"Batch {batch_count}: {assets_in_batch} assets (total so far: {total_assets})")
+                debug_cloudinary(f"Batch {batch_count}: {assets_in_batch} assets (total so far: {total_assets})")
                 
                 # Check if there are more pages
                 next_cursor = resources_response.get('next_cursor')
@@ -542,11 +542,11 @@ def get_actual_resource_count(cloudinary_updater_instance):
                 
                 # Safety limit to prevent infinite loops
                 if batch_count > 100:  # Max 10,000 assets
-                    debug_business(f"Safety limit reached after {batch_count} batches")
+                    debug_cloudinary(f"Safety limit reached after {batch_count} batches")
                     break
-            
-            debug_business(f"Method 1 - Counted {total_assets} assets by fetching all resources")
-            
+
+            debug_cloudinary(f"Method 1 - Counted {total_assets} assets by fetching all resources")
+
         except Exception as e:
             debug_errors(f"Method 1 (fetch count) failed: {e}")
             total_assets = 0
@@ -595,8 +595,8 @@ def get_actual_resource_count(cloudinary_updater_instance):
             except Exception as e:
                 debug_errors(f"Method 3 (by type) failed: {e}")
                 total_assets = 0
-        
-        debug_business(f"Final counted resource count: {total_assets}")
+
+        debug_cloudinary(f"Final counted resource count: {total_assets}")
         return total_assets if total_assets > 0 else None
         
     except Exception as e:
@@ -656,24 +656,24 @@ def get_cloudinary_status(cloudinary_updater_instance):
         else:
             average_file_size = cloudinary_updater_instance.maxFileSize
 
-        debug_business(f"\n--- CLOUDINARY STATUS SUMMARY ---")
-        debug_business(f"Storage Credits: {storageCredits}")
-        debug_business(f"Bandwidth Credits: {bandwidthCredits}")
-        debug_business(f"Transformations Credits: {transformationsCredits}")
-        debug_business(f"Total Used Credits: {usedCredits}")
-        debug_business(f"Remaining Credits: {remainingCredits}")
-        
-        debug_business(f"\nPercentage calculations:")
-        debug_business(f"  CREDITS_MAX: {CREDITS_MAX}")
-        
+        debug_cloudinary(f"\n--- CLOUDINARY STATUS SUMMARY ---")
+        debug_cloudinary(f"Storage Credits: {storageCredits}")
+        debug_cloudinary(f"Bandwidth Credits: {bandwidthCredits}")
+        debug_cloudinary(f"Transformations Credits: {transformationsCredits}")
+        debug_cloudinary(f"Total Used Credits: {usedCredits}")
+        debug_cloudinary(f"Remaining Credits: {remainingCredits}")
+
+        debug_cloudinary(f"\nPercentage calculations:")
+        debug_cloudinary(f"  CREDITS_MAX: {CREDITS_MAX}")
+
         # Calculate the actual percentages
         storage_percentage = (storageCredits / CREDITS_MAX) * 100
         transformations_percentage = (transformationsCredits / CREDITS_MAX) * 100
         bandwidth_percentage = (bandwidthCredits / CREDITS_MAX) * 100
-        
-        debug_business(f"  Storage %: {storage_percentage:.2f}%")
-        debug_business(f"  Transformations %: {transformations_percentage:.2f}%")
-        debug_business(f"  Bandwidth %: {bandwidth_percentage:.2f}%")
+
+        debug_cloudinary(f"  Storage %: {storage_percentage:.2f}%")
+        debug_cloudinary(f"  Transformations %: {transformations_percentage:.2f}%")
+        debug_cloudinary(f"  Bandwidth %: {bandwidth_percentage:.2f}%")
 
         # Return status data in expected format
         return_data = [
