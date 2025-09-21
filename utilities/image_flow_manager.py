@@ -94,7 +94,7 @@ class ImageFlowManager(QWidget):
             widget.set_max_width(self.widget_width)
             
     def add_image(self, file_path, tags=None, metadata=None, preview_pixmap=None, cloudinary_synced=False, 
-                  public_id=None, original_tags=None, cloudinary_tags=None):
+                  public_id=None, original_tags=None, cloudinary_tags=None, public_id_to_be=None):
         """Add an image to the flow layout with enhanced metadata for upload optimization"""
         if file_path in self.image_widgets:
             print(f"[WARNING] Image already exists in flow: {file_path}")
@@ -116,6 +116,8 @@ class ImageFlowManager(QWidget):
             widget.set_original_tags(original_tags)
         if cloudinary_tags:
             widget.set_cloudinary_tags(cloudinary_tags)
+        if public_id_to_be:
+            widget.set_public_id_to_be(public_id_to_be)
         
         # Connect signals
         widget.selection_changed.connect(self._on_selection_changed)
@@ -402,11 +404,13 @@ class ImageFlowManager(QWidget):
                 public_id = image_data.get('public_id')
                 original_tags = image_data.get('original_tags', [])
                 cloudinary_tags = image_data.get('cloudinary_tags', [])
+                public_id_to_be = image_data.get('public_id_to_be')
 
                 # Add the image with preview pixmap, sync status, and enhanced metadata
                 self.add_image(file_path, tags=tags, metadata=metadata, preview_pixmap=preview_pixmap, 
                               cloudinary_synced=cloudinary_synced, public_id=public_id, 
-                              original_tags=original_tags, cloudinary_tags=cloudinary_tags)
+                              original_tags=original_tags, cloudinary_tags=cloudinary_tags,
+                              public_id_to_be=public_id_to_be)
             
             # Force garbage collection after each batch to free memory
             gc.collect()
@@ -438,11 +442,13 @@ class ImageFlowManager(QWidget):
             public_id = image_data.get('public_id')
             original_tags = image_data.get('original_tags', [])
             cloudinary_tags = image_data.get('cloudinary_tags', [])
+            public_id_to_be = image_data.get('public_id_to_be')
 
             # Add the image with preview pixmap, sync status, and enhanced metadata
             self.add_image(file_path, tags=tags, metadata=metadata, preview_pixmap=preview_pixmap, 
                           cloudinary_synced=cloudinary_synced, public_id=public_id, 
-                          original_tags=original_tags, cloudinary_tags=cloudinary_tags)
+                          original_tags=original_tags, cloudinary_tags=cloudinary_tags,
+                          public_id_to_be=public_id_to_be)
             
         # Re-enable updates and force a layout update
         self.setUpdatesEnabled(True)

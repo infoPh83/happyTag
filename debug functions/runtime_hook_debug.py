@@ -16,24 +16,27 @@ def configure_happytag_debug():
         # This approach works better with PyInstaller's import system
         app_name = os.path.basename(sys.executable)
         
-        if 'Debug' in app_name:
-            if 'Verbose' in app_name:
+        # For macOS apps, also check the app bundle name from environment or executable path
+        if hasattr(sys, '_MEIPASS'):
+            # Running from PyInstaller bundle
+            bundle_path = os.path.dirname(os.path.dirname(sys.executable))
+            if bundle_path.endswith('.app'):
+                app_name = os.path.basename(bundle_path)
+        
+        print(f"[RUNTIME_HOOK] Detected app name: {app_name}")
+        
+        if 'Debug' in app_name or 'debug' in app_name:
+            if 'Verbose' in app_name or 'verbose' in app_name:
                 # Verbose debug build - enable ALL categories
                 categories = "all"
                 level = "VERBOSE"
                 print(f"[RUNTIME_HOOK] VERBOSE debug mode enabled for {app_name}")
                 print(f"[RUNTIME_HOOK] Categories: ALL")
                 print(f"[RUNTIME_HOOK] Level: VERBOSE")
-            elif 'Custom' in app_name:
+            elif 'Custom' in app_name or 'custom' in app_name:
                 # ========== CUSTOM DEBUG CONFIGURATION ==========
-                # Change these categories to whatever you want to debug:
-                # Example options:
-                # UI debugging: "layout,image_display,ui_events,layout_fix,width_control"
-                # Cloudinary debugging: "cloudinary,business,upload,assessment,errors"
-                # File processing: "file_ops,metadata,exiftool,tags,orientation"
-                # Performance: "memory,timers,image_loading,temp_files"
-                
-                categories = "cloudinary,business,upload,assessment,errors,file_ops"
+                # Custom categories: upload, cloudinary, errors, assessment, file_ops, image_loading
+                categories = "upload,cloudinary,errors,assessment,file_ops,image_loading"
                 level = "INFO"
                 print(f"[RUNTIME_HOOK] CUSTOM debug mode enabled for {app_name}")
                 print(f"[RUNTIME_HOOK] Categories: {categories}")

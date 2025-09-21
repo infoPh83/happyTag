@@ -29,6 +29,7 @@ from utilities.debug_utils import (
     debug_color_conversion, debug_file_dialogs, debug_tag_widgets, debug_temp_files, debug_timings
 )
 from utilities.session_logger import get_current_log_file, configure_session_logging, log_session_message
+from utilities.tag_utils import parse_keywords_from_text, format_keywords_for_display, format_keywords_for_metadata, unescape_tags_from_cloudinary
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -932,6 +933,27 @@ class MainWindow(QMainWindow):
         debug("ui_events", f"Context menu requested for {file_path} at {position}")
         # Add your context menu logic here
 
+    def update_window_title(self, folder_path=None):
+        """Update the window title to include the current folder name"""
+        # Get the base title from the UI (avoiding hardcoding)
+        base_title = self.windowTitle()
+        
+        # If the title already contains " - ", extract just the base part
+        if " - " in base_title:
+            base_title = base_title.split(" - ")[0]
+        
+        if folder_path:
+            # Extract just the folder name from the full path
+            folder_name = os.path.basename(folder_path.rstrip(os.sep))
+            if folder_name:
+                self.setWindowTitle(f"{base_title} - 📁 {folder_name}")
+            else:
+                # Fallback if basename doesn't work (e.g., root directory)
+                self.setWindowTitle(f"{base_title} - 📁 {folder_path}")
+        else:
+            # No folder loaded, use default title
+            self.setWindowTitle(base_title)
+
     def get_comprehensive_metadata(self, file_path):
         """
         Get ALL metadata needed for image processing in a single ExifTool call.
@@ -963,8 +985,13 @@ class MainWindow(QMainWindow):
                 
                 # SINGLE ExifTool call to get ALL metadata we need using JSON output
                 try:
-                    # Get all needed metadata in one call using JSON format for reliable parsing
-                    metadata_output = et.execute('-DateTimeOriginal', '-CreateDate', '-IPTC:Keywords', '-XMP:Keywords', '-XMP:Subject', '-UserComment', '-j', file_path)
+                    # Get all needed metadata in one call using JSON format for reliable parsing - including macOS fields
+                    metadata_output = et.execute(
+                        '-DateTimeOriginal', '-CreateDate', 
+                        '-IPTC:Keywords', '-XMP:Keywords', '-XMP:Subject', 
+                        '-MDItemUserTags', '-kMDItemUserTags', '-kMDItemKeywords',
+                        '-UserComment', '-j', file_path
+                    )
                     
                     debug_metadata(f"Raw ExifTool JSON output for {filename}: {repr(metadata_output)}")
                     
@@ -996,9 +1023,14 @@ class MainWindow(QMainWindow):
                                             debug_metadata(f"Failed to parse date '{date_str}' for {filename}: {ve}")
                                             continue
                                 
-                                # Extract keywords from IPTC/XMP fields (handle both prefixed and non-prefixed)
+                                # Extract keywords from ALL sources (IPTC/XMP + macOS) - APPEND all for maximum compatibility
                                 all_keywords = set()
-                                keyword_fields = ['Keywords', 'Subject', 'IPTC:Keywords', 'XMP:Keywords', 'XMP:Subject']
+                                keyword_fields = [
+                                    # Standard cross-platform fields
+                                    'Keywords', 'Subject', 'IPTC:Keywords', 'XMP:Keywords', 'XMP:Subject',
+                                    # macOS-specific fields (Finder tags and Spotlight metadata)
+                                    'MDItemUserTags', 'kMDItemUserTags', 'kMDItemKeywords'
+                                ]
                                 for keyword_field in keyword_fields:
                                     if keyword_field in metadata_dict:
                                         keywords_value = metadata_dict[keyword_field]
@@ -1010,11 +1042,8 @@ class MainWindow(QMainWindow):
                                                     if kw and str(kw).strip():
                                                         all_keywords.add(str(kw).strip())
                                             else:
-                                                # Handle comma-separated keywords
-                                                if ',' in str(keywords_value):
-                                                    keywords_list = [k.strip() for k in str(keywords_value).split(',') if k.strip()]
-                                                else:
-                                                    keywords_list = [str(keywords_value)]
+                                                # Handle string keyword values using standardized parsing
+                                                keywords_list = parse_keywords_from_text(str(keywords_value))
                                                 
                                                 for kw in keywords_list:
                                                     if kw and kw.strip():
@@ -1048,6 +1077,18 @@ class MainWindow(QMainWindow):
                                         
                                         if not result['cloudinary_synced']:
                                             debug_cloudinary(f"[UNIFIED] File {filename} has orphaned public_id: {result['public_id']}")
+                                            
+                                            # IMMEDIATE CLEANUP: Remove orphaned public_id during assessment phase
+                                            # This ensures the file is treated as "new" for public_id_to_be generation
+                                            debug_cloudinary(f"[UNIFIED] Cleaning up orphaned public_id immediately during assessment...")
+                                            cleanup_result = self._cleanup_orphaned_public_id(file_path)
+                                            if cleanup_result > 0:
+                                                debug_cloudinary(f"[UNIFIED] ✅ Orphaned public_id cleaned up - file will be treated as new")
+                                                # Update result to reflect that public_id has been removed
+                                                result['public_id'] = None
+                                                result['cloudinary_synced'] = False
+                                            else:
+                                                debug_cloudinary(f"[UNIFIED] ⚠️ Orphaned public_id cleanup failed - file still has orphaned public_id")
                                     else:
                                         debug_metadata(f"UserComment found but doesn't start with 'cloudinary_public_id:' - value: '{user_comment}'")
                                 else:
@@ -1138,8 +1179,13 @@ class MainWindow(QMainWindow):
                 
                 # OPTIMIZATION: Single ExifTool call to get all metadata at once
                 try:
-                    # Get all needed metadata in one call
-                    metadata_output = et.execute('-DateTimeOriginal', '-CreateDate', '-IPTC:Keywords', '-XMP:Keywords', '-XMP:Subject', file_path)
+                    # Get all needed metadata in one call - including macOS-specific fields
+                    metadata_output = et.execute(
+                        '-DateTimeOriginal', '-CreateDate', 
+                        '-IPTC:Keywords', '-XMP:Keywords', '-XMP:Subject',
+                        '-MDItemUserTags', '-kMDItemUserTags', '-kMDItemKeywords',
+                        file_path
+                    )
                     
                     if metadata_output and not metadata_output.startswith('Warning') and metadata_output.strip():
                         lines = metadata_output.strip().split('\n')
@@ -1165,26 +1211,23 @@ class MainWindow(QMainWindow):
                                     except ValueError:
                                         continue
                         
-                        # Parse keywords from all keyword fields
+                        # Parse keywords from ALL metadata fields (standard + macOS)
                         if self.enable_metadata_reading:
                             for line in lines:
                                 line_lower = line.lower()
-                                if ('keywords' in line_lower or 'subject' in line_lower) and ':' in line:
+                                # Look for ANY keyword/tag field (standard IPTC/XMP + macOS fields)
+                                if ('keywords' in line_lower or 'subject' in line_lower or 
+                                    'mditemusertags' in line_lower or 'kmditemusertags' in line_lower or 
+                                    'kmditemkeywords' in line_lower) and ':' in line:
                                     keyword_values = line.split(':', 1)[1].strip()
                                     
                                     # Skip empty values
                                     if not keyword_values or keyword_values == '-':
                                         continue
                                         
-                                    # Try semicolon separator first, then comma separator
-                                    if ';' in keyword_values:
-                                        split_keywords = [k.strip() for k in keyword_values.split(';') if k.strip()]
-                                        keywords.extend(split_keywords)
-                                    elif ',' in keyword_values:
-                                        split_keywords = [k.strip() for k in keyword_values.split(',') if k.strip()]
-                                        keywords.extend(split_keywords)
-                                    else:
-                                        keywords.append(keyword_values.strip())
+                                    # Use centralized parsing for consistency
+                                    split_keywords = parse_keywords_from_text(keyword_values)
+                                    keywords.extend(split_keywords)
                         
                         debug_metadata(f"Found keywords for {filename}: {keywords}")
                         
@@ -1304,8 +1347,12 @@ class MainWindow(QMainWindow):
                 except (ValueError, TypeError):
                     pass
             
-            # Get keywords using individual calls
-            for keyword_tag in ['-IPTC:Keywords', '-XMP:Keywords', '-XMP:Subject']:
+            # Get keywords using individual calls (including macOS fields)
+            keyword_tags = [
+                '-IPTC:Keywords', '-XMP:Keywords', '-XMP:Subject',  # Standard fields
+                '-MDItemUserTags', '-kMDItemUserTags', '-kMDItemKeywords'  # macOS fields
+            ]
+            for keyword_tag in keyword_tags:
                 try:
                     result = self.et.execute(keyword_tag, file_path)
                     if result and len(result) > 0:
@@ -1381,10 +1428,23 @@ class MainWindow(QMainWindow):
                 pass
             return year, []
 
+    # Note: parse_keywords_from_text is now imported from utilities.tag_utils
+    # This ensures consistent parsing across all modules
+
+    def format_keywords_for_display(self, keywords_list):
+        """
+        Format keywords list for display using standard separator.
+        
+        Uses semicolon (;) as the standard separator following IPTC/XMP standards.
+        """
+        if not keywords_list:
+            return ""
+        return "; ".join(str(k).strip() for k in keywords_list if str(k).strip())
+
     def has_keywords_changed(self, file_path, current_keywords_text):
         """Check if keywords have changed compared to original"""
-        # Parse current keywords from text field
-        current_keywords = [k.strip() for k in current_keywords_text.split(',') if k.strip()]
+        # Parse current keywords using standardized separator handling
+        current_keywords = parse_keywords_from_text(current_keywords_text)
         
         # Get original keywords (including year)
         original_keywords = self.original_keywords.get(file_path, [])
@@ -1540,8 +1600,10 @@ class MainWindow(QMainWindow):
 
             debug_cloudinary(f"Found {len(cloudinary_tags_list)} tags in Cloudinary for {local_public_id}: {cloudinary_tags_list}")
 
-            # Convert to same format as local keywords (list of strings)
-            cloudinary_keywords = [str(tag).strip() for tag in cloudinary_tags_list if str(tag).strip()]
+            # Convert to same format as local keywords and unescape any escaped commas
+            raw_keywords = [str(tag).strip() for tag in cloudinary_tags_list if str(tag).strip()]
+            cloudinary_keywords = unescape_tags_from_cloudinary(raw_keywords)
+            debug_cloudinary(f"After unescaping: {cloudinary_keywords}")
             
             # Compare with local keywords to see if import is needed
             local_set = set(local_keywords) if local_keywords else set()
@@ -1602,7 +1664,7 @@ class MainWindow(QMainWindow):
             # 1. Windows Tags field (Windows 10+ specific - separate from standard fields)
             cmd_args.append('-Tags=')  # Clear existing
             if keywords:
-                keywords_str = ';'.join(keywords)
+                keywords_str = format_keywords_for_metadata(keywords)
                 cmd_args.append(f'-Tags={keywords_str}')
             
             # 2. XMP-microsoft:Category (Windows-specific category field)
@@ -1694,7 +1756,7 @@ class MainWindow(QMainWindow):
                 spotlight_metadata = {
                     'kMDItemUserTags': keywords,
                     'kMDItemKeywords': keywords,
-                    'kMDItemSubject': ', '.join(keywords)
+                    'kMDItemSubject': format_keywords_for_display(keywords)
                 }
                 
                 # Write using xattr for Spotlight metadata as well
@@ -1749,8 +1811,8 @@ class MainWindow(QMainWindow):
                 return True, ""
             # Otherwise, we're actually clearing keywords
         
-        # Parse keywords from text (comma-separated)
-        keywords = [k.strip() for k in keywords_text.split(',') if k.strip()]
+        # Parse keywords using standardized separator handling
+        keywords = parse_keywords_from_text(keywords_text)
         
         file_ext = os.path.splitext(file_path)[1].lower()
         
@@ -1813,14 +1875,14 @@ class MainWindow(QMainWindow):
                     # 3. XMP:Keywords (XMP Keywords field - different from XMP-dc:Subject)
                     cmd_args.append('-XMP:Keywords=')  # Clear existing
                     if keywords:
-                        keywords_str = ';'.join(keywords)
+                        keywords_str = format_keywords_for_metadata(keywords)
                         cmd_args.append(f'-XMP:Keywords={keywords_str}')
                     
                     # 4. Format-specific optimization (PRESERVE UserComment for Cloudinary public_id)
                     if file_ext in ['.jpg', '.jpeg', '.tiff', '.tif']:
                         # For JPEG/TIFF: Use EXIF ImageDescription for tag description
                         if keywords:
-                            description = f"Keywords: {', '.join(keywords)}"
+                            description = f"Keywords: {format_keywords_for_display(keywords)}"
                             cmd_args.append(f'-EXIF:ImageDescription={description}')
                         
                         # PRESERVE OR RESTORE Cloudinary public_id in UserComment
@@ -2539,7 +2601,7 @@ class MainWindow(QMainWindow):
                 return
                 
             # Get the last word/tag
-            words = [w.strip() for w in current_text.split(',')]
+            words = parse_keywords_from_text(current_text)
             last_word = words[-1].strip() if words else ""
             
             if not last_word:
@@ -2806,7 +2868,7 @@ class MainWindow(QMainWindow):
                 initial_text_parts.append(keyword.strip())
         
         if initial_text_parts:
-            input_field.setText(', '.join(initial_text_parts) + ', ')
+            input_field.setText(self.format_keywords_for_display(initial_text_parts) + '; ')
             # Force height calculation after setting initial text
             updateHeightImmediate()
         else:
@@ -2965,7 +3027,7 @@ class MainWindow(QMainWindow):
                 for file_path, widget in self.image_flow_manager.image_widgets.items():
                     if hasattr(widget, 'get_tags'):
                         current_content = widget.get_tags()
-                        current_text_content[file_path] = ', '.join(current_content) if isinstance(current_content, list) else str(current_content)
+                        current_text_content[file_path] = self.format_keywords_for_display(current_content) if isinstance(current_content, list) else str(current_content)
                         debug("layout", f"Preserved text for {os.path.basename(file_path)}: '{current_text_content[file_path]}'")
             
             # Check if this is just a resize (same images, different width) or new image set
@@ -3051,7 +3113,7 @@ class MainWindow(QMainWindow):
                                     all_tags.append(keyword_str)
                                     seen.add(keyword_str)
                         
-                        existing_tags = ', '.join(all_tags) if all_tags else ''
+                        existing_tags = self.format_keywords_for_display(all_tags) if all_tags else ''
                         debug_tags(f"Tags for {os.path.basename(file_path)}: year='{year}', keywords={keywords}, final_tags='{existing_tags}'")
                         
                         # Get public_id from cached metadata (already extracted during assessment phase)
@@ -3060,6 +3122,9 @@ class MainWindow(QMainWindow):
                             debug_tags(f"Using cached public_id for {os.path.basename(file_path)}: {public_id}")
                         else:
                             debug_tags(f"No cached public_id for {os.path.basename(file_path)}")
+                        
+                        # Get pre-generated public_id_to_be from cached metadata 
+                        public_id_to_be = metadata.get('public_id_to_be')
                         
                         # Set original_tags as the current existing_tags (these are from metadata)
                         original_tags_list = all_tags.copy()
@@ -3070,10 +3135,11 @@ class MainWindow(QMainWindow):
                             debug_tags(f"Checking for Cloudinary tags for {os.path.basename(file_path)} with public_id: {public_id}")
                             for cf in self.cloudinary_files_cache:
                                 if cf.get('public_id') == public_id:
-                                    # Convert Cloudinary tags to list format
+                                    # Convert Cloudinary tags to list format and unescape commas
                                     cf_tags = cf.get('tags', [])
                                     if isinstance(cf_tags, list):
-                                        cloudinary_tags_list = [str(tag).strip() for tag in cf_tags if str(tag).strip()]
+                                        raw_tags = [str(tag).strip() for tag in cf_tags if str(tag).strip()]
+                                        cloudinary_tags_list = unescape_tags_from_cloudinary(raw_tags)
                                     debug_tags(f"Found Cloudinary tags for {os.path.basename(file_path)}: {cloudinary_tags_list}")
                                     break
                             if not cloudinary_tags_list:
@@ -3089,7 +3155,8 @@ class MainWindow(QMainWindow):
                             # Enhanced metadata for upload optimization
                             'public_id': public_id,
                             'original_tags': original_tags_list,
-                            'cloudinary_tags': cloudinary_tags_list
+                            'cloudinary_tags': cloudinary_tags_list,
+                            'public_id_to_be': public_id_to_be
                         })
                     else:
                         print(f"Warning: No preview available for {file_path}, skipping...")
@@ -3204,6 +3271,13 @@ class MainWindow(QMainWindow):
         debug_file_dialogs(f"Selected files: {files}")
         
         if files:
+            # Extract folder path for window title
+            # File dialog guarantees all selected files are from the same folder
+            common_folder = os.path.dirname(files[0])
+            
+            # Update window title to show the folder context
+            self.update_window_title(common_folder)
+            
             # Clear previous metadata errors and data
             self.metadata_errors.clear()
             self.unsupported_files.clear()
@@ -3234,6 +3308,9 @@ class MainWindow(QMainWindow):
         debug_file_dialogs(f"Selected folder: {folder_path}")
         
         if folder_path:
+            # Update window title to show the current folder
+            self.update_window_title(folder_path)
+            
             # Define supported image extensions (excluding XMP which are metadata sidecar files)
             image_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.tiff', '.tif', '.webp'}
             # Define unsupported image formats that we recognize but can't process
@@ -3346,10 +3423,15 @@ class MainWindow(QMainWindow):
         debug_cloudinary(f"  - has cloudinary_updater attr: {hasattr(self, 'cloudinary_updater')}")
         debug_cloudinary(f"  - cloudinary_updater value: {getattr(self, 'cloudinary_updater', 'NOT SET')}")
         
-        cloudinary_enabled = self.cloudinary_connected and hasattr(self, 'cloudinary_updater') and self.cloudinary_updater
+        # Check if Cloudinary is configured in settings (regardless of connection status)
+        cloudinary_configured = SettingsDialog.is_cloudinary_configured()
+        debug_cloudinary(f"  - cloudinary configured in settings: {cloudinary_configured}")
+        
+        # Enable Cloudinary processing if configured, even if connection is still in progress
+        cloudinary_enabled = cloudinary_configured and hasattr(self, 'cloudinary_updater')
         
         if cloudinary_enabled:
-            debug_cloudinary("✅ Cloudinary enabled - will process with cloud operations")
+            debug_cloudinary("✅ Cloudinary enabled - will process with cloud operations (based on settings)")
         else:
             debug_cloudinary("❌ Cloudinary disabled - processing locally only")
         
@@ -3409,7 +3491,11 @@ class MainWindow(QMainWindow):
                         # Use metadata from comprehensive extraction (no redundant ExifTool calls)
                         year = comprehensive_metadata['year']
                         local_keywords = comprehensive_metadata['keywords']
-                        cloudinary_public_id = comprehensive_metadata['public_id']
+                        cloudinary_public_id = comprehensive_metadata['public_id']  # This should be None if orphaned cleanup happened
+                        
+                        # DEBUG: Check what comprehensive metadata actually contains (including post-cleanup values)
+                        debug_metadata(f"Comprehensive metadata for {os.path.basename(file_path)}: year={year}, keywords={local_keywords}, public_id={cloudinary_public_id}")
+                        debug_cloudinary(f"Cloudinary public_id for assessment: {cloudinary_public_id} (None means file needs new public_id_to_be)")
                         
                         # FALLBACK: If comprehensive metadata didn't find year, use the working get_image_metadata
                         if year is None:
@@ -3443,8 +3529,9 @@ class MainWindow(QMainWindow):
                                         break
                                 
                                 if cloudinary_tags_list:
-                                    # Convert to same format as local keywords (list of strings)
-                                    cloudinary_keywords = [str(tag).strip() for tag in cloudinary_tags_list if str(tag).strip()]
+                                    # Convert to same format as local keywords and unescape any escaped commas
+                                    raw_keywords = [str(tag).strip() for tag in cloudinary_tags_list if str(tag).strip()]
+                                    cloudinary_keywords = unescape_tags_from_cloudinary(raw_keywords)
                                     
                                     # Compare with local keywords to see if import is needed
                                     local_set = set(local_keywords) if local_keywords else set()
@@ -3464,6 +3551,45 @@ class MainWindow(QMainWindow):
                                     else:
                                         debug_cloudinary(f"Cloudinary tags match local tags for {os.path.basename(file_path)} - no import needed")
                         
+                        # GENERATE PUBLIC_ID_TO_BE for new files to prevent upload conflicts
+                        public_id_to_be = None
+                        if cloudinary_enabled and not cloudinary_public_id:
+                            # This is a new file that needs upload - pre-generate unique public_id
+                            from utilities.filename_sanitizer import generate_unique_public_id
+                            from pathlib import Path
+                            
+                            # Extract immediate parent folder from current file path
+                            try:
+                                file_path_obj = Path(file_path)
+                                folder_name = file_path_obj.parent.name
+                                
+                                # Handle orphaned folders - use parent of orphaned folder
+                                if folder_name == "orphaned":
+                                    folder_name = file_path_obj.parent.parent.name
+                                    debug_upload(f"Detected 'orphaned' subfolder, using parent folder: '{folder_name}'")
+                                
+                                # Add the "Uploads/" prefix to match what the upload handler will use
+                                # This ensures conflict detection works properly
+                                full_folder_path = f"Uploads/{folder_name}"
+                                
+                                debug_upload(f"Extracted immediate parent folder: '{folder_name}' from {file_path}")
+                                debug_upload(f"Full Cloudinary folder path will be: '{full_folder_path}'")
+                            except Exception as e:
+                                full_folder_path = "Uploads"  # Fallback
+                                debug_upload(f"Error extracting folder name from file path, using fallback: {e}")
+                            
+                            if not full_folder_path:
+                                full_folder_path = "Uploads"  # Ensure we have a string value
+                            
+                            # Generate unique public_id with duplicate detection
+                            public_id_to_be = generate_unique_public_id(
+                                os.path.basename(file_path),
+                                full_folder_path,
+                                getattr(self, 'cloudinary_files_cache', None)
+                            )
+                            
+                            debug_upload(f"Pre-generated public_id_to_be for {os.path.basename(file_path)}: {public_id_to_be}")
+                        
                         # Prepare image data
                         image_data = {
                             'file_path': file_path,
@@ -3472,7 +3598,8 @@ class MainWindow(QMainWindow):
                             'keywords': keywords,
                             'keywords_from_cloudinary': keywords_from_cloudinary,  # Track import source
                             'cloudinary_synced': cloudinary_sync_status.get(file_path, False),  # Include sync status
-                            'cloudinary_public_id': cloudinary_public_id  # Cache for widget creation
+                            'cloudinary_public_id': cloudinary_public_id,  # Cache for widget creation
+                            'public_id_to_be': public_id_to_be  # Pre-generated public_id for upload
                         }
                         processed_data.append(image_data)
                         
@@ -3489,7 +3616,8 @@ class MainWindow(QMainWindow):
                                 'preview': preview,
                                 'year': None,
                                 'keywords': [],
-                                'cloudinary_synced': cloudinary_sync_status.get(file_path, False)  # Include sync status
+                                'cloudinary_synced': cloudinary_sync_status.get(file_path, False),  # Include sync status
+                                'public_id_to_be': None  # No pre-generation for failed metadata extraction
                             }
                             processed_data.append(image_data)
                     except Exception as preview_e:
@@ -3541,7 +3669,7 @@ class MainWindow(QMainWindow):
         # Store processed images
         self.image_files = [data['file_path'] for data in processed_data]
         self.image_previews = {data['file_path']: data['preview'] for data in processed_data}
-        self.image_metadata = {data['file_path']: {'year': data['year'], 'keywords': data['keywords'], 'keywords_from_cloudinary': data.get('keywords_from_cloudinary', False), 'cloudinary_synced': data.get('cloudinary_synced', False), 'cloudinary_public_id': data.get('cloudinary_public_id')} 
+        self.image_metadata = {data['file_path']: {'year': data['year'], 'keywords': data['keywords'], 'keywords_from_cloudinary': data.get('keywords_from_cloudinary', False), 'cloudinary_synced': data.get('cloudinary_synced', False), 'cloudinary_public_id': data.get('cloudinary_public_id'), 'public_id_to_be': data.get('public_id_to_be')} 
                              for data in processed_data}
         
         # DEBUG: Check what gets stored in image_metadata
@@ -3753,7 +3881,7 @@ class MainWindow(QMainWindow):
                 
                 # Get current UI tags
                 ui_tags = widget.get_tags()
-                ui_tags_list = [tag.strip() for tag in ui_tags] if isinstance(ui_tags, list) else [tag.strip() for tag in str(ui_tags).split(',') if tag.strip()]
+                ui_tags_list = [tag.strip() for tag in ui_tags] if isinstance(ui_tags, list) else parse_keywords_from_text(str(ui_tags))
                 
                 # Reduce debug logging during assessment for speed (only log every 10th file)
                 if i % 10 == 0 or i == total_widgets:
@@ -4373,8 +4501,8 @@ class MainWindow(QMainWindow):
                 debug_tags(f"Processing widget for file: {file_path}")
                 current_text = self.get_widget_text(widget)
                 debug_tags(f"Before append | file_path: {file_path} | current_text: '{current_text}'")
-                # Split tags by semicolons, strip whitespace, and ensure uniqueness
-                tags = [t.strip() for t in current_text.split(';') if t.strip()]
+                # Use centralized parsing for consistency
+                tags = parse_keywords_from_text(current_text)
                 if tag_text in tags:
                     debug_tags(f"Tag '{tag_text}' already present in tags: {tags}")
                     continue  # Skip if already present

@@ -10,11 +10,11 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel,
                             QPlainTextEdit, QFrame, QSizePolicy)
 from PyQt5.QtCore import Qt, pyqtSignal, QSize, QTimer, QEvent
 from PyQt5.QtGui import QPixmap, QTextOption
-from .debug_utils import debug_layout, debug_image_display, debug_errors, debug
+from .debug_utils import debug_layout, debug_image_display, debug_errors, debug, debug_width_control, debug_ctrl_operations
+from .tag_utils import parse_keywords_from_text, format_keywords_for_display, unescape_tags_from_cloudinary
 
-# Debug control - set to False to reduce console output
-DEBUG_LAYOUT = False  # Set to True for layout debugging
-DEBUG_HEIGHT = False  # Set to True for height calculation debugging
+# Note: Debug flags moved to centralized debug_utils.py system
+# Use debug categories: 'layout', 'width_control', 'ctrl_operations' instead
 
 class ImageCardWidget(QWidget):
     """
@@ -45,6 +45,9 @@ class ImageCardWidget(QWidget):
         self.original_tags = original_tags or []  # Tags read from file metadata on loading (list of strings)
         self.ui_tags = []  # Current tags in the UI text input element (list of strings)
         self.cloudinary_tags = cloudinary_tags or []  # Tags retrieved from Cloudinary API (list of strings)
+        
+        # Pre-generated upload metadata to prevent file replacements
+        self.public_id_to_be = ""  # Pre-generated public_id for new uploads (prevents filename conflicts)
         
         # Legacy compatibility (remove these eventually)
         self.is_on_cloudinary = self.on_cloudinary  # Backward compatibility
@@ -132,8 +135,7 @@ class ImageCardWidget(QWidget):
         
     def _start_ctrl_suppression(self):
         """Start temporary suppression of width enforcement during Ctrl operations"""
-        if DEBUG_LAYOUT:
-            print(f"[DEBUG-CTRL] Starting Ctrl suppression for {self.file_path}")
+        debug_ctrl_operations(f"Starting Ctrl suppression for {self.file_path}")
         
         self._ctrl_operation_in_progress = True
         
@@ -149,8 +151,7 @@ class ImageCardWidget(QWidget):
         
     def _end_ctrl_suppression(self):
         """End temporary suppression of width enforcement"""
-        if DEBUG_LAYOUT:
-            print(f"[DEBUG-CTRL] Ending Ctrl suppression for {self.file_path}")
+        debug_ctrl_operations(f"Ending Ctrl suppression for {self.file_path}")
         
         self._ctrl_operation_in_progress = False
         if self._ctrl_suppression_timer:
@@ -281,10 +282,9 @@ class ImageCardWidget(QWidget):
             doc = self.text_edit.document()
             if doc:
                 doc.setTextWidth(text_content_width)
-            if DEBUG_HEIGHT:
-                print(f"[DEBUG-WIDTH] Updated text widget width to {width}px, document width to {text_content_width}px")
+            debug_width_control(f"Updated text widget width to {width}px, document width to {text_content_width}px")
         except Exception as e:
-            print(f"[DEBUG-WIDTH] Exception in _update_text_width: {e}")
+            debug_errors(f"Exception in _update_text_width: {e}")
     
     def _load_image(self):
         """Load and scale the image for display"""
@@ -474,7 +474,7 @@ class ImageCardWidget(QWidget):
             if self.image_label.pixmap():
                 image_width = self.image_label.pixmap().size().width()
                 current_text_width = self.text_edit.width()
-                print(f"[DEBUG-ENFORCE] _enforce_text_width called - Image: {image_width}px, Current TextEdit: {current_text_width}px")
+                debug_width_control(f"_enforce_text_width called - Image: {image_width}px, Current TextEdit: {current_text_width}px")
                 
                 self.text_edit.setFixedWidth(image_width)
                 self.text_edit.setMaximumWidth(image_width) 
@@ -486,18 +486,18 @@ class ImageCardWidget(QWidget):
                     if document:
                         text_content_width = image_width - 12  # Account for border + padding
                         current_doc_width = document.textWidth()
-                        print(f"[DEBUG-ENFORCE] BEFORE: Document width = {current_doc_width}px, Image width = {image_width}px, Calculated content width = {text_content_width}px")
+                        debug_width_control(f"BEFORE: Document width = {current_doc_width}px, Image width = {image_width}px, Calculated content width = {text_content_width}px")
                         
                         # QPlainTextEdit should handle width much more predictably
                         document.setTextWidth(text_content_width)
                         
                         # Verify the width was actually set
                         post_set_width = document.textWidth()
-                        print(f"[DEBUG-ENFORCE] AFTER: Document width = {post_set_width}px (expected {text_content_width}px)")
+                        debug_width_control(f"AFTER: Document width = {post_set_width}px (expected {text_content_width}px)")
                         if post_set_width != text_content_width:
-                            print(f"[DEBUG-ENFORCE] WARNING: Document width not set correctly! Expected {text_content_width}px but got {post_set_width}px")
+                            debug_width_control(f"WARNING: Document width not set correctly! Expected {text_content_width}px but got {post_set_width}px")
                 else:
-                    print(f"[DEBUG-ENFORCE] Skipping document width update (has focus)")
+                    debug_width_control(f"Skipping document width update (has focus)")
     
     def _enforce_document_width_immediate(self):
         """Ensure correct document width during typing"""
@@ -505,12 +505,12 @@ class ImageCardWidget(QWidget):
             if self.image_label.pixmap():
                 # Check if a programmatic update is in progress
                 if self._programmatic_update_in_progress:
-                    print(f"[DEBUG-WIDTH] Skipping immediate width enforcement during programmatic update")
+                    debug_width_control(f"Skipping immediate width enforcement during programmatic update")
                     return
                     
                 # Check if a Ctrl operation is in progress
                 if self._ctrl_operation_in_progress:
-                    print(f"[DEBUG-WIDTH] Skipping immediate width enforcement during Ctrl operation suppression")
+                    debug_width_control(f"Skipping immediate width enforcement during Ctrl operation suppression")
                     return
                     
                 # Check if Ctrl key is currently pressed - start suppression if detected
@@ -519,14 +519,14 @@ class ImageCardWidget(QWidget):
                 modifiers = QApplication.keyboardModifiers()
                 
                 if modifiers & Qt.ControlModifier:
-                    print(f"[DEBUG-WIDTH] Ctrl detected, starting suppression period")
+                    debug_ctrl_operations(f"Ctrl detected, starting suppression period")
                     self._start_ctrl_suppression()
                     return
                 
                 image_width = self.image_label.pixmap().size().width()
                 current_text_width = self.text_edit.width()
                 
-                print(f"[DEBUG-WIDTH] Image: {image_width}px, TextEdit: {current_text_width}px, HasFocus: {self.text_edit.hasFocus()}")
+                debug_width_control(f"Image: {image_width}px, TextEdit: {current_text_width}px, HasFocus: {self.text_edit.hasFocus()}")
                 
                 # Keep the widget width correct
                 self.text_edit.setFixedWidth(image_width)
@@ -539,7 +539,7 @@ class ImageCardWidget(QWidget):
                     if document:
                         correct_doc_width = image_width - 12  # Account for border + padding
                         current_doc_width = document.textWidth()
-                        print(f"[DEBUG-WIDTH] Document width was: {current_doc_width}px, setting to correct: {correct_doc_width}px")
+                        debug_width_control(f"Document width was: {current_doc_width}px, setting to correct: {correct_doc_width}px")
                         
                         # Use proper width for wrapping, not unlimited
                         document.setTextWidth(correct_doc_width)
@@ -556,13 +556,13 @@ class ImageCardWidget(QWidget):
                     # Use the same width calculation as the typing logic
                     correct_doc_width = image_width - 12  # Account for border + padding  
                     current_doc_width = document.textWidth()
-                    # print(f"[DEBUG-WIDTH] INIT: Document width was: {current_doc_width}px, setting to correct: {correct_doc_width}px")
+                    # Set correct document width for initialization
                     
                     # Set proper width for wrapping during initialization
                     document.setTextWidth(correct_doc_width)
                     # Force immediate document layout update
                     document.adjustSize()
-                    # print(f"[DEBUG-WIDTH] INIT: Document width after setting: {document.textWidth()}px")
+                    # Document width set during initialization
     
     def force_document_width_post_layout(self):
         """Force correct document width after layout is complete - simplified for QPlainTextEdit"""
@@ -573,25 +573,25 @@ class ImageCardWidget(QWidget):
                 if document:
                     text_content_width = image_width - 12  # Account for border + padding
                     current_doc_width = document.textWidth()
-                    print(f"[DEBUG-WIDTH] POST-LAYOUT: Document width was: {current_doc_width}px, setting to: {text_content_width}px")
+                    debug_width_control(f"POST-LAYOUT: Document width was: {current_doc_width}px, setting to: {text_content_width}px")
                     
                     # QPlainTextEdit should handle this more predictably than QTextEdit
                     document.setTextWidth(text_content_width)
                     
                     final_width = document.textWidth()
-                    print(f"[DEBUG-WIDTH] POST-LAYOUT: Final document width: {final_width}px")
+                    debug_width_control(f"POST-LAYOUT: Final document width: {final_width}px")
     
     def _on_document_content_changed(self):
         """Handle document content changes to maintain proper width during typing"""
         if hasattr(self, 'text_edit') and self.text_edit and self.text_edit.hasFocus():
             # Check if a programmatic update is in progress
             if self._programmatic_update_in_progress:
-                print(f"[DEBUG-CONTENT] Skipping width enforcement during programmatic update")
+                debug_width_control(f"Skipping width enforcement during programmatic update")
                 return
                 
             # Check if a Ctrl operation is in progress
             if self._ctrl_operation_in_progress:
-                print(f"[DEBUG-CONTENT] Skipping width enforcement during Ctrl operation suppression")
+                debug_width_control(f"Skipping width enforcement during Ctrl operation suppression")
                 return
                 
             # Check if Ctrl key is currently pressed - start suppression if detected
@@ -601,7 +601,7 @@ class ImageCardWidget(QWidget):
             
             # If Ctrl is pressed, start suppression period to prevent interference
             if modifiers & Qt.ControlModifier:
-                print(f"[DEBUG-CONTENT] Ctrl detected, starting suppression period")
+                debug_ctrl_operations(f"Ctrl detected, starting suppression period")
                 self._start_ctrl_suppression()
                 return
             
@@ -612,14 +612,14 @@ class ImageCardWidget(QWidget):
                 correct_doc_width = image_width - 12  # Account for border + padding
                 current_width = document.textWidth()
                 
-                print(f"[DEBUG-CONTENT] Document content changed, current width: {current_width}px, setting to correct width: {correct_doc_width}px")
+                debug_width_control(f"Document content changed, current width: {current_width}px, setting to correct width: {correct_doc_width}px")
                 
                 # Set to proper width for wrapping (not unlimited)
                 document.setTextWidth(correct_doc_width)
                 
                 # Ensure the widget width is correct during typing
                 if self.text_edit.width() != image_width:
-                    print(f"[DEBUG-CONTENT] Correcting widget width to {image_width}px during typing")
+                    debug_width_control(f"Correcting widget width to {image_width}px during typing")
                     self.text_edit.setFixedWidth(image_width)
                     
                 # CRITICAL: Prevent Qt from changing the document width again
@@ -630,12 +630,12 @@ class ImageCardWidget(QWidget):
         if hasattr(self, 'text_edit') and self.text_edit and self.text_edit.hasFocus():
             # Check if a programmatic update is in progress
             if self._programmatic_update_in_progress:
-                print(f"[DEBUG-MAINTAIN] Skipping width maintenance during programmatic update")
+                debug_width_control(f"Skipping width maintenance during programmatic update")
                 return
                 
             # Check if a Ctrl operation is in progress
             if self._ctrl_operation_in_progress:
-                print(f"[DEBUG-MAINTAIN] Skipping width maintenance during Ctrl operation suppression")
+                debug_width_control(f"Skipping width maintenance during Ctrl operation suppression")
                 return
                 
             # Check if Ctrl key is currently pressed - start suppression if detected
@@ -644,7 +644,7 @@ class ImageCardWidget(QWidget):
             modifiers = QApplication.keyboardModifiers()
             
             if modifiers & Qt.ControlModifier:
-                print(f"[DEBUG-MAINTAIN] Ctrl detected, starting suppression period")
+                debug_ctrl_operations(f"Ctrl detected, starting suppression period")
                 self._start_ctrl_suppression()
                 return
             
@@ -652,7 +652,7 @@ class ImageCardWidget(QWidget):
             if document:
                 current_width = document.textWidth()
                 if abs(current_width - target_width) > 1:  # Allow small floating point differences
-                    print(f"[DEBUG-MAINTAIN] Document width drifted to {current_width}px, correcting to {target_width}px")
+                    debug_width_control(f"Document width drifted to {current_width}px, correcting to {target_width}px")
                     document.setTextWidth(target_width)
         
     def _on_text_changed(self):
@@ -660,7 +660,7 @@ class ImageCardWidget(QWidget):
         new_text = self.text_edit.toPlainText()
         
         # Update UI tags - parse the current text into tags list
-        self.ui_tags = [tag.strip() for tag in new_text.split(';') if tag.strip()] if new_text else []
+        self.ui_tags = parse_keywords_from_text(new_text) if new_text else []
         
         self.text_changed.emit(self.file_path, new_text)
         
@@ -676,12 +676,12 @@ class ImageCardWidget(QWidget):
         """Automatically adjust text edit height based on content using document layout"""
         # Check if a Ctrl operation is in progress
         if self._ctrl_operation_in_progress:
-            # print(f"[DEBUG-HEIGHT] Skipping height adjustment during Ctrl operation suppression")
+            # Skip height adjustment during control operations
             return
             
         # Check if a programmatic update is in progress
         if self._programmatic_update_in_progress:
-            # print(f"[DEBUG-HEIGHT] Skipping height adjustment during programmatic update suppression")
+            # Skip height adjustment during programmatic updates
             return
         
         # Add guard to prevent recursive calls
@@ -705,7 +705,7 @@ class ImageCardWidget(QWidget):
             self.text_edit.setMinimumHeight(dynamic_min_height)
             self.text_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             
-            # print(f"[DEBUG] Text height set to minimum ({dynamic_min_height}px) for empty content")
+            # Set minimum height for empty content
             self._create_safe_timer(100, lambda: self._check_actual_height("empty content"))
             return
         
@@ -730,20 +730,20 @@ class ImageCardWidget(QWidget):
             available_width = text_widget_width - 6  # Reduced from 12 to 6 for consistency
             image_width = text_widget_width  # For debug output
         
-        # print(f"[DEBUG-HEIGHT] Height adjustment - Target width: {target_width or 'N/A'}px, Available width: {available_width}px")
+        # Height adjustment for text content
         
         # Get the document and ensure it has the correct width for wrapping
         document = self.text_edit.document()
         if document:
             current_doc_width = document.textWidth()
-            # print(f"[DEBUG-HEIGHT] BEFORE height adjustment: Document width = {current_doc_width}px")
+            # Document width before height adjustment
             
             # Always set the document width to ensure consistent text layout
             document.setTextWidth(available_width)
             
             # Verify the width was set correctly
             post_set_width = document.textWidth()
-            # print(f"[DEBUG-HEIGHT] AFTER setting document width: Expected {available_width}px, Got {post_set_width}px")
+            # Document width after setting
             
             # Force document to recalculate size with proper width
             document.adjustSize()
@@ -787,12 +787,12 @@ class ImageCardWidget(QWidget):
                 # Calculate height based on actual rendered lines
                 doc_height = actual_lines * line_height
 
-                # print(f"[DEBUG-HEIGHT] QPlainTextEdit actual line count: actual_lines={actual_lines}, line_height={line_height}px, calculated_height={doc_height}px")
+                # Line count and height measurement
 
             # Get the actual document size for comparison
             doc_size = document.size()
             actual_doc_height = int(doc_size.height())
-            # print(f"[DEBUG-HEIGHT] Document reports height={actual_doc_height}px, our precise measurement={doc_height}px")
+            # Document height measurement comparison
             
             # Calculate final height with minimal additional padding
             # QTextDocument measurement already includes document margins
@@ -803,21 +803,19 @@ class ImageCardWidget(QWidget):
             # Apply bounds - ensure minimum height and respect maximum
             optimal_height = max(dynamic_min_height, min(self.text_max_height, new_height))
             
-            # print(f"[DEBUG-HEIGHT] Height calculation: doc_height={doc_height}, new_height={new_height}, dynamic_min_height={dynamic_min_height}, optimal_height={optimal_height}")
-            # print(f"[DEBUG-HEIGHT] BEFORE setFixedHeight - current height: {self.text_edit.height()}px")
+            # Height calculation and widget sizing
             
             self.text_edit.setFixedHeight(optimal_height)
             self.text_edit.setMaximumHeight(optimal_height)
             self.text_edit.setMinimumHeight(optimal_height)
             self.text_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             
-            # print(f"[DEBUG-HEIGHT] AFTER setFixedHeight - new height: {self.text_edit.height()}px")
+            # Widget height after setting
             
-            if DEBUG_HEIGHT:
-                debug("layout", f"Document-based height calculation for {os.path.basename(self.file_path)}:")
-                debug("layout", f"  text_width: {text_widget_width} | available_width: {available_width}")
-                debug("layout", f"  content_chars: {len(text_content)} | doc_height: {doc_height} | actual_lines: {actual_lines} | final_height: {optimal_height}")
-                debug("layout", f"  block_count: {block_count} | line_height: {line_height}")
+            debug_layout(f"Document-based height calculation for {os.path.basename(self.file_path)}:")
+            debug_layout(f"  text_width: {text_widget_width} | available_width: {available_width}")
+            debug_layout(f"  content_chars: {len(text_content)} | doc_height: {doc_height} | actual_lines: {actual_lines} | final_height: {optimal_height}")
+            debug_layout(f"  block_count: {block_count} | line_height: {line_height}")
             
             self._create_safe_timer(100, lambda: self._safe_check_actual_height(f"{len(text_content)} chars ({actual_lines} lines)"))
             
@@ -880,7 +878,7 @@ class ImageCardWidget(QWidget):
         elif isinstance(tags, list):
             # Filter out empty/whitespace-only tags
             valid_tags = [tag.strip() for tag in tags if tag and str(tag).strip()]
-            tags_text = ';'.join(valid_tags) if valid_tags else ""
+            tags_text = format_keywords_for_display(valid_tags) if valid_tags else ""
         else:
             tags_text = str(tags).strip() if tags else ""
             
@@ -917,7 +915,7 @@ class ImageCardWidget(QWidget):
         text = self.text_edit.toPlainText().strip()
         if not text:
             return []
-        return [tag.strip() for tag in text.split(';') if tag.strip()]
+        return parse_keywords_from_text(text)
     
     def set_metadata(self, metadata):
         """Set metadata dictionary"""
@@ -961,6 +959,14 @@ class ImageCardWidget(QWidget):
         """Get the Cloudinary public_id for this image"""
         return self.cloudinary_public_id
         
+    def set_public_id_to_be(self, public_id_to_be):
+        """Set the pre-generated public_id for future upload"""
+        self.public_id_to_be = public_id_to_be
+        
+    def get_public_id_to_be(self):
+        """Get the pre-generated public_id for upload"""
+        return self.public_id_to_be
+        
     def set_original_tags(self, tags):
         """Set the original tags as they were saved to disk/metadata"""
         self.original_tags = tags if isinstance(tags, list) else ([tags] if tags else [])
@@ -971,7 +977,13 @@ class ImageCardWidget(QWidget):
         
     def set_cloudinary_tags(self, tags):
         """Set the tags as they exist on Cloudinary"""
-        self.cloudinary_tags = tags if isinstance(tags, list) else ([tags] if tags else [])
+        if tags:
+            # Ensure it's a list
+            tags_list = tags if isinstance(tags, list) else ([tags] if tags else [])
+            # Unescape any escaped commas from Cloudinary
+            self.cloudinary_tags = unescape_tags_from_cloudinary(tags_list)
+        else:
+            self.cloudinary_tags = []
         
     def get_cloudinary_tags(self):
         """Get the tags as they exist on Cloudinary"""
@@ -994,8 +1006,8 @@ class ImageCardWidget(QWidget):
         # Determine background color and border based on both states
         if self.is_on_cloudinary:
             # Dark yellow background when synced with Cloudinary
-            background_color = "#DAA520"  # Dark golden rod color
-            hover_color = "#B8860B"       # Darker gold for hover
+            background_color = "#D1D1D1"  # Dark golden rod color
+            hover_color = "#B6B0DF"       # Darker gold for hover
         else:
             # Default white background
             background_color = "white"
@@ -1007,7 +1019,7 @@ class ImageCardWidget(QWidget):
             border_width = self.selection_border_width
             if self.is_on_cloudinary:
                 # Slightly lighter background when selected and on Cloudinary
-                background_color = "#F0E68C"  # Khaki - lighter golden
+                background_color = "#DEF7F1"  # Khaki - lighter golden
             else:
                 background_color = "#f0f8ff"  # Light blue
         else:
@@ -1146,8 +1158,8 @@ class ImageCardWidget(QWidget):
                                       10)  # Additional padding for borders
                     
                     # Only log significant height changes for debugging
-                    if DEBUG_HEIGHT and hasattr(self, '_last_min_height') and abs(total_min_height - self._last_min_height) > 20:
-                        debug("layout", f"Height change for {os.path.basename(self.file_path)}: {self._last_min_height}px → {total_min_height}px")
+                    if hasattr(self, '_last_min_height') and abs(total_min_height - self._last_min_height) > 20:
+                        debug_layout(f"Height change for {os.path.basename(self.file_path)}: {self._last_min_height}px → {total_min_height}px")
                     self._last_min_height = total_min_height
                     
                     # Set the minimum height to prevent compression
@@ -1180,11 +1192,11 @@ class ImageCardWidget(QWidget):
                           self.text_edit.height() + 
                           (2 * self.image_margin) + 10)  # spacing + margins
             hint = QSize(self.max_width, total_height)
-            # print(f"[DEBUG-SIZEHINT] {os.path.basename(self.file_path)}: max_width={self.max_width}, total_height={total_height}, hint={hint.width()}x{hint.height()}")
+            # Size hint calculation for layout
             return hint
         else:
             hint = QSize(self.max_width, 200)  # default size
-            # print(f"[DEBUG-SIZEHINT] {os.path.basename(self.file_path)}: NO PIXMAP - max_width={self.max_width}, hint={hint.width()}x{hint.height()}")
+            # No pixmap available for size calculation
             return hint
     
     def minimumSizeHint(self):

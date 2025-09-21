@@ -81,6 +81,69 @@ def create_cloudinary_public_id(original_filename, folder_path=""):
     
     return sanitized_filename
 
+
+def generate_unique_public_id(original_filename, folder_path="", cloudinary_cache=None):
+    """
+    Generate a unique public_id for Cloudinary upload with duplicate detection.
+    
+    Args:
+        original_filename (str): Original filename
+        folder_path (str): Optional folder path prefix  
+        cloudinary_cache (list): List of existing Cloudinary files to check for duplicates
+        
+    Returns:
+        str: Unique Cloudinary public_id that won't conflict with existing files
+    """
+    import random
+    import string
+    
+    # Start with basic sanitized public_id
+    base_public_id = create_cloudinary_public_id(original_filename, folder_path)
+    
+    # If no cache provided, return the base public_id
+    if not cloudinary_cache:
+        return base_public_id
+    
+    # Check if base public_id already exists in Cloudinary cache
+    existing_public_ids = {cf.get('public_id', '') for cf in cloudinary_cache if cf.get('public_id')}
+    
+    if base_public_id not in existing_public_ids:
+        # No conflict, use the base public_id
+        return base_public_id
+    
+    # Conflict detected - generate unique suffix
+    attempts = 0
+    max_attempts = 100
+    
+    # Pre-extract name and extension for reuse
+    name_part, ext = (base_public_id.rsplit('.', 1) 
+                     if '.' in base_public_id and not base_public_id.endswith('/') 
+                     else (base_public_id, ''))
+    
+    while attempts < max_attempts:
+        # Generate random suffix
+        suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+        
+        # Create unique public_id with suffix
+        unique_public_id = f"{name_part}_{suffix}"
+        if ext:
+            unique_public_id += f".{ext}"
+        
+        # Check if this is unique
+        if unique_public_id not in existing_public_ids:
+            return unique_public_id
+            
+        attempts += 1
+    
+    # Fallback: use timestamp if we couldn't generate unique ID
+    import time
+    timestamp = str(int(time.time()))
+    fallback_public_id = f"{name_part}_{timestamp}"
+    if ext:
+        fallback_public_id += f".{ext}"
+    
+    return fallback_public_id
+
 if __name__ == "__main__":
     # Test cases
     test_files = [

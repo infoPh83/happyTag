@@ -1,0 +1,23 @@
+=== HappyTag Unified Session Log ===
+Session started: 2025-09-21 10:42:23
+Log file: D:\Python playfolder\happyTag\logs\happytag_session_2025-09-21_10-42-23.txt
+==================================================
+
+[10:42:23] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.065
+[10:43:28] [UPLOAD] Detected orphaned public_id during assessment: Uploads/Hilton - unedited/X-Hilton 11.jpg for X-Hilton 11.jpg
+[10:43:28] [UPLOAD] NEW upload phase:
+[10:43:28] [UPLOAD]   Files for tag update only: 0
+[10:43:28] [UPLOAD]   Files not on Cloudinary (resize + upload): 1
+[10:43:28] [UPLOAD]   Files already synced (no action): 0
+[10:43:28] [UPLOAD] Total files to process: 1
+[10:43:28] [UPLOAD] Currently uploading: Uploading: X-Hilton 11.jpg
+[10:43:30] [UPLOAD] NEW upload phase complete: 1 uploaded/updated, 0 errors, 0 metadata failures
+[10:43:32] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.065
+[10:45:47] [UPLOAD] NEW upload phase:
+[10:45:47] [UPLOAD]   Files for tag update only: 0
+[10:45:47] [UPLOAD]   Files not on Cloudinary (resize + upload): 1
+[10:45:47] [UPLOAD]   Files already synced (no action): 0
+[10:45:47] [UPLOAD] Total files to process: 1
+[10:45:47] [UPLOAD] Currently uploading: Uploading: unedited_01.jpg
+[10:45:51] [UPLOAD] NEW upload phase complete: 1 uploaded/updated, 0 errors, 0 metadata failures
+[10:45:52] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.066

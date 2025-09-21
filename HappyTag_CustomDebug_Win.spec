@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 # Windows Custom Debug Build Specification for HappyTag
-# Customize the debug categories in runtime_hook_debug.py
+# Specific debug categories: upload, cloudinary, errors, assessment, file_ops, image_loading
 
 block_cipher = None
 

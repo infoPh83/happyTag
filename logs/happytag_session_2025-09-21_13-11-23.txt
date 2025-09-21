@@ -1,0 +1,43 @@
+=== HappyTag Unified Session Log ===
+Session started: 2025-09-21 13:11:23
+Log file: D:\Python playfolder\happyTag\logs\happytag_session_2025-09-21_13-11-23.txt
+==================================================
+
+[13:11:23] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.103
+[13:11:30] [UPLOAD] NEW upload phase:
+[13:11:30] [UPLOAD]   Files for tag update only: 0
+[13:11:30] [UPLOAD]   Files not on Cloudinary (resize + upload): 1
+[13:11:30] [UPLOAD]   Files already synced (no action): 0
+[13:11:30] [UPLOAD] Total files to process: 1
+[13:11:30] [UPLOAD] Currently uploading: Uploading: Westminster 01.JPG
+[13:11:35] [UPLOAD] NEW upload phase complete: 1 uploaded/updated, 0 errors, 0 metadata failures
+[13:11:36] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.103
+[13:13:44] [UPLOAD] NEW upload phase:
+[13:13:44] [UPLOAD]   Files for tag update only: 0
+[13:13:44] [UPLOAD]   Files not on Cloudinary (resize + upload): 1
+[13:13:44] [UPLOAD]   Files already synced (no action): 0
+[13:13:44] [UPLOAD] Total files to process: 1
+[13:13:44] [UPLOAD] Currently uploading: Uploading: super long file name to be truncated.jpg
+[13:13:48] [UPLOAD] NEW upload phase complete: 1 uploaded/updated, 0 errors, 0 metadata failures
+[13:13:49] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.104
+[13:14:04] [UPLOAD] NEW upload phase:
+[13:14:04] [UPLOAD]   Files for tag update only: 0
+[13:14:04] [UPLOAD]   Files not on Cloudinary (resize + upload): 1
+[13:14:04] [UPLOAD]   Files already synced (no action): 0
+[13:14:04] [UPLOAD] Total files to process: 1
+[13:14:04] [UPLOAD] Currently uploading: Uploading: Westminster 01.JPG
+[13:14:07] [UPLOAD] NEW upload phase complete: 1 uploaded/updated, 0 errors, 0 metadata failures
+[13:14:08] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.105
+[13:15:03] [UPLOAD] NEW upload phase:
+[13:15:03] [UPLOAD]   Files for tag update only: 1
+[13:15:03] [UPLOAD]   Files not on Cloudinary (resize + upload): 0
+[13:15:03] [UPLOAD]   Files already synced (no action): 0
+[13:15:03] [UPLOAD] Files needing tag updates only:
+[13:15:03] [UPLOAD]   1. Westminster 01.JPG - Tags: ['UPDATE THIS, TAGS'] - ID: Uploads/test images/Westminster 01_a5g6b0.JPG
+[13:15:03] [UPLOAD] Total files to process: 1
+[13:15:03] [UPLOAD] Updating tags for existing Cloudinary file: Westminster 01.JPG
+[13:15:03] [UPLOAD] Currently uploading: Updating tags: Westminster 01.JPG
+[13:15:03] [UPLOAD] Tag-only update for public_id Uploads/test images/Westminster 01_a5g6b0.JPG: ['UPDATE THIS, TAGS']
+[13:15:03] [UPLOAD] Tag update successful for Westminster 01.JPG
+[13:15:03] [UPLOAD] NEW upload phase complete: 1 uploaded/updated, 0 errors, 0 metadata failures
+[13:15:05] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.106

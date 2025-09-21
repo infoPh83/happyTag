@@ -28,6 +28,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 from utilities.debug_utils import debug_upload, debug_assessment, debug_timings
 from utilities.session_logger import log_session_message
+from utilities.tag_utils import parse_keywords_from_text, escape_tags_for_cloudinary
 from utilities.image_assessment import ImageAssessment
 import subprocess
 import sys
@@ -169,16 +170,16 @@ class CloudinaryUploadHandler(QObject):
                     # This is a QPlainTextEdit or QTextEdit widget
                     tag_text = str(widget.toPlainText()).strip()
                     if tag_text:
-                        # Split by semicolons only and clean up each tag
-                        widget_tags = [tag.strip() for tag in tag_text.split(';') if tag.strip()]
+                        # Use centralized parsing for consistency
+                        widget_tags = parse_keywords_from_text(tag_text)
                         tags.extend(widget_tags)
                         debug_upload(f"Extracted tags from text widget: {widget_tags}")
                 elif hasattr(widget, 'text') and callable(widget.text):
                     # This is a QLineEdit or similar widget
                     tag_text = str(widget.text()).strip()
                     if tag_text:
-                        # Split by semicolons only and clean up each tag
-                        widget_tags = [tag.strip() for tag in tag_text.split(';') if tag.strip()]
+                        # Use centralized parsing for consistency
+                        widget_tags = parse_keywords_from_text(tag_text)
                         tags.extend(widget_tags)
                         debug_upload(f"Extracted tags from line widget: {widget_tags}")
                 elif hasattr(widget, 'get_tags') and callable(widget.get_tags):
@@ -187,18 +188,16 @@ class CloudinaryUploadHandler(QObject):
                     if isinstance(widget_tags, list):
                         # If it's a list, check each item for semicolon separation
                         for tag_item in widget_tags:
-                            if isinstance(tag_item, str) and ';' in tag_item:
-                                # Split semicolon-separated tags
-                                for tag in tag_item.split(';'):
-                                    clean_tag = tag.strip()
-                                    if clean_tag:
-                                        tags.append(clean_tag)
+                            if isinstance(tag_item, str) and (';' in tag_item or ',' in tag_item):
+                                # Use centralized parsing for compound tags
+                                parsed_tags = parse_keywords_from_text(tag_item)
+                                tags.extend(parsed_tags)
                             else:
                                 tags.append(tag_item)
                         debug_upload(f"Extracted tags from card widget: {widget_tags}")
                     elif isinstance(widget_tags, str) and widget_tags.strip():
-                        # Split by semicolons only for string tags
-                        widget_tags_list = [tag.strip() for tag in widget_tags.split(';') if tag.strip()]
+                        # Use centralized parsing for string tags
+                        widget_tags_list = parse_keywords_from_text(widget_tags)
                         tags.extend(widget_tags_list)
                         debug_upload(f"Extracted tags from card widget (string): {widget_tags_list}")
                 elif hasattr(widget, 'currentText') and callable(widget.currentText):
@@ -676,8 +675,13 @@ class CloudinaryUploadHandler(QObject):
                     # Convert tags to strings and filter out empty ones
                     clean_tags = [str(tag).strip() for tag in ui_tags if str(tag).strip()]
                     if clean_tags:
-                        cloudinary.api.update(public_id, tags=clean_tags)
-                        debug_upload(f"Successfully updated tags for {public_id}: {clean_tags}")
+                        # Escape tags to prevent Cloudinary from splitting on commas
+                        escaped_tags = escape_tags_for_cloudinary(clean_tags)
+                        debug_upload(f"Original clean tags: {clean_tags}")
+                        debug_upload(f"Escaped tags for Cloudinary: {escaped_tags}")
+                        
+                        cloudinary.api.update(public_id, tags=escaped_tags)
+                        debug_upload(f"Successfully updated tags for {public_id}: {escaped_tags}")
                     else:
                         debug_upload(f"No valid tags to set for {public_id}")
                 else:
@@ -715,8 +719,9 @@ class CloudinaryUploadHandler(QObject):
         Upload a single file to Cloudinary with metadata.
         
         Args:
-            file_path: Path to the file to upload
+            file_path: Path to the file to upload (may be temporary path)
             upload_tags: List of tags to include in upload
+            original_file_path: Original path of the file before any copying/processing
             
         Returns:
             bool: True if upload successful, False otherwise
@@ -725,32 +730,87 @@ class CloudinaryUploadHandler(QObject):
             file_path_obj = Path(file_path)
             debug_upload(f"Uploading to Cloudinary: {file_path_obj.name}")
             
-            # Generate folder name and public_id based on original filename with sanitization
-            folder = self._generate_folder_name()
+            # Try to get the widget to access pre-generated public_id_to_be
+            widget = None
+            public_id_to_be = None
             
-            # Get original filename and sanitize it for Cloudinary compatibility
-            original_filename = file_path_obj.stem  # Gets filename without extension
-            original_extension = file_path_obj.suffix  # Gets the extension (.jpg, .png, etc.)
-            full_filename = f"{original_filename}{original_extension}"  # Complete filename with extension
+            if (self.main_app and hasattr(self.main_app, 'image_flow_manager') and 
+                self.main_app.image_flow_manager and 
+                hasattr(self.main_app.image_flow_manager, 'image_widgets')):
+                
+                # Use original_file_path for widget lookup if available, otherwise fall back to file_path
+                # This is crucial because file_path might be a temporary path during upload
+                lookup_path = str(original_file_path) if original_file_path else str(file_path)
+                
+                # DEBUG: Show what we're looking for and what's available
+                available_widgets = list(self.main_app.image_flow_manager.image_widgets.keys())
+                debug_upload(f"WIDGET ACCESS DEBUG:")
+                debug_upload(f"  Looking for original_file_path: '{lookup_path}'")
+                debug_upload(f"  (file_path for upload: '{str(file_path)}')")
+                debug_upload(f"  Available widgets ({len(available_widgets)}):")
+                for i, path in enumerate(available_widgets[:5]):  # Show first 5
+                    debug_upload(f"    [{i}] '{path}'")
+                if len(available_widgets) > 5:
+                    debug_upload(f"    ... and {len(available_widgets) - 5} more")
+                
+                widget = self.main_app.image_flow_manager.image_widgets.get(lookup_path)
+                debug_upload(f"  Widget found: {widget is not None}")
+                
+                if widget and hasattr(widget, 'get_public_id_to_be'):
+                    public_id_to_be = widget.get_public_id_to_be()
+                    debug_upload(f"Found pre-generated public_id_to_be: {public_id_to_be}")
+                elif widget:
+                    debug_upload(f"Widget found but no get_public_id_to_be method")
+                    debug_upload(f"Widget methods: {[method for method in dir(widget) if not method.startswith('_')]}")
+                else:
+                    debug_upload(f"No widget found for {file_path_obj.name}")
+            else:
+                debug_upload(f"Image flow manager not available for widget access")
             
-            # Sanitize the filename to avoid encoding issues with special characters
-            sanitized_filename = sanitize_filename_for_cloudinary(full_filename)
+            # Use pre-generated public_id_to_be OR fallback to legacy folder+filename logic
+            if public_id_to_be:
+                debug_upload(f"Using pre-generated public_id_to_be: {public_id_to_be}")
+                # Pre-generated public_id includes full path (e.g., "Uploads/test images/Westminster 01.JPG")
+                # Split into folder and filename for separate Cloudinary parameters
+                if '/' in public_id_to_be:
+                    # Split: "Uploads/test images/Westminster 01.JPG" -> folder="Uploads/test images", filename="Westminster 01.JPG"
+                    path_parts = public_id_to_be.rsplit('/', 1)  # Split from the right to get last component
+                    folder = path_parts[0]  # "Uploads/test images"
+                    final_public_id = path_parts[1]  # "Westminster 01.JPG" (filename only)
+                    debug_upload(f"Split public_id_to_be: folder='{folder}', public_id='{final_public_id}'")
+                else:
+                    # No folder structure in public_id_to_be, use default folder
+                    folder = "Uploads"  # Default folder
+                    final_public_id = public_id_to_be  # Use as-is
+                    debug_upload(f"No folder in public_id_to_be, using default folder='{folder}', public_id='{final_public_id}'")
+            else:
+                # Fallback to original logic with folder+filename for compatibility
+                debug_upload(f"No pre-generated public_id_to_be found, falling back to legacy folder+filename logic")
+                folder = self._generate_folder_name()
+                original_filename = file_path_obj.stem  # Gets filename without extension
+                original_extension = file_path_obj.suffix  # Gets the extension (.jpg, .png, etc.)
+                full_filename = f"{original_filename}{original_extension}"  # Complete filename with extension
+                final_public_id = sanitize_filename_for_cloudinary(full_filename)
             
             debug_upload(f"Upload parameters - folder: {folder}")
-            debug_upload(f"  Original filename: {full_filename}")
-            debug_upload(f"  Sanitized filename: {sanitized_filename}")
-            debug_upload(f"  Tags: {upload_tags}")
+            debug_upload(f"  Final public_id: {final_public_id}")
+            debug_upload(f"  Original tags: {upload_tags}")
             
-            # Upload to Cloudinary with folder structure AND sanitized filename
-            response = cloudinary.uploader.upload(
-                str(file_path),
-                folder=folder,                    # This creates the folder structure
-                public_id=sanitized_filename,     # Use sanitized filename to avoid encoding issues
-                resource_type='image',
-                tags=upload_tags if upload_tags else [],
-                unique_filename=False,            # Don't add suffix since we're using sanitized filename
-                use_filename=True                 # Use the filename as basis for public_id
-            )
+            # Escape tags to prevent Cloudinary from splitting on commas
+            escaped_tags = escape_tags_for_cloudinary(upload_tags) if upload_tags else []
+            debug_upload(f"  Escaped tags for Cloudinary: {escaped_tags}")
+            
+            # Upload to Cloudinary with appropriate parameters
+            upload_params = {
+                'public_id': final_public_id,        # Full path: "Uploads/test images/Westminster 01.JPG"
+                'folder': folder,                    # Folder structure: "Uploads/test images"
+                'resource_type': 'image',
+                'tags': escaped_tags,
+                'unique_filename': False,            # Disable unique_filename since we handle conflicts during assessment
+                'use_filename': False                # Don't use original filename since we have our own public_id
+            }
+            
+            response = cloudinary.uploader.upload(str(file_path), **upload_params)
             
             # Log success with filename-based public_id
             cloudinary_url = response.get('url', '')
@@ -762,7 +822,8 @@ class CloudinaryUploadHandler(QObject):
                 # Always write to the original file, not the resized temporary file
                 metadata_file_path = Path(original_file_path) if original_file_path else file_path_obj
                 
-                # Get current tags from UI if available (for enhanced metadata saving)
+                # Store original tags in metadata (not escaped tags)
+                # This ensures local metadata matches what user expects to see
                 current_tags = upload_tags if upload_tags else []
                 
                 # Write comprehensive metadata (public_id + tags)

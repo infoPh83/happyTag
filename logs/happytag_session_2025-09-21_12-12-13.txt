@@ -1,0 +1,22 @@
+=== HappyTag Unified Session Log ===
+Session started: 2025-09-21 12:12:13
+Log file: D:\Python playfolder\happyTag\logs\happytag_session_2025-09-21_12-12-13.txt
+==================================================
+
+[12:12:13] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.088
+[12:12:22] [UPLOAD] NEW upload phase:
+[12:12:22] [UPLOAD]   Files for tag update only: 0
+[12:12:22] [UPLOAD]   Files not on Cloudinary (resize + upload): 1
+[12:12:22] [UPLOAD]   Files already synced (no action): 0
+[12:12:22] [UPLOAD] Total files to process: 1
+[12:12:22] [UPLOAD] Currently uploading: Uploading: Fifi RM10 Sterry Crescent 01.jpg
+[12:12:25] [UPLOAD] NEW upload phase complete: 1 uploaded/updated, 0 errors, 0 metadata failures
+[12:12:26] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.088
+[12:13:30] [UPLOAD] NEW upload phase:
+[12:13:30] [UPLOAD]   Files for tag update only: 0
+[12:13:30] [UPLOAD]   Files not on Cloudinary (resize + upload): 1
+[12:13:30] [UPLOAD]   Files already synced (no action): 0
+[12:13:30] [UPLOAD] Total files to process: 1
+[12:13:30] [UPLOAD] Currently uploading: Uploading: Fifi RM10 Sterry Crescent 01.jpg
+[12:13:33] [UPLOAD] NEW upload phase complete: 1 uploaded/updated, 0 errors, 0 metadata failures
+[12:13:34] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.089
