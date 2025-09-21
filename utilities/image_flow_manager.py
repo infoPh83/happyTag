@@ -10,7 +10,7 @@ from .image_card_widget import ImageCardWidget
 from .tag_widgets import FlowLayout
 from .image_sorter import ImageSorter
 import gc
-from .debug_utils import debug_layout, debug_memory, debug_errors, debug
+from .debug_utils import debug_layout, debug_memory, debug_errors, debug, debug_file_ops, debug_ui_events
 
 # Debug control - set to False to reduce console output
 DEBUG_FLOW = False  # Set to True for flow layout debugging
@@ -39,6 +39,7 @@ class ImageFlowManager(QWidget):
         self.flow_spacing = 8  # Spacing between widgets
         self.flow_margin = 6  # Margin around the flow layout
         self.use_internal_scroll = use_internal_scroll
+        self.default_text_size = 10  # Default text size for new widgets
         
         # Data
         self.image_widgets = {}  # file_path -> ImageCardWidget
@@ -92,6 +93,16 @@ class ImageFlowManager(QWidget):
         # Update all existing widgets
         for widget in self.image_widgets.values():
             widget.set_max_width(self.widget_width)
+    
+    def set_text_size(self, text_size):
+        """Set the default text size for new widgets and update existing ones"""
+        self.default_text_size = text_size
+        debug_layout(f"Setting default text size to {text_size}px")
+        
+        # Update all existing widgets
+        for widget in self.image_widgets.values():
+            if hasattr(widget, 'set_text_size'):
+                widget.set_text_size(text_size)
             
     def add_image(self, file_path, tags=None, metadata=None, preview_pixmap=None, cloudinary_synced=False, 
                   public_id=None, original_tags=None, cloudinary_tags=None, public_id_to_be=None):
@@ -119,6 +130,10 @@ class ImageFlowManager(QWidget):
         if public_id_to_be:
             widget.set_public_id_to_be(public_id_to_be)
         
+        # Apply default text size to new widget
+        if hasattr(widget, 'set_text_size'):
+            widget.set_text_size(self.default_text_size)
+        
         # Connect signals
         widget.selection_changed.connect(self._on_selection_changed)
         widget.text_changed.connect(self._on_tags_changed)
@@ -133,7 +148,7 @@ class ImageFlowManager(QWidget):
         self.flow_layout.addWidget(widget)
         
         if DEBUG_FLOW:
-            debug("layout", f"Added image to flow: {file_path}")
+            debug_layout( f"Added image to flow: {file_path}")
     
     def remove_image(self, file_path):
         """Remove an image from the flow layout"""
@@ -154,7 +169,7 @@ class ImageFlowManager(QWidget):
             self.selection_changed.emit(list(self.selected_files))
             
             if DEBUG_FLOW:
-                debug("layout", f"Removed image from flow: {file_path}")
+                debug_layout( f"Removed image from flow: {file_path}")
     
     def clear_all(self):
         """Remove all images from the flow layout"""
@@ -176,7 +191,7 @@ class ImageFlowManager(QWidget):
         self.selection_changed.emit([])
         
         if DEBUG_FLOW:
-            debug("layout", f"Flow cleared - {len(self.image_widgets)} widgets remaining")
+            debug_layout( f"Flow cleared - {len(self.image_widgets)} widgets remaining")
     
     def update_layout(self):
         """Update the flow layout - much simpler than grid layout"""
@@ -352,18 +367,18 @@ class ImageFlowManager(QWidget):
     def load_images(self, image_data_list):
         """Load multiple images at once - with batching for large sets"""
         total_count = len(image_data_list)
-        debug("file_ops", f"ImageFlowManager: Loading {total_count} images")
+        debug_file_ops( f"ImageFlowManager: Loading {total_count} images")
         
         # Clear existing images
         self.clear_all()
         
         # For large image sets, use batching to prevent memory issues
         if total_count > MAX_WIDGETS_SAFE:
-            debug("file_ops", f"Large image set detected ({total_count} images), using batched loading (max safe: {MAX_WIDGETS_SAFE})")
+            debug_file_ops( f"Large image set detected ({total_count} images), using batched loading (max safe: {MAX_WIDGETS_SAFE})")
             # Add a small delay to ensure all widget cleanup is complete, then start batching
             QTimer.singleShot(50, lambda: self._load_images_in_batches(image_data_list))
         else:
-            debug("file_ops", f"Normal image set ({total_count} images), using standard loading")
+            debug_file_ops( f"Normal image set ({total_count} images), using standard loading")
             # Add a small delay to ensure all widget cleanup is complete
             QTimer.singleShot(50, lambda: self._load_images_after_cleanup(image_data_list))
         
@@ -377,7 +392,7 @@ class ImageFlowManager(QWidget):
         end_idx = min(start_idx + batch_size, total_count)
         
         if start_idx >= total_count:
-            debug("file_ops", f"Batched loading complete: {total_count} images loaded")
+            debug_file_ops( f"Batched loading complete: {total_count} images loaded")
             self.setUpdatesEnabled(True)
             self.update()
             self.update_layout()
@@ -386,7 +401,7 @@ class ImageFlowManager(QWidget):
         
         try:
             batch_data = image_data_list[start_idx:end_idx]
-            debug("file_ops", f"Loading batch {current_batch + 1}: images {start_idx + 1}-{end_idx} of {total_count}")
+            debug_file_ops( f"Loading batch {current_batch + 1}: images {start_idx + 1}-{end_idx} of {total_count}")
             
             # Temporarily disable layout updates during batch loading
             if current_batch == 0:
@@ -425,7 +440,7 @@ class ImageFlowManager(QWidget):
         
     def _load_images_after_cleanup(self, image_data_list):
         """Load images after cleanup delay"""
-        debug("file_ops", f"ImageFlowManager: Starting delayed image load of {len(image_data_list)} images")
+        debug_file_ops( f"ImageFlowManager: Starting delayed image load of {len(image_data_list)} images")
         
         # Temporarily disable layout updates to prevent premature size calculations
         self.setUpdatesEnabled(False)
@@ -454,7 +469,7 @@ class ImageFlowManager(QWidget):
         self.setUpdatesEnabled(True)
         self.update()
             
-        debug("file_ops", f"ImageFlowManager: Successfully loaded {len(self.image_widgets)} images")        # Update layout after loading all images (very lightweight)
+        debug_file_ops( f"ImageFlowManager: Successfully loaded {len(self.image_widgets)} images")        # Update layout after loading all images (very lightweight)
         self.update_layout()
         
         # QPlainTextEdit should handle width correctly without forcing
@@ -463,13 +478,13 @@ class ImageFlowManager(QWidget):
     
     def force_all_document_widths(self):
         """Force correct document widths for all widgets after layout is complete"""
-        debug("layout", f"ImageFlowManager: Forcing document widths for {len(self.image_widgets)} widgets...")
+        debug_layout( f"ImageFlowManager: Forcing document widths for {len(self.image_widgets)} widgets...")
         
         for file_path, widget in self.image_widgets.items():
             if hasattr(widget, 'force_document_width_post_layout'):
                 widget.force_document_width_post_layout()
         
-        debug("layout", "ImageFlowManager: Document width forcing complete")
+        debug_layout( "ImageFlowManager: Document width forcing complete")
     
     def eventFilter(self, obj, event):
         """Handle mouse events for rubber band selection and empty area clicks"""
@@ -550,4 +565,4 @@ class ImageFlowManager(QWidget):
                         widget.set_selected(True)
                         newly_selected.append(file_path)
         
-        debug("ui_events", f"Rubber band selection: {len(newly_selected)} images selected")
+        debug_ui_events( f"Rubber band selection: {len(newly_selected)} images selected")

@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel,
                             QPlainTextEdit, QFrame, QSizePolicy)
 from PyQt5.QtCore import Qt, pyqtSignal, QSize, QTimer, QEvent
 from PyQt5.QtGui import QPixmap, QTextOption
-from .debug_utils import debug_layout, debug_image_display, debug_errors, debug, debug_width_control, debug_ctrl_operations
+from .debug_utils import debug_layout, debug_image_display, debug_errors, debug, debug_width_control, debug_ctrl_operations, debug_memory, debug_tags, debug_ui_events
 from .tag_utils import parse_keywords_from_text, format_keywords_for_display, unescape_tags_from_cloudinary
 
 # Note: Debug flags moved to centralized debug_utils.py system
@@ -102,11 +102,11 @@ class ImageCardWidget(QWidget):
                     if self.parent() is not None:
                         callback()
                     else:
-                        debug("memory", f"Timer callback skipped - widget orphaned: {os.path.basename(self.file_path) if hasattr(self, 'file_path') else 'unknown'}")
+                        debug_memory( f"Timer callback skipped - widget orphaned: {os.path.basename(self.file_path) if hasattr(self, 'file_path') else 'unknown'}")
                 else:
-                    debug("memory", "Timer callback skipped - widget destroyed")
+                    debug_memory( "Timer callback skipped - widget destroyed")
             except RuntimeError:
-                debug("memory", "Timer callback skipped - widget deleted")
+                debug_memory( "Timer callback skipped - widget deleted")
             finally:
                 self._remove_timer(timer)
         
@@ -666,7 +666,7 @@ class ImageCardWidget(QWidget):
         
         # Check if a programmatic update is in progress
         if self._programmatic_update_in_progress:
-            debug("layout", "Skipping height adjustment during programmatic update (_on_text_changed)")
+            debug_layout( "Skipping height adjustment during programmatic update (_on_text_changed)")
             return
             
         # Auto-adjust text height based on content
@@ -826,7 +826,7 @@ class ImageCardWidget(QWidget):
             self._adjusting_height = False
         else:
             # Fallback if document is not available - use old method
-            debug("layout", "Document not available, using fallback height calculation")
+            debug_layout( "Document not available, using fallback height calculation")
             self.text_edit.setFixedHeight(dynamic_min_height)
             self.text_edit.setMaximumHeight(dynamic_min_height)
             self.text_edit.setMinimumHeight(dynamic_min_height)
@@ -844,9 +844,9 @@ class ImageCardWidget(QWidget):
                 if self.text_edit.parent() is not None or not self.text_edit.isHidden():
                     self._check_actual_height(description)
                 else:
-                    debug("memory", f"Widget orphaned before height check for {description}")
+                    debug_memory( f"Widget orphaned before height check for {description}")
             else:
-                debug("memory", f"Widget destroyed before height check for {description}")
+                debug_memory( f"Widget destroyed before height check for {description}")
         except Exception as e:
             debug_errors(f"Error in safe height check for {description}: {e}")
 
@@ -860,7 +860,7 @@ class ImageCardWidget(QWidget):
                 minimum_size = self.text_edit.minimumHeight()
                 # Debug output reduced - only log significant issues
                 if actual_height < minimum_size * 0.8:  # Only log if significantly different
-                    debug("layout", f"Height issue for {description}: actual={actual_height}px, expected={minimum_size}px")
+                    debug_layout( f"Height issue for {description}: actual={actual_height}px, expected={minimum_size}px")
         except RuntimeError:
             # Widget has been deleted, ignore the callback
             pass  # Reduced debug output
@@ -889,7 +889,7 @@ class ImageCardWidget(QWidget):
         
         # Debug what we're actually setting
         if tags_text:
-            debug("tags", f"Setting tags for {os.path.basename(self.file_path)}: '{tags_text}' (length: {len(tags_text)})")
+            debug_tags( f"Setting tags for {os.path.basename(self.file_path)}: '{tags_text}' (length: {len(tags_text)})")
         
         # Set programmatic update flag to suppress width enforcement
         self._programmatic_update_in_progress = True
@@ -1059,6 +1059,29 @@ class ImageCardWidget(QWidget):
             # Reload image to fit new width
             self._load_image()
     
+    def set_text_size(self, font_size):
+        """Update the font size of the text edit widget"""
+        if hasattr(self, 'text_edit') and self.text_edit:
+            current_font = self.text_edit.font()
+            current_font.setPointSize(font_size)
+            self.text_edit.setFont(current_font)
+            
+            # Also update the stylesheet to maintain other styling
+            current_style = self.text_edit.styleSheet()
+            # Remove any existing font-size declarations
+            import re
+            style_without_font_size = re.sub(r'font-size:\s*\d+px;?', '', current_style)
+            # Add new font-size
+            new_style = style_without_font_size.replace(
+                'QPlainTextEdit {',
+                f'QPlainTextEdit {{ font-size: {font_size}px;'
+            )
+            self.text_edit.setStyleSheet(new_style)
+            
+            # Re-adjust text height after font size change
+            self._adjust_text_height()
+            debug_ui_events(f"Set text size to {font_size}px for {self.get_file_name()}")
+    
     def get_file_path(self):
         """Get the file path"""
         return self.file_path
@@ -1118,9 +1141,9 @@ class ImageCardWidget(QWidget):
                 if (hasattr(self, 'parent') and (self.parent() is not None or not self.isHidden())):
                     self._calculate_and_set_minimum_height()
                 else:
-                    debug("memory", "Widget orphaned before minimum height calculation")
+                    debug_memory( "Widget orphaned before minimum height calculation")
             else:
-                debug("memory", "Widget destroyed before minimum height calculation")
+                debug_memory( "Widget destroyed before minimum height calculation")
         except Exception as e:
             debug_errors(f"Error in safe minimum height calculation: {e}")
 
@@ -1129,19 +1152,19 @@ class ImageCardWidget(QWidget):
         try:
             # Safety check: ensure the widget still exists and hasn't been deleted
             if not hasattr(self, 'image_label') or self.image_label is None:
-                debug("memory", "Widget destroyed before minimum height calculation")
+                debug_memory( "Widget destroyed before minimum height calculation")
                 return
                 
             # Additional safety check for widget validity
             if not hasattr(self, 'file_path'):
-                debug("memory", "Widget missing file_path, skipping height calculation")
+                debug_memory( "Widget missing file_path, skipping height calculation")
                 return
                 
             # Check if image_label has been deleted
             try:
                 pixmap_check = self.image_label.pixmap()  # This will throw RuntimeError if deleted
             except RuntimeError:
-                debug("memory", f"Image label deleted before height calculation for {os.path.basename(self.file_path) if hasattr(self, 'file_path') else 'unknown'}")
+                debug_memory( f"Image label deleted before height calculation for {os.path.basename(self.file_path) if hasattr(self, 'file_path') else 'unknown'}")
                 return
             
             if self.image_label and hasattr(self.image_label, 'pixmap') and pixmap_check:
@@ -1168,10 +1191,10 @@ class ImageCardWidget(QWidget):
                         try:
                             self.container_frame.setMinimumHeight(total_min_height - 10)  # Account for main margins
                         except RuntimeError:
-                            debug("memory", "Container frame deleted during height calculation")
+                            debug_memory( "Container frame deleted during height calculation")
                             
                 except RuntimeError as e:
-                    debug("memory", f"Widget deleted during height calculation: {e}")
+                    debug_memory( f"Widget deleted during height calculation: {e}")
                     
             else:
                 # Fallback minimum height
@@ -1179,7 +1202,7 @@ class ImageCardWidget(QWidget):
                 try:
                     self.setMinimumHeight(default_height)
                 except RuntimeError:
-                    debug("memory", "Widget deleted before setting default height")
+                    debug_memory( "Widget deleted before setting default height")
                     
         except Exception as e:
             debug_errors(f"Error in minimum height calculation: {e}")
@@ -1214,7 +1237,7 @@ class ImageCardWidget(QWidget):
             if hasattr(self, 'text_edit') and self.text_edit:
                 self.text_edit.textChanged.disconnect()
                 self.text_edit = None
-            debug("memory", f"Cleaned up ImageCardWidget for {os.path.basename(self.file_path) if hasattr(self, 'file_path') else 'unknown'}")
+            debug_memory( f"Cleaned up ImageCardWidget for {os.path.basename(self.file_path) if hasattr(self, 'file_path') else 'unknown'}")
         except Exception as e:
             debug_errors(f"Error during cleanup: {e}")
     

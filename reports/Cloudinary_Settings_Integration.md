@@ -76,7 +76,7 @@ Added call to `self.load_cloudinary_settings(settings)` for complete settings re
 Extended to set Cloudinary field placeholders:
 ```python
 # Cloudinary placeholders
-self.logFile_path.setText("Click 'Log Folder..' to select folder")
+self.logFile_path.setText("Click 'Locate..' to select folder")
 self.cloudName_text.setText("")
 # etc.
 ```

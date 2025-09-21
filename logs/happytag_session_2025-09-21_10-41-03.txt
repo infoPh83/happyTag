@@ -1,6 +1,0 @@
-=== HappyTag Unified Session Log ===
-Session started: 2025-09-21 10:41:03
-Log file: D:\Python playfolder\happyTag\logs\happytag_session_2025-09-21_10-41-03.txt
-==================================================
-
-[10:41:03] [UPLOAD] SETTING TRANSFORMATION CREDITS: 1.065

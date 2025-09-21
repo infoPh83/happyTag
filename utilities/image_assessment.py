@@ -98,6 +98,18 @@ class ImageAssessment(QObject):
         self.total_original_size = 0              # Total size of original files
         self.total_upload_size = 0                # Total size of files to upload
         
+    def get_longest_side_setting(self):
+        """Get the longest side setting dynamically from settings"""
+        try:
+            from utilities.settings_dialog import SettingsDialog
+            settings = SettingsDialog.get_cloudinary_settings()
+            longest_side = int(settings.get('longest_side', '4000'))
+            debug_assessment(f"Using dynamic longest side setting: {longest_side}px")
+            return longest_side
+        except Exception as e:
+            debug_errors(f"Failed to get longest side setting, using default 4000: {e}")
+            return 4000  # Fallback to original default
+        
     def reset_assessment_lists(self):
         """Reset all assessment lists and counters for a new processing session"""
         debug_assessment("Resetting assessment lists for new processing session")
@@ -855,14 +867,17 @@ class ImageAssessment(QObject):
                 
                 original_width, original_height = img.size
                 
+                # Get dynamic longest side setting
+                max_dimension = self.get_longest_side_setting()
+                
                 # Resize if dimensions are too large
-                if max(original_width, original_height) > MAX_DIMENSION:
+                if max(original_width, original_height) > max_dimension:
                     if original_width > original_height:
-                        new_width = MAX_DIMENSION
-                        new_height = int((MAX_DIMENSION / original_width) * original_height)
+                        new_width = max_dimension
+                        new_height = int((max_dimension / original_width) * original_height)
                     else:
-                        new_height = MAX_DIMENSION
-                        new_width = int((MAX_DIMENSION / original_height) * original_width)
+                        new_height = max_dimension
+                        new_width = int((max_dimension / original_height) * original_width)
                     img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
                 
                 quality = 95

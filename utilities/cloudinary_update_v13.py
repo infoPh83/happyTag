@@ -26,7 +26,7 @@ import time
 
 # Constants
 # MAX_FILE_SIZE = 3.2 * 1024 * 1024  # 3.5MB in bytes
-MAX_DIMENSION = 4000  # Maximum dimension on the longest side
+# MAX_DIMENSION = 4000  # Maximum dimension on the longest side (now dynamic from settings)
 VALID_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.tiff', '.tif', '.webp'}
 SUPPORTED_FORMATS = {'JPEG', 'PNG', 'GIF', 'TIFF', 'WEBP'}
 UNSUPPORTED_EXTENSIONS = {'.bmp', '.psd'}  # Known image formats not currently supported
@@ -108,6 +108,18 @@ class CloudinaryUpdater(QObject):
         self.cloudName = ""
         self.apiKey = ""
         self.apiSecret = ""
+    
+    def get_longest_side_setting(self):
+        """Get the longest side setting dynamically from settings"""
+        try:
+            from utilities.settings_dialog import SettingsDialog
+            settings = SettingsDialog.get_cloudinary_settings()
+            longest_side = int(settings.get('longest_side', '4000'))
+            debug_cloudinary(f"Using dynamic longest side setting: {longest_side}px")
+            return longest_side
+        except Exception as e:
+            debug_errors(f"Failed to get longest side setting, using default 4000: {e}")
+            return 4000  # Fallback to original default
     
     def setup_file_logging(self, log_file_path):
         """Setup file logging for CloudinaryUpdater"""

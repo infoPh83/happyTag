@@ -289,6 +289,12 @@ class MainWindow(QMainWindow):
         self.clearTagsButton.clicked.connect(self.clear_selected_tags)
         self.SelectAlButton.clicked.connect(self.select_all_images)
         
+        # Connect text size control buttons
+        if hasattr(self, 'textSizeMinus'):
+            self.textSizeMinus.clicked.connect(self.decrease_text_size)
+        if hasattr(self, 'textSizePlus'):
+            self.textSizePlus.clicked.connect(self.increase_text_size)
+        
         # Initially disable clear tags button (no images selected)
         self.clearTagsButton.setEnabled(False)
         
@@ -361,6 +367,21 @@ class MainWindow(QMainWindow):
             'post_upload_time': 0.0,
             'total_start_time': None
         }
+        
+        # Text size control system
+        # Load text size from settings, with fallback to default
+        ui_prefs = SettingsDialog.get_ui_preferences()
+        self.current_text_size = ui_prefs.get('text_size', 12)  # Default font size in pixels
+        self.min_text_size = 8      # Minimum allowed font size
+        self.max_text_size = 24     # Maximum allowed font size (increased for better range)
+        self.text_size_step = 2     # Size increment/decrement step
+        
+        debug_startup(f"Text size loaded from settings: {self.current_text_size}px")
+        
+        # Apply the loaded text size to the ImageFlowManager if it exists
+        if hasattr(self, 'image_flow_manager') and self.image_flow_manager:
+            self.image_flow_manager.set_text_size(self.current_text_size)
+            debug_startup(f"Applied text size {self.current_text_size}px to ImageFlowManager")
         
         debug_startup("Basic application state initialized")
 
@@ -548,6 +569,13 @@ class MainWindow(QMainWindow):
                 if hasattr(self, 'label') and self.label:
                     if "not configured" in status_message.lower():
                         self.label.setText("Cloudinary not configured")
+                    elif "setup incomplete" in status_message.lower():
+                        self.label.setText("Current Credits Usage")  # Show normal label, message goes to status bar
+                        # Show missing settings message in status bar with timeout
+                        if hasattr(self, 'statusBar'):
+                            self.statusBar().showMessage("Cloudinary connected, but missing settings for full functionality", 10000)  # 10 seconds
+                    elif "connection failed" in status_message.lower():
+                        self.label.setText("Cloudinary connection failed")
                     else:
                         self.label.setText("Not connected to Cloudinary")
                 
@@ -569,6 +597,50 @@ class MainWindow(QMainWindow):
             
         except Exception as e:
             debug_errors(f"Error updating Cloudinary UI status: {e}")
+
+    def _show_cloudinary_ui_connected_but_incomplete(self, status_message=""):
+        """Show Cloudinary UI when connected but setup incomplete (shows credits bar but disables upload)"""
+        try:
+            debug_startup(f"_show_cloudinary_ui_connected_but_incomplete called: message='{status_message}'")
+            
+            # Always show the main label (for status feedback)
+            if hasattr(self, 'label') and self.label:
+                self.label.setVisible(True)
+                self.label.setText("Current Credits Usage")  # Show normal label, message goes to status bar
+                
+            # Show missing settings message in status bar with timeout
+            if hasattr(self, 'statusBar'):
+                self.statusBar().showMessage("Cloudinary connected, but missing settings for full functionality", 10000)  # 10 seconds
+            
+            # Show all Cloudinary widgets for successful connection (even though setup incomplete)
+            cloudinary_widgets = [
+                ('storageLabel', getattr(self, 'storageLabel', None)),
+                ('transformationsLabel', getattr(self, 'transformationsLabel', None)), 
+                ('bandwidthLabel', getattr(self, 'bandwidthLabel', None)),
+                ('creditsBar', getattr(self, 'creditsBar', None))
+            ]
+            
+            for widget_name, widget in cloudinary_widgets:
+                if widget:
+                    widget.setVisible(True)
+                    debug_layout_fix(f"Made {widget_name} visible")
+            
+            # Labels are already populated with real data via _pre_populate_cloudinary_labels
+            # No need to set placeholder text here
+            
+            # Disable Cloudinary sync action since setup is incomplete       
+            if hasattr(self, 'actionSynch_with_Cloudinary'):
+                self.actionSynch_with_Cloudinary.setEnabled(False)
+                self.uploadButton.setEnabled(False)
+                debug_startup("Disabled Cloudinary sync action (setup incomplete)")
+                
+            # Force layout refresh since we're showing widgets
+            self._force_layout_refresh_after_visibility_change()
+            
+            debug_startup(f"Cloudinary UI updated for incomplete setup: {status_message}")
+            
+        except Exception as e:
+            debug_errors(f"Error showing Cloudinary UI for incomplete setup: {e}")
 
     def _pre_populate_cloudinary_labels(self, storage_percent, transformations_percent, bandwidth_percent):
         """Pre-populate Cloudinary labels with real data before making them visible to prevent layout glitch"""
@@ -646,11 +718,27 @@ class MainWindow(QMainWindow):
             # Mark components as initialized
             self.components_initialized = True
             
-            # Update UI status
-            self._update_cloudinary_ui_status(self.cloudinary_connected, "Ready" if self.cloudinary_connected else "Not connected")
+            # Update UI status based on actual Cloudinary state
+            # Check if we have valid credentials (even if setup incomplete)
+            if hasattr(self, 'cloudinary_actual_connected') and self.cloudinary_actual_connected:
+                if self.cloudinary_connected:
+                    # Fully connected and setup complete
+                    self._update_cloudinary_ui_status(True, "Ready")
+                else:
+                    # Connected but setup incomplete - maintain the incomplete state
+                    # Don't override the connected-but-incomplete status
+                    debug_startup("Skipping UI update - maintaining connected-but-incomplete status")
+            else:
+                # Actually not connected
+                self._update_cloudinary_ui_status(False, "Not connected")
             
+            # Only show "Ready" in status bar if Cloudinary is fully connected or not connected
+            # Don't override the "missing settings" message when partially connected
             if hasattr(self, 'statusBar'):
-                self.statusBar().showMessage("Ready", 2000)  # Show for 2 seconds
+                if not hasattr(self, 'cloudinary_actual_connected') or not self.cloudinary_actual_connected or self.cloudinary_connected:
+                    # Show "Ready" only when: no Cloudinary, Cloudinary not connected, or fully connected
+                    self.statusBar().showMessage("Ready", 2000)  # Show for 2 seconds
+                # If Cloudinary is connected but incomplete, the status bar already has the appropriate message
             
             debug_startup("Heavy component initialization complete")
             
@@ -660,9 +748,10 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("Initialization error - some features may be limited", 5000)
 
     def _initialize_cloudinary_async(self):
-        """Initialize Cloudinary integration asynchronously"""
+        """Initialize Cloudinary integration asynchronously with comprehensive validation"""
         # Initialize as disconnected
         self.cloudinary_connected = False
+        self.cloudinary_actual_connected = False  # Track actual API connection state
         self.cloudinary_updater = None
         self.cloudinary_files_cache = []  # Global cache for Cloudinary files
         
@@ -673,18 +762,38 @@ class MainWindow(QMainWindow):
             
             debug_cloudinary(f"Retrieved settings: {cloudinary_settings}")
             
-            # Check if Cloudinary is configured
-            if not SettingsDialog.is_cloudinary_configured():
-                debug_cloudinary("Cloudinary not configured - skipping CloudinaryUpdater setup")
-                debug_cloudinary("Configure Cloudinary settings in File > Settings to enable cloud features")
-                self._update_cloudinary_ui_status(False, "Not configured")
+            # Use unified validation method for comprehensive setup check
+            validation_result = SettingsDialog.validate_cloudinary_complete_setup(
+                cloudinary_settings=cloudinary_settings,
+                test_connection=True,
+                show_messages=False  # Don't show dialogs during startup
+            )
+            
+            debug_cloudinary(f"Cloudinary validation result: {validation_result['message']}")
+            
+            # Check if credentials are completely missing or invalid (not connected)
+            if not validation_result['connected']:
+                # Handle different types of validation failures when not connected
+                if validation_result['missing_fields'] and any(field in validation_result['missing_fields'] for field in ['Cloud Name', 'API Key', 'API Secret']):
+                    debug_cloudinary(f"Cloudinary credentials missing: {validation_result['missing_fields']}")
+                    self._update_cloudinary_ui_status(False, "Not configured")
+                elif validation_result['issues']:
+                    debug_cloudinary(f"Cloudinary configuration issues: {validation_result['issues']}")
+                    self._update_cloudinary_ui_status(False, "Configuration issues")
+                else:
+                    debug_cloudinary("Cloudinary credentials valid but connection failed")
+                    self._update_cloudinary_ui_status(False, "Connection failed")
                 return
             
-            # Create CloudinaryUpdater instance
+            # If we reach here, credentials are valid and connection succeeded
+            # But we need to check if ALL fields are present for full functionality
+            setup_complete = validation_result['valid']  # True only if ALL fields are valid
+            
+            debug_cloudinary(f"Cloudinary credentials validated and connected. Complete setup: {setup_complete}")
+            
+            # Create CloudinaryUpdater instance (even for incomplete setup to show credits bar)
             self.cloudinary_updater = CloudinaryUpdater()
             debug_cloudinary("CloudinaryUpdater instance created successfully")
-            
-            debug_cloudinary("Cloudinary settings found - configuring CloudinaryUpdater...")
             
             # Prepare config in the format expected by CloudinaryUpdater
             cloudinary_config = [
@@ -692,7 +801,7 @@ class MainWindow(QMainWindow):
                 cloudinary_settings.get('cloud_name', ''),
                 cloudinary_settings.get('api_key', ''),
                 cloudinary_settings.get('api_secret', ''),
-                cloudinary_settings.get('max_size', '10')  # Default 10MB
+                cloudinary_settings.get('max_size', '3.2')  # Use saved max_size setting
             ]
             
             debug_cloudinary(f"Cloudinary config prepared: {[cloudinary_config[0], cloudinary_config[1], '*****', '*****', cloudinary_config[4]]}")
@@ -701,23 +810,38 @@ class MainWindow(QMainWindow):
             self.cloudinary_updater.setCloudinaryUpdaterConfig(cloudinary_config)
             debug_cloudinary("CloudinaryUpdater configured successfully")
             
-            # Test initial connection asynchronously
-            debug_cloudinary("Testing Cloudinary connection asynchronously...")
+            # Set up async communication
+            debug_cloudinary("Setting up Cloudinary async communication...")
             try:
                 # Connect signals to capture the response
                 self.cloudinary_updater.beginning_signal.connect(self.on_cloudinary_status_received)
                 self.cloudinary_updater.update_ui_signal.connect(self.on_cloudinary_ui_update)
                 
-                # Request account status (async)
+                # Request account status (async) - this will populate the UI (credits bar)
                 self.cloudinary_updater.cloud_status()
                 debug_cloudinary("Cloudinary status request sent asynchronously")
                 
+                # Mark as connected ONLY if setup is complete
+                self.cloudinary_actual_connected = True  # Credentials are valid and API connected
+                self.cloudinary_connected = setup_complete
+                debug_cloudinary(f"Cloudinary connection status: {self.cloudinary_connected} (setup complete: {setup_complete})")
+                
+                # Update UI based on setup completeness
+                if setup_complete:
+                    self._update_cloudinary_ui_status(True, "Ready")
+                else:
+                    # Show credits bar since we're connected, but keep upload disabled
+                    # We need to show the credits bar even for incomplete setup
+                    self._show_cloudinary_ui_connected_but_incomplete("Setup incomplete")
+                
             except Exception as conn_error:
-                debug_errors(f"Cloudinary connection test failed: {conn_error}")
-                self._update_cloudinary_ui_status(False, "Connection failed")
+                debug_errors(f"Cloudinary async setup failed: {conn_error}")
+                self.cloudinary_actual_connected = False
+                self._update_cloudinary_ui_status(False, "Async setup failed")
                 
         except Exception as e:
             debug_errors(f"Failed to initialize Cloudinary integration: {e}")
+            self.cloudinary_actual_connected = False
             self._update_cloudinary_ui_status(False, "Initialization failed")
 
     def _prepare_exiftool_lazy(self):
@@ -2277,6 +2401,31 @@ class MainWindow(QMainWindow):
             f'Successfully cleared tags from {cleared_count} images.'
         )
 
+    def increase_text_size(self):
+        """Increase the font size of all text input fields"""
+        if self.current_text_size < self.max_text_size:
+            self.current_text_size += self.text_size_step
+            self._apply_text_size_to_all_widgets()
+            # Save the new text size to settings
+            SettingsDialog.save_ui_preferences(text_size=self.current_text_size)
+            debug_ui_events(f"Increased text size to {self.current_text_size}px - saved to settings")
+
+    def decrease_text_size(self):
+        """Decrease the font size of all text input fields"""
+        if self.current_text_size > self.min_text_size:
+            self.current_text_size -= self.text_size_step
+            self._apply_text_size_to_all_widgets()
+            # Save the new text size to settings
+            SettingsDialog.save_ui_preferences(text_size=self.current_text_size)
+            debug_ui_events(f"Decreased text size to {self.current_text_size}px - saved to settings")
+
+    def _apply_text_size_to_all_widgets(self):
+        """Apply the current text size to all image card widgets"""
+        if hasattr(self, 'image_flow_manager') and self.image_flow_manager:
+            # Update the flow manager's default text size and apply to all widgets
+            self.image_flow_manager.set_text_size(self.current_text_size)
+            debug_ui_events(f"Applied text size {self.current_text_size}px to {len(self.image_flow_manager.image_widgets)} widgets")
+
     def create_preview(self, file_path):
         """Create and store a preview of the image with metadata reading for accurate progress"""
         try:
@@ -3261,16 +3410,29 @@ class MainWindow(QMainWindow):
     
     def open_files(self):
         debug_file_dialogs("Opening file dialog...")
+        
+        # Get the last used path from settings, with fallback
+        ui_prefs = SettingsDialog.get_ui_preferences()
+        last_path = ui_prefs.get('last_path', '')
+        
+        # Check if last path still exists, fallback to empty string if not
+        start_path = last_path if last_path and os.path.exists(last_path) else ""
+        
         files, _ = QFileDialog.getOpenFileNames(
             self,
             "Select Images",
-            "",
+            start_path,
             "Images (*.png *.xpm *.jpg *.jpeg *.gif *.tiff *.tif *.webp)"
         )
         
         debug_file_dialogs(f"Selected files: {files}")
         
         if files:
+            # Save the directory of the selected files as the new last path
+            new_last_path = os.path.dirname(files[0])
+            SettingsDialog.save_ui_preferences(last_path=new_last_path)
+            debug_file_dialogs(f"Saved last path: {new_last_path}")
+            
             # Extract folder path for window title
             # File dialog guarantees all selected files are from the same folder
             common_folder = os.path.dirname(files[0])
@@ -3298,16 +3460,28 @@ class MainWindow(QMainWindow):
     def open_folder(self):
         """Open a folder dialog and import all image files from the selected folder"""
         debug_file_dialogs("Opening folder dialog...")
+        
+        # Get the last used path from settings, with fallback
+        ui_prefs = SettingsDialog.get_ui_preferences()
+        last_path = ui_prefs.get('last_path', '')
+        
+        # Check if last path still exists, fallback to empty string if not
+        start_path = last_path if last_path and os.path.exists(last_path) else ""
+        
         folder_path = QFileDialog.getExistingDirectory(
             self,
             "Select Folder",
-            "",
+            start_path,
             QFileDialog.ShowDirsOnly
         )
         
         debug_file_dialogs(f"Selected folder: {folder_path}")
         
         if folder_path:
+            # Save the selected folder as the new last path
+            SettingsDialog.save_ui_preferences(last_path=folder_path)
+            debug_file_dialogs(f"Saved last path: {folder_path}")
+            
             # Update window title to show the current folder
             self.update_window_title(folder_path)
             
@@ -3711,8 +3885,8 @@ class MainWindow(QMainWindow):
             self.tag_manager.raise_()
     
     def initialize_cloudinary(self):
-        """Initialize Cloudinary integration with proper error handling"""
-        debug_startup("Initializing Cloudinary integration...")
+        """Initialize Cloudinary integration with unified validation (called after settings changes)"""
+        debug_startup("Re-initializing Cloudinary integration after settings change...")
         
         # Initialize as disconnected
         self.cloudinary_connected = False
@@ -3726,18 +3900,38 @@ class MainWindow(QMainWindow):
             
             debug_cloudinary(f"Retrieved settings: {cloudinary_settings}")
             
-            # Check if Cloudinary is configured
-            if not SettingsDialog.is_cloudinary_configured():
-                debug_cloudinary("Cloudinary not configured - skipping CloudinaryUpdater setup")
-                debug_cloudinary("Configure Cloudinary settings in File > Settings to enable cloud features")
-                self._update_cloudinary_ui_status(False, "Not configured")
+            # Use unified validation method for comprehensive setup check
+            validation_result = SettingsDialog.validate_cloudinary_complete_setup(
+                cloudinary_settings=cloudinary_settings,
+                test_connection=True,
+                show_messages=False  # Don't show messages - user was already informed in settings dialog
+            )
+            
+            debug_cloudinary(f"Cloudinary validation result: {validation_result['message']}")
+            
+            # Check if credentials are completely missing or invalid (not connected)
+            if not validation_result['connected']:
+                # Handle different types of validation failures when not connected
+                if validation_result['missing_fields'] and any(field in validation_result['missing_fields'] for field in ['Cloud Name', 'API Key', 'API Secret']):
+                    debug_cloudinary(f"Cloudinary credentials missing: {validation_result['missing_fields']}")
+                    self._update_cloudinary_ui_status(False, "Not configured")
+                elif validation_result['issues']:
+                    debug_cloudinary(f"Cloudinary configuration issues: {validation_result['issues']}")
+                    self._update_cloudinary_ui_status(False, "Configuration issues")
+                else:
+                    debug_cloudinary("Cloudinary credentials valid but connection failed")
+                    self._update_cloudinary_ui_status(False, "Connection failed")
                 return
             
-            # Create CloudinaryUpdater instance
+            # If we reach here, credentials are valid and connection succeeded
+            # But we need to check if ALL fields are present for full functionality
+            setup_complete = validation_result['valid']  # True only if ALL fields are valid
+            
+            debug_cloudinary(f"Cloudinary credentials validated and connected. Complete setup: {setup_complete}")
+            
+            # Create CloudinaryUpdater instance (even for incomplete setup to show credits bar)
             self.cloudinary_updater = CloudinaryUpdater()
             debug_cloudinary("CloudinaryUpdater instance created successfully")
-            
-            debug_cloudinary("Cloudinary settings found - configuring CloudinaryUpdater...")
             
             # Prepare config in the format expected by CloudinaryUpdater
             cloudinary_config = [
@@ -3745,7 +3939,7 @@ class MainWindow(QMainWindow):
                 cloudinary_settings.get('cloud_name', ''),
                 cloudinary_settings.get('api_key', ''),
                 cloudinary_settings.get('api_secret', ''),
-                cloudinary_settings.get('max_size', '10')  # Default 10MB
+                cloudinary_settings.get('max_size', '3.2')  # Use saved max_size setting
             ]
             
             debug_cloudinary(f"Cloudinary config prepared: {[cloudinary_config[0], cloudinary_config[1], '*****', '*****', cloudinary_config[4]]}")
@@ -3754,31 +3948,35 @@ class MainWindow(QMainWindow):
             self.cloudinary_updater.setCloudinaryUpdaterConfig(cloudinary_config)
             debug_cloudinary("CloudinaryUpdater configured successfully")
             
-            # Test initial connection and retrieve account info
-            debug_cloudinary("Testing Cloudinary connection and retrieving account info...")
+            # Set up async communication
+            debug_cloudinary("Setting up Cloudinary async communication...")
             try:
                 # Connect signals to capture the response
                 self.cloudinary_updater.beginning_signal.connect(self.on_cloudinary_status_received)
                 self.cloudinary_updater.update_ui_signal.connect(self.on_cloudinary_ui_update)
                 
-                # Request account status
+                # Request account status (async) - this will populate the UI (credits bar)
                 self.cloudinary_updater.cloud_status()
-                debug_cloudinary("Cloudinary status request sent")
+                debug_cloudinary("Cloudinary status request sent asynchronously")
                 
-                # For now, assume connection will succeed (will be updated by signal handlers)
-                # The actual status will be set when we receive the response
+                # Mark as connected ONLY if setup is complete
+                self.cloudinary_connected = setup_complete
+                debug_cloudinary(f"Cloudinary connection status: {self.cloudinary_connected} (setup complete: {setup_complete})")
                 
-            except Exception as e:
-                debug_errors(f"Error testing Cloudinary connection: {str(e)}")
-                self.cloudinary_connected = False
-                self._update_cloudinary_ui_status(False, "Connection failed")
+                # Update UI based on setup completeness
+                if setup_complete:
+                    self._update_cloudinary_ui_status(True, "Ready")
+                else:
+                    # Show credits bar since we're connected, but keep upload disabled
+                    # We need to show the credits bar even for incomplete setup
+                    self._show_cloudinary_ui_connected_but_incomplete("Setup incomplete")
+                
+            except Exception as conn_error:
+                debug_errors(f"Cloudinary async setup failed: {conn_error}")
+                self._update_cloudinary_ui_status(False, "Async setup failed")
                 
         except Exception as e:
-            debug_errors(f"[ERROR] Failed to initialize Cloudinary: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            self.cloudinary_updater = None
-            self.cloudinary_connected = False
+            debug_errors(f"Failed to initialize Cloudinary integration: {e}")
             self._update_cloudinary_ui_status(False, "Initialization failed")
     
     def update_cloudinary_status_for_loaded_images(self):
