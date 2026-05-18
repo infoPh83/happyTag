@@ -13,7 +13,8 @@ on the network drive. Features include:
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
                              QTreeWidget, QTreeWidgetItem, QComboBox, QLabel,
                              QLineEdit, QProgressDialog, QMessageBox, QMenu,
-                             QHeaderView, QCheckBox, QGroupBox, QTreeWidgetItemIterator)
+                             QHeaderView, QCheckBox, QGroupBox, QTreeWidgetItemIterator,
+                             QApplication)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QBrush, QIcon
 
@@ -204,15 +205,29 @@ class FolderStatusDialog(QDialog):
             progress_dlg = QProgressDialog("Scanning root folders...", "Cancel", 0, 100, self)
             progress_dlg.setWindowModality(Qt.WindowModal)
             progress_dlg.setMinimumDuration(500)
+            progress_dlg.setAutoClose(False)
+            progress_dlg.setAutoReset(False)
+            
+            # Track last update
+            last_update = [0]
+            update_interval = 10  # Update every 10 items for root level
             
             # Create progress callback
             def on_progress(scan_progress: ScanProgress):
                 if scan_progress.is_cancelled:
                     return
-                progress_dlg.setValue(scan_progress.get_percentage())
-                progress_dlg.setLabelText(f"Scanning: {scan_progress.current_path}")
+                    
                 if progress_dlg.wasCanceled():
                     scan_progress.is_cancelled = True
+                    return
+                
+                # Update less frequently
+                total_items = scan_progress.scanned_folders + scan_progress.scanned_files
+                if total_items - last_update[0] >= update_interval or scan_progress.get_percentage() >= 100:
+                    last_update[0] = total_items
+                    progress_dlg.setValue(scan_progress.get_percentage())
+                    progress_dlg.setLabelText(f"Scanning: {scan_progress.current_path}")
+                    QApplication.processEvents()
             
             # Scan root folders
             root_items = self.scanner.scan_root_folders(progress_callback=on_progress)
@@ -321,14 +336,28 @@ class FolderStatusDialog(QDialog):
             progress_dlg = QProgressDialog(f"Scanning {folder_item.name}...", "Cancel", 0, 100, self)
             progress_dlg.setWindowModality(Qt.WindowModal)
             progress_dlg.setMinimumDuration(500)
+            progress_dlg.setAutoClose(False)
+            progress_dlg.setAutoReset(False)
+            
+            # Track last update
+            last_update = [0]
+            update_interval = 20  # Update every 20 items
             
             # Create progress callback
             def on_progress(scan_progress: ScanProgress):
                 if scan_progress.is_cancelled:
                     return
-                progress_dlg.setValue(scan_progress.get_percentage())
+                    
                 if progress_dlg.wasCanceled():
                     scan_progress.is_cancelled = True
+                    return
+                
+                # Update less frequently
+                total_items = scan_progress.scanned_folders + scan_progress.scanned_files
+                if total_items - last_update[0] >= update_interval or scan_progress.get_percentage() >= 100:
+                    last_update[0] = total_items
+                    progress_dlg.setValue(scan_progress.get_percentage())
+                    QApplication.processEvents()
             
             # Scan folder contents (non-recursive, just immediate children)
             self.scanner.scan_folder_contents(folder_item, recursive=False, progress_callback=on_progress)
@@ -405,9 +434,13 @@ class FolderStatusDialog(QDialog):
                     return
                 
                 # Show progress dialog
-                progress_dlg = QProgressDialog(f"Updating statuses...", "Cancel", 0, 100, self)
+                progress_dlg = QProgressDialog(f"Updating statuses for '{folder_item.name}' and contents...", None, 0, 0, self)
                 progress_dlg.setWindowModality(Qt.WindowModal)
-                progress_dlg.setMinimumDuration(500)
+                progress_dlg.setMinimumDuration(0)
+                progress_dlg.setCancelButton(None)  # Can't cancel this operation
+                progress_dlg.setAutoClose(True)
+                progress_dlg.show()
+                QApplication.processEvents()
                 
                 # Set status recursively
                 self.status_manager.set_folder_recursive(relative_path, status, scan_filesystem=True)
@@ -438,21 +471,37 @@ class FolderStatusDialog(QDialog):
             return
         
         try:
-            # Show progress dialog
+            # Show progress dialog - create once before scanning
             progress_dlg = QProgressDialog(f"Deep scanning {folder_item.name}...", "Cancel", 0, 100, self)
             progress_dlg.setWindowModality(Qt.WindowModal)
-            progress_dlg.setMinimumDuration(0)
+            progress_dlg.setMinimumDuration(0)  # Show immediately
+            progress_dlg.setAutoClose(False)  # Don't auto-close
+            progress_dlg.setAutoReset(False)  # Don't auto-reset
+            progress_dlg.show()  # Force show immediately
+            
+            # Track last update to avoid too frequent updates
+            last_update = [0]  # Use list for closure modification
+            update_interval = 50  # Update every 50 items
             
             # Create progress callback
             def on_progress(scan_progress: ScanProgress):
                 if scan_progress.is_cancelled:
                     return
-                progress_dlg.setValue(scan_progress.get_percentage())
-                progress_dlg.setLabelText(f"Scanning: {scan_progress.current_path}\n"
-                                        f"Folders: {scan_progress.scanned_folders}/{scan_progress.total_folders} | "
-                                        f"Files: {scan_progress.scanned_files}/{scan_progress.total_files}")
+                    
+                # Check if cancelled by user
                 if progress_dlg.wasCanceled():
                     scan_progress.is_cancelled = True
+                    return
+                
+                # Update less frequently to avoid UI lag
+                total_items = scan_progress.scanned_folders + scan_progress.scanned_files
+                if total_items - last_update[0] >= update_interval or scan_progress.get_percentage() >= 100:
+                    last_update[0] = total_items
+                    progress_dlg.setValue(scan_progress.get_percentage())
+                    progress_dlg.setLabelText(f"Scanning: {scan_progress.current_path}\n"
+                                            f"Folders: {scan_progress.scanned_folders}/{scan_progress.total_folders} | "
+                                            f"Files: {scan_progress.scanned_files}/{scan_progress.total_files}")
+                    QApplication.processEvents()  # Allow UI to update
             
             # Scan recursively
             self.scanner.scan_folder_contents(folder_item, recursive=True, progress_callback=on_progress)
