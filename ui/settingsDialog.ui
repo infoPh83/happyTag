@@ -489,7 +489,14 @@
           </spacer>
          </item>
          <item>
-          <layout class="QGridLayout" name="gridLayout_5" rowstretch="0,0,0,0,0" columnstretch="5,1,0">
+          <layout class="QGridLayout" name="gridLayout_5" rowstretch="0,0,0,0,0,0" columnstretch="5,1,0">
+           <item row="0" column="0">
+            <widget class="QLabel" name="label_6">
+             <property name="text">
+              <string>Log files path</string>
+             </property>
+            </widget>
+           </item>
            <item row="1" column="1">
             <widget class="QPushButton" name="logFolder_button">
              <property name="text">
@@ -511,6 +518,13 @@
             </widget>
            </item>
            <item row="2" column="0">
+            <widget class="QLabel" name="label_8">
+             <property name="text">
+              <string>Network root folder (Folder Manager)</string>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="0">
             <widget class="QLabel" name="networkRootFolder_path">
              <property name="text">
               <string>Network root folder</string>
@@ -523,31 +537,24 @@
              </property>
             </widget>
            </item>
-           <item row="2" column="1">
+           <item row="3" column="1">
             <widget class="QPushButton" name="networkRootFolder_button">
              <property name="text">
               <string>locate..</string>
              </property>
             </widget>
            </item>
-           <item row="4" column="0">
+           <item row="5" column="0">
             <widget class="QLabel" name="settingsPathLabel">
              <property name="text">
               <string>TextLabel</string>
              </property>
             </widget>
            </item>
-           <item row="3" column="0">
+           <item row="4" column="0">
             <widget class="QLabel" name="label_7">
              <property name="text">
               <string>System settings</string>
-             </property>
-            </widget>
-           </item>
-           <item row="0" column="0">
-            <widget class="QLabel" name="label_6">
-             <property name="text">
-              <string>Log files path</string>
              </property>
             </widget>
            </item>
