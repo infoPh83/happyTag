@@ -46,6 +46,10 @@ tests_archive/
 test_*.py
 debug_*.py
 check_*.py
+test images/
+test images 2/
+test_images/
+debug functions/
 
 # Temporary files
 *.tmp
