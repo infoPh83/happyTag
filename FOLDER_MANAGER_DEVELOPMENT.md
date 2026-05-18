@@ -41,6 +41,24 @@
 
 **Tests:** 7/7 passing (test_folder_scanner.py)
 
+## Phase 3: UI Dialog ✅ COMPLETED
+
+### Created Modules:
+
+5. **folder_status_dialog.py**
+   - QDialog with QTreeWidget for folder hierarchy
+   - Lazy loading - expand triggers scan_folder_contents()
+   - Status management with color coding
+   - Context menu for bulk operations
+   - Deep scan (recursive) support
+   - Progress dialogs for long operations
+   - Search and status filtering
+   - Expand/Collapse all functionality
+   - Signal emission on status updates
+
+**Tests:** 8/8 passing (test_folder_status_dialog.py)
+**Total Tests:** 49/49 passing across all modules
+
 ### Status Constants:
 - `STATUS_DISCARDED` - Won't be processed
 - `STATUS_NOT_EVALUATED` - Default for new files
@@ -52,11 +70,11 @@
 ### Supported Image Types:
 .jpg, .jpeg, .png, .tiff, .tif, .webp, .heic, .heif, .raw, .cr2, .nef, .arw, .dng, .psd, .bmp, .gif
 
-## Next: Phase 3 - UI Dialog & Integration
+## Next: Phase 4 - Settings & Main Window Integration
 
 ### To Do:
 1. ✅ folder_scanner.py - Directory scanning with lazy loading **COMPLETED**
-2. folder_status_dialog.py - QDialog UI with tree view **NEXT**
-3. Settings integration - Add network root path
+2. ✅ folder_status_dialog.py - QDialog UI with tree view **COMPLETED**
+3. Settings integration - Add network root path **NEXT**
 4. Main window integration - Menu item and filtering
 
