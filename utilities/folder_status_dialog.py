@@ -630,7 +630,11 @@ class FolderStatusDialog(QDialog):
         # Get absolute path
         absolute_path = self.path_mapper.to_absolute(relative_path)
         
-        if not absolute_path.exists():
+        # Convert to Path object for checking
+        from pathlib import Path
+        path_obj = Path(absolute_path)
+        
+        if not path_obj.exists():
             QMessageBox.warning(
                 self,
                 "Folder Not Found",
@@ -641,6 +645,5 @@ class FolderStatusDialog(QDialog):
         # Close dialog and signal parent to load folder
         self.accept()
         
-        # Emit signal with folder path for parent to handle
-        # (Main window will catch this via the accepted signal and load the folder)
-        self.selected_folder_path = str(absolute_path)
+        # Store the selected folder path (as string) for parent to handle
+        self.selected_folder_path = absolute_path
