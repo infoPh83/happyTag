@@ -97,6 +97,9 @@ class FolderStatusDialog(QDialog):
         self.filter_text = ""
         self.filter_status: Optional[str] = None
         
+        # Selected folder path (set when double-clicking)
+        self.selected_folder_path: Optional[str] = None
+        
         # Setup UI
         self._setup_ui()
         
@@ -109,8 +112,8 @@ class FolderStatusDialog(QDialog):
         
         # Tree view (create first so it can be referenced by other components)
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(['Name', 'Status', 'Files', 'Folders', 'Path'])
-        self.tree.setColumnWidth(0, 300)
+        self.tree.setHeaderLabels(['Name', 'Status', 'Images', 'Folders'])
+        self.tree.setColumnWidth(0, 350)
         self.tree.setColumnWidth(1, 150)
         self.tree.setColumnWidth(2, 80)
         self.tree.setColumnWidth(3, 80)
@@ -118,6 +121,7 @@ class FolderStatusDialog(QDialog):
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
         self.tree.itemExpanded.connect(self._on_item_expanded)
+        self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         
         # Top section: filters and controls
         top_layout = self._create_top_section()
@@ -245,21 +249,26 @@ class FolderStatusDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load folders: {str(e)}")
     
-    def _add_item_to_tree(self, folder_item: FolderItem, parent_tree_item: Optional[QTreeWidgetItem]) -> QTreeWidgetItem:
+    def _add_item_to_tree(self, folder_item: FolderItem, parent_tree_item: Optional[QTreeWidgetItem]) -> Optional[QTreeWidgetItem]:
         """
-        Add a FolderItem to the tree.
+        Add a FolderItem to the tree (folders only, no files).
         
         Args:
             folder_item: The folder/file item to add
             parent_tree_item: Parent tree widget item (None for root)
         
         Returns:
-            The created QTreeWidgetItem
+            The created QTreeWidgetItem, or None if item is a file (skipped)
         """
+        # Skip files - only show folders
+        if not folder_item.is_directory:
+            return None
+        
         # Create tree item
         tree_item = QTreeWidgetItem()
         tree_item.setText(0, folder_item.name)
-        tree_item.setText(4, folder_item.relative_path)
+        # Store path in data for retrieval (not displayed)
+        tree_item.setData(0, Qt.UserRole, folder_item.relative_path)
         
         # Store reference
         self.loaded_items[folder_item.relative_path] = folder_item
@@ -274,20 +283,24 @@ class FolderStatusDialog(QDialog):
         else:
             self.tree.addTopLevelItem(tree_item)
         
-        # If it's a directory and has children, add placeholder or children
-        if folder_item.is_directory:
-            if folder_item.is_loaded:
-                # Add all children
-                for child in folder_item.children:
+        # If it has children, add placeholder or children
+        if folder_item.is_loaded:
+            # Add only folder children
+            for child in folder_item.children:
+                if child.is_directory:
                     self._add_item_to_tree(child, tree_item)
-            else:
-                # Add placeholder to enable expand arrow
-                if folder_item.status != STATUS_DISCARDED:
-                    placeholder = QTreeWidgetItem()
-                    placeholder.setText(0, "Loading...")
-                    tree_item.addChild(placeholder)
+        else:
+            # Add placeholder to enable expand arrow (if not discarded)
+            if folder_item.status != STATUS_DISCARDED:
+                placeholder = QTreeWidgetItem()
+                placeholder.setText(0, "Loading...")
+                tree_item.addChild(placeholder)
         
         return tree_item
+    
+    def _get_item_path(self, tree_item: QTreeWidgetItem) -> str:
+        """Get the relative path stored in a tree item."""
+        return tree_item.data(0, Qt.UserRole) or ""
     
     def _update_tree_item_status(self, tree_item: QTreeWidgetItem, folder_item: FolderItem):
         """Update tree item's status display and color."""
@@ -301,24 +314,20 @@ class FolderStatusDialog(QDialog):
         for col in range(tree_item.columnCount()):
             tree_item.setBackground(col, QBrush(config['color']))
         
-        # Set counts if directory
-        if folder_item.is_directory:
-            # Count files and folders in children
-            if folder_item.is_loaded:
-                file_count = sum(1 for c in folder_item.children if not c.is_directory)
-                folder_count = sum(1 for c in folder_item.children if c.is_directory)
-                tree_item.setText(2, str(file_count))
-                tree_item.setText(3, str(folder_count))
-            else:
-                tree_item.setText(2, "?")
-                tree_item.setText(3, "?")
+        # Set counts (images and folders)
+        if folder_item.is_loaded:
+            # Count only image files (not all files)
+            image_count = sum(1 for c in folder_item.children if not c.is_directory)
+            folder_count = sum(1 for c in folder_item.children if c.is_directory)
+            tree_item.setText(2, str(image_count))
+            tree_item.setText(3, str(folder_count))
         else:
-            tree_item.setText(2, "")
-            tree_item.setText(3, "")
+            tree_item.setText(2, "?")
+            tree_item.setText(3, "?")
     
     def _on_item_expanded(self, tree_item: QTreeWidgetItem):
         """Handle tree item expansion - load children if not loaded."""
-        relative_path = tree_item.text(4)
+        relative_path = self._get_item_path(tree_item)
         folder_item = self.loaded_items.get(relative_path)
         
         if not folder_item or not folder_item.is_directory:
@@ -383,7 +392,7 @@ class FolderStatusDialog(QDialog):
         menu = QMenu(self)
         
         # Get the folder item
-        relative_path = item.text(4)
+        relative_path = self._get_item_path(item)
         folder_item = self.loaded_items.get(relative_path)
         
         if not folder_item:
@@ -414,7 +423,7 @@ class FolderStatusDialog(QDialog):
     
     def _set_item_status(self, tree_item: QTreeWidgetItem, status: str, recursive: bool):
         """Set status for an item, optionally recursive."""
-        relative_path = tree_item.text(4)
+        relative_path = self._get_item_path(tree_item)
         folder_item = self.loaded_items.get(relative_path)
         
         if not folder_item:
@@ -464,7 +473,7 @@ class FolderStatusDialog(QDialog):
     
     def _deep_scan_folder(self, tree_item: QTreeWidgetItem):
         """Perform a deep recursive scan of a folder."""
-        relative_path = tree_item.text(4)
+        relative_path = self._get_item_path(tree_item)
         folder_item = self.loaded_items.get(relative_path)
         
         if not folder_item or not folder_item.is_directory:
@@ -563,7 +572,7 @@ class FolderStatusDialog(QDialog):
         iterator = QTreeWidgetItemIterator(self.tree)
         while iterator.value():
             item = iterator.value()
-            relative_path = item.text(4)
+            relative_path = self._get_item_path(item)
             folder_item = self.loaded_items.get(relative_path)
             
             visible = True
@@ -608,4 +617,30 @@ class FolderStatusDialog(QDialog):
     def get_selected_paths(self) -> List[str]:
         """Get list of currently selected relative paths."""
         selected_items = self.tree.selectedItems()
-        return [item.text(4) for item in selected_items]
+        return [self._get_item_path(item) for item in selected_items]
+    
+    def _on_item_double_clicked(self, tree_item: QTreeWidgetItem, column: int):
+        """Handle double-click on folder - load images into main window."""
+        relative_path = self._get_item_path(tree_item)
+        folder_item = self.loaded_items.get(relative_path)
+        
+        if not folder_item:
+            return
+        
+        # Get absolute path
+        absolute_path = self.path_mapper.to_absolute(relative_path)
+        
+        if not absolute_path.exists():
+            QMessageBox.warning(
+                self,
+                "Folder Not Found",
+                f"The folder does not exist:\n\n{absolute_path}"
+            )
+            return
+        
+        # Close dialog and signal parent to load folder
+        self.accept()
+        
+        # Emit signal with folder path for parent to handle
+        # (Main window will catch this via the accepted signal and load the folder)
+        self.selected_folder_path = str(absolute_path)

@@ -3088,6 +3088,58 @@ class MainWindow(QMainWindow):
                 self.start_integrated_processing(image_files, "folder", non_image_files, len(unsupported_image_files))
             else:
                 debug_file_dialogs("No image files found in the selected folder")
+    
+    def load_folder_direct(self, folder_path: str):
+        """Load images from a folder path directly (called from Folder Manager)"""
+        debug_file_ops(f"Loading folder directly: {folder_path}")
+        
+        if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
+            QMessageBox.warning(self, "Invalid Folder", f"Folder does not exist:\n\n{folder_path}")
+            return
+        
+        # Save as last path
+        SettingsDialog.save_ui_preferences(last_path=folder_path)
+        
+        # Update window title
+        self.update_window_title(folder_path)
+        
+        # Define supported image extensions
+        image_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.tiff', '.tif', '.webp'}
+        unsupported_image_extensions = {'.bmp', '.psd'}
+        
+        # Find all image files
+        image_files = []
+        non_image_files = 0
+        unsupported_image_files = []
+        
+        for filename in os.listdir(folder_path):
+            file_path = os.path.join(folder_path, filename)
+            if os.path.isfile(file_path):
+                _, ext = os.path.splitext(filename.lower())
+                if ext in image_extensions:
+                    image_files.append(file_path)
+                elif ext in unsupported_image_extensions:
+                    unsupported_image_files.append(file_path)
+                    format_name = "BMP" if ext == '.bmp' else "PSD"
+                    self.unsupported_files.append((file_path, f"{format_name} format not currently supported"))
+                else:
+                    non_image_files += 1
+        
+        if image_files:
+            # Clear previous data
+            self.metadata_errors.clear()
+            self.image_files = []
+            self.image_previews.clear()
+            self.image_metadata.clear()
+            self.selected_images.clear()
+            for widget in self.image_widgets:
+                widget.setParent(None)
+            self.image_widgets.clear()
+            
+            # Start integrated processing
+            self.start_integrated_processing(image_files, "folder", non_image_files, len(unsupported_image_files))
+        else:
+            QMessageBox.information(self, "No Images", "No image files found in the selected folder.")
 
     def _convert_bmp_files_to_jpeg(self, image_files):
         """
@@ -3477,7 +3529,14 @@ class MainWindow(QMainWindow):
             self.folder_manager_dialog.statuses_updated.connect(self.on_folder_statuses_updated)
             
             # Show as modal dialog
-            self.folder_manager_dialog.exec_()
+            result = self.folder_manager_dialog.exec_()
+            
+            # If user double-clicked a folder, load its contents
+            if result == QDialog.Accepted and hasattr(self.folder_manager_dialog, 'selected_folder_path'):
+                folder_path = self.folder_manager_dialog.selected_folder_path
+                if folder_path:
+                    debug_ui_events(f"Loading folder from Folder Manager: {folder_path}")
+                    self.load_folder_direct(folder_path)
             
         except Exception as e:
             from PyQt5.QtWidgets import QMessageBox
