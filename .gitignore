@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist-temp/
+*.egg
+MANIFEST
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# PyInstaller
+build/
+dist/
+*.spec.bak
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Settings and logs
+settings.pkl
+*.log
+logs/
+happytag_debug.log
+happytag_verbose_debug.log
+
+# Test files and archives
+tests_archive/
+test_*.py
+debug_*.py
+check_*.py
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+.*.bak
+
+# Databases (if they contain sensitive data)
+# Uncomment if you don't want to share tag databases
+# *.ods
+# *.xlsx
+# *.xlsm
+
+# Images (usually too large for git)
+test_image.jpg
+test images/
+sample_images/
+
+# Cloudinary credentials
+.cloudinary/
+cloudinary_config.json
+
+# Session logs
+*_session_*.txt
