@@ -24,6 +24,23 @@
    - Path remapping for moved folders
    - Image file type filtering
 
+## Phase 2: Scanner ✅ COMPLETED
+
+### Created Modules:
+
+4. **folder_scanner.py**
+   - Lazy loading directory scanner
+   - Shallow scan (root folders only)
+   - Deep scan on demand (recursive or single-level)
+   - Discarded folder skipping during scans
+   - Progress tracking with callbacks
+   - Cancellation support
+   - Image file filtering (12 extensions)
+   - Size estimation for progress bars
+   - FolderItem tree structure
+
+**Tests:** 7/7 passing (test_folder_scanner.py)
+
 ### Status Constants:
 - `STATUS_DISCARDED` - Won't be processed
 - `STATUS_NOT_EVALUATED` - Default for new files
@@ -35,11 +52,11 @@
 ### Supported Image Types:
 .jpg, .jpeg, .png, .tiff, .tif, .webp, .heic, .heif, .raw, .cr2, .nef, .arw, .dng, .psd, .bmp, .gif
 
-## Next: Phase 2 - Scanner & UI
+## Next: Phase 3 - UI Dialog & Integration
 
 ### To Do:
-1. folder_scanner.py - Directory scanning with lazy loading
-2. folder_status_dialog.py - QDialog UI with tree view
+1. ✅ folder_scanner.py - Directory scanning with lazy loading **COMPLETED**
+2. folder_status_dialog.py - QDialog UI with tree view **NEXT**
 3. Settings integration - Add network root path
 4. Main window integration - Menu item and filtering
 
