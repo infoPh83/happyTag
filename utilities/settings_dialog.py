@@ -38,6 +38,9 @@ class SettingsDialog(QDialog):
         self.cloudinary_tags_path = ""
         self.buildings_file_path = ""
         
+        # Folder Manager settings
+        self.network_root_folder = ""
+        
         # Cloudinary settings
         self.log_folder_path = ""
         self.cloudinary_cloud_name = ""
@@ -52,6 +55,10 @@ class SettingsDialog(QDialog):
         
         # Connect Cloudinary buttons and controls
         self.logFolder_button.clicked.connect(self.select_log_folder)
+        
+        # Connect Folder Manager button
+        if hasattr(self, 'networkRootFolder_button'):
+            self.networkRootFolder_button.clicked.connect(self.select_network_root_folder)
         
         # Connect Cloudinary test connection button
         if hasattr(self, 'testCloudinaryConnection'):
@@ -160,6 +167,28 @@ class SettingsDialog(QDialog):
         if folder_path:
             self.log_folder_path = folder_path
             self.logFile_path.setText(folder_path)
+    
+    def select_network_root_folder(self):
+        """Select network root folder for Folder Manager"""
+        folder_path = QFileDialog.getExistingDirectory(
+            self,
+            "Select Network Root Folder",
+            "",
+            QFileDialog.ShowDirsOnly
+        )
+        
+        if folder_path:
+            # Validate the folder exists and is accessible
+            from pathlib import Path
+            if Path(folder_path).exists():
+                self.network_root_folder = folder_path
+                self.networkRootFolder_path.setText(folder_path)
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Invalid Folder",
+                    "The selected folder does not exist or is not accessible."
+                )
             
     def update_test_button_state(self):
         """Enable/disable the test connection button based on whether all fields are filled"""
@@ -706,6 +735,9 @@ class SettingsDialog(QDialog):
             'cloudinary_tags_path': self.cloudinary_tags_path if self.cloudinaryTags_checkbox.isChecked() else "",
             'buildings_path': self.buildings_file_path if self.buildings_checkbox.isChecked() else "",
             
+            # Folder Manager settings
+            'network_root_folder': self.network_root_folder,
+            
             # Cloudinary settings
             'cloudinary_log_folder': self.log_folder_path,
             'cloudinary_cloud_name': self.cloudName_text.text().strip(),
@@ -789,6 +821,9 @@ class SettingsDialog(QDialog):
                 
                 # Load Cloudinary settings
                 self.load_cloudinary_settings(settings)
+                
+                # Load Folder Manager settings
+                self.load_folder_manager_settings(settings)
                         
                 # Update ALL SET checkbox
                 self.update_all_set_checkbox()
@@ -814,6 +849,23 @@ class SettingsDialog(QDialog):
                 self.logFile_path.setText("Click 'Locate..' to select folder")
         else:
             self.logFile_path.setText("Click 'Locate..' to select folder")
+    
+    def load_folder_manager_settings(self, settings):
+        """Load Folder Manager settings from the settings dictionary"""
+        # Load network root folder
+        if settings.get('network_root_folder'):
+            self.network_root_folder = settings['network_root_folder']
+            if os.path.exists(self.network_root_folder):
+                if hasattr(self, 'networkRootFolder_path'):
+                    self.networkRootFolder_path.setText(self.network_root_folder)
+            else:
+                # Folder no longer exists, clear the setting
+                self.network_root_folder = ""
+                if hasattr(self, 'networkRootFolder_path'):
+                    self.networkRootFolder_path.setText("Click 'Locate..' to select network folder")
+        else:
+            if hasattr(self, 'networkRootFolder_path'):
+                self.networkRootFolder_path.setText("Click 'Locate..' to select network folder")
 
         # Load Cloudinary API settings
         self.cloudName_text.setText(settings.get('cloudinary_cloud_name', ''))

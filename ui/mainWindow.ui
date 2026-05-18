@@ -281,8 +281,15 @@
     </property>
     <addaction name="actionTags_Window"/>
    </widget>
+   <widget class="QMenu" name="menuTools">
+    <property name="title">
+     <string>Tools</string>
+    </property>
+    <addaction name="actionFolder_Manager"/>
+   </widget>
    <addaction name="menuFile"/>
    <addaction name="menuWindow"/>
+   <addaction name="menuTools"/>
   </widget>
   <widget class="QStatusBar" name="statusbar">
    <property name="sizeGripEnabled">
@@ -332,6 +339,14 @@
    </property>
    <property name="shortcut">
     <string>Ctrl+U</string>
+   </property>
+  </action>
+  <action name="actionFolder_Manager">
+   <property name="text">
+    <string>Folder Manager...</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+M</string>
    </property>
   </action>
  </widget>

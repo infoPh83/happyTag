@@ -278,8 +278,15 @@ class MainWindow(QMainWindow):
         # Initialize tag manager as None (will be created when needed)
         self.tag_manager = None
         
+        # Initialize folder manager dialog as None (will be created when needed)
+        self.folder_manager_dialog = None
+        
         # Connect Tags Window action
         self.actionTags_Window.triggered.connect(self.show_tag_manager)
+        
+        # Connect Folder Manager action
+        if hasattr(self, 'actionFolder_Manager'):
+            self.actionFolder_Manager.triggered.connect(self.show_folder_manager)
         
         # Connect the Tags Window menu action
         if hasattr(self, 'menuTags_Window'):
@@ -3429,6 +3436,62 @@ class MainWindow(QMainWindow):
         if self.tag_manager.isHidden():
             self.tag_manager.show()
             self.tag_manager.raise_()
+    
+    def show_folder_manager(self):
+        """Create and show the folder manager dialog"""
+        # Get network root folder from settings
+        settings = SettingsDialog.get_saved_settings()
+        network_root = settings.get('network_root_folder', '')
+        
+        if not network_root:
+            from PyQt5.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                self,
+                "Network Root Folder Not Set",
+                "Network root folder is not configured.\n\nWould you like to set it now in Settings?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                self.show_settings()
+            return
+        
+        # Check if folder exists
+        from pathlib import Path
+        if not Path(network_root).exists():
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Network Folder Not Found",
+                f"The configured network root folder does not exist:\n\n{network_root}\n\nPlease update it in Settings."
+            )
+            return
+        
+        # Create and show dialog
+        try:
+            from utilities.folder_status_dialog import FolderStatusDialog
+            
+            # Create new dialog each time (so it refreshes data)
+            self.folder_manager_dialog = FolderStatusDialog(network_root, self)
+            
+            # Connect statuses_updated signal to update UI if needed
+            self.folder_manager_dialog.statuses_updated.connect(self.on_folder_statuses_updated)
+            
+            # Show as modal dialog
+            self.folder_manager_dialog.exec_()
+            
+        except Exception as e:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to open Folder Manager:\n\n{str(e)}"
+            )
+            debug_errors(f"Failed to show folder manager: {str(e)}")
+    
+    def on_folder_statuses_updated(self):
+        """Handle folder status updates from Folder Manager"""
+        # Future: Could refresh the image list if filtering by folder status
+        debug_ui_events("Folder statuses updated")
     
     def initialize_cloudinary(self):
         """Initialize Cloudinary integration with unified validation (called after settings changes)"""
