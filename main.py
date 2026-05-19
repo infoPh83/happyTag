@@ -296,6 +296,11 @@ class MainWindow(QMainWindow):
         self.clearTagsButton.clicked.connect(self.clear_selected_tags)
         self.SelectAlButton.clicked.connect(self.select_all_images)
         
+        # Connect dismiss button
+        if hasattr(self, 'dismissButton'):
+            self.dismissButton.clicked.connect(self.dismiss_selected_images)
+            self.dismissButton.setEnabled(False)
+        
         # Connect text size control buttons
         if hasattr(self, 'textSizeMinus'):
             self.textSizeMinus.clicked.connect(self.decrease_text_size)
@@ -308,6 +313,9 @@ class MainWindow(QMainWindow):
         # Store loaded images
         self.image_files = []
         self.image_previews = {}
+        
+        # Track dismissed images
+        self.dismissed_images = set()  # Store file paths of dismissed images
         self.image_metadata = {}  # Store metadata (year, keywords) for each image
         self.original_keywords = {}  # Track original keywords for change detection
         self.cloudinary_metadata_cache = {}  # Cache for public_id and sync status to avoid redundant ExifTool calls
@@ -317,7 +325,8 @@ class MainWindow(QMainWindow):
         
         # Initialize the new ImageFlowManager for responsive layout
         # Use external scroll mode since we're placing it in the main window's scroll area
-        self.image_flow_manager = ImageFlowManager(use_internal_scroll=False)
+        # Pass self as main_window so it can call back to MainWindow methods
+        self.image_flow_manager = ImageFlowManager(parent=None, use_internal_scroll=False, main_window=self)
         
         # Connect ImageFlowManager signals
         self.image_flow_manager.selection_changed.connect(self.on_grid_selection_changed)
@@ -2342,8 +2351,10 @@ class MainWindow(QMainWindow):
         """Update the status bar with selection info or loaded images count"""
         if self.selected_images:
             self.statusBar().showMessage(f"Selected {len(self.selected_images)} images")
-            # Enable clear tags button when images are selected
+            # Enable clear tags and dismiss buttons when images are selected
             self.clearTagsButton.setEnabled(True)
+            if hasattr(self, 'dismissButton'):
+                self.dismissButton.setEnabled(True)
         else:
             # Show loaded images count in ready state
             loaded_count = len(self.image_flow_manager.image_widgets) if hasattr(self, 'image_flow_manager') and self.image_flow_manager else 0
@@ -2351,8 +2362,10 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(f"Ready - {loaded_count} images loaded")
             else:
                 self.statusBar().showMessage("Ready")
-            # Disable clear tags button when no images are selected
+            # Disable clear tags and dismiss buttons when no images are selected
             self.clearTagsButton.setEnabled(False)
+            if hasattr(self, 'dismissButton'):
+                self.dismissButton.setEnabled(False)
 
     def select_all_images(self):
         """Select all currently loaded images"""
@@ -2407,6 +2420,140 @@ class MainWindow(QMainWindow):
             'Tags Cleared',
             f'Successfully cleared tags from {cleared_count} images.'
         )
+
+    def dismiss_selected_images(self):
+        """Dismiss selected images by graying them out and moving them to the end of the queue"""
+        if not self.selected_images:
+            print("[DISMISS] No images selected")
+            return
+        
+        print(f"[DISMISS] Starting dismiss of {len(self.selected_images)} selected images")
+        debug("ui_events", f"Dismissing {len(self.selected_images)} selected images")
+        
+        # Get current widgets
+        if not hasattr(self, 'image_flow_manager') or not self.image_flow_manager:
+            print("[DISMISS] No image_flow_manager found")
+            return
+        
+        current_widgets = list(self.image_flow_manager.image_widgets.values())
+        print(f"[DISMISS] Total widgets in manager: {len(current_widgets)}")
+        
+        dismissed_widgets = []
+        active_widgets = []
+        
+        # Track how many we're dismissing
+        dismissed_count = 0
+        
+        # Add selected images to dismissed set and categorize widgets
+        for widget in current_widgets:
+            if hasattr(widget, 'file_path'):
+                if widget.file_path in self.selected_images:
+                    # Add to dismissed set
+                    self.dismissed_images.add(widget.file_path)
+                    print(f"[DISMISS] Dismissing: {os.path.basename(widget.file_path)}")
+                    # Set dismissed state on widget (triggers visual update)
+                    if hasattr(widget, 'set_dismissed'):
+                        print(f"[DISMISS]   - Calling set_dismissed(True) on widget")
+                        widget.set_dismissed(True)
+                        print(f"[DISMISS]   - Widget is_dismissed = {widget.is_dismissed}")
+                    else:
+                        print(f"[DISMISS]   - WARNING: Widget doesn't have set_dismissed method!")
+                    dismissed_widgets.append(widget)
+                    dismissed_count += 1
+                elif widget.file_path not in self.dismissed_images:
+                    # Active (non-dismissed) widgets
+                    active_widgets.append(widget)
+                else:
+                    # Already dismissed widgets
+                    dismissed_widgets.append(widget)
+        
+        print(f"[DISMISS] Dismissed: {dismissed_count}, Active: {len(active_widgets)}, Already dismissed: {len(dismissed_widgets) - dismissed_count}")
+        
+        # Clear selection
+        self.selected_images.clear()
+        for widget in current_widgets:
+            if hasattr(widget, 'set_selected'):
+                widget.set_selected(False)
+        
+        # Reorder widgets: active first, then dismissed at the end
+        reordered_widgets = active_widgets + dismissed_widgets
+        
+        print(f"[DISMISS] Reordering: {len(active_widgets)} active + {len(dismissed_widgets)} dismissed")
+        
+        # Clear the layout
+        while self.image_flow_manager.flow_layout.count():
+            child = self.image_flow_manager.flow_layout.takeAt(0)
+            if child.widget():
+                child.widget().setParent(None)
+        
+        # Re-add widgets in new order
+        for widget in reordered_widgets:
+            self.image_flow_manager.flow_layout.addWidget(widget)
+        
+        print(f"[DISMISS] Layout updated with reordered widgets")
+        
+        # Update status bar
+        self.update_status_bar()
+        
+        debug("ui_events", f"Dismissed {dismissed_count} images, moved to end of queue")
+
+    def revive_dismissed_image(self, file_path):
+        """Revive a dismissed image by removing it from dismissed set and restoring its visual style"""
+        print(f"[REVIVE] revive_dismissed_image called for {os.path.basename(file_path)}")
+        print(f"[REVIVE]   file_path in dismissed_images: {file_path in self.dismissed_images}")
+        print(f"[REVIVE]   dismissed_images set: {[os.path.basename(p) for p in self.dismissed_images]}")
+        
+        if file_path in self.dismissed_images:
+            # Remove from dismissed set
+            self.dismissed_images.remove(file_path)
+            
+            print(f"[REVIVE]   Removed from dismissed_images, now reviving...")
+            debug("ui_events", f"Reviving dismissed image: {file_path}")
+            
+            # Get the widget
+            if hasattr(self, 'image_flow_manager') and self.image_flow_manager:
+                widget = self.image_flow_manager.image_widgets.get(file_path)
+                print(f"[REVIVE]   Widget found: {widget is not None}")
+                if widget:
+                    # Restore normal visual style using widget method
+                    if hasattr(widget, 'set_dismissed'):
+                        print(f"[REVIVE]   Calling widget.set_dismissed(False)")
+                        widget.set_dismissed(False)
+                    
+                    # Reorder widgets: move revived image to the front
+                    current_widgets = list(self.image_flow_manager.image_widgets.values())
+                    revived_widgets = []
+                    dismissed_widgets = []
+                    active_widgets = []
+                    
+                    for w in current_widgets:
+                        if hasattr(w, 'file_path'):
+                            if w.file_path == file_path:
+                                # The revived widget - put at front
+                                revived_widgets.append(w)
+                            elif w.file_path in self.dismissed_images:
+                                # Still dismissed widgets
+                                dismissed_widgets.append(w)
+                            else:
+                                # Active (non-dismissed) widgets
+                                active_widgets.append(w)
+                    
+                    print(f"[REVIVE]   Reordering: {len(revived_widgets)} revived + {len(active_widgets)} active + {len(dismissed_widgets)} dismissed")
+                    
+                    # Reorder: revived first, then active, then dismissed
+                    reordered_widgets = revived_widgets + active_widgets + dismissed_widgets
+                    
+                    # Clear the layout
+                    while self.image_flow_manager.flow_layout.count():
+                        child = self.image_flow_manager.flow_layout.takeAt(0)
+                        if child.widget():
+                            child.widget().setParent(None)
+                    
+                    # Re-add widgets in new order
+                    for w in reordered_widgets:
+                        self.image_flow_manager.flow_layout.addWidget(w)
+                    
+                    debug("ui_events", f"Revived image {os.path.basename(file_path)}, moved to front of queue")
 
     def increase_text_size(self):
         """Increase the font size of all text input fields"""
@@ -3522,21 +3669,24 @@ class MainWindow(QMainWindow):
         try:
             from utilities.folder_status_dialog import FolderStatusDialog
             
-            # Create new dialog each time (so it refreshes data)
+            # Check if dialog already exists and is visible
+            if hasattr(self, 'folder_manager_dialog') and self.folder_manager_dialog is not None:
+                # Just bring existing dialog to front
+                self.folder_manager_dialog.raise_()
+                self.folder_manager_dialog.activateWindow()
+                return
+            
+            # Create new dialog
             self.folder_manager_dialog = FolderStatusDialog(network_root, self)
             
             # Connect statuses_updated signal to update UI if needed
             self.folder_manager_dialog.statuses_updated.connect(self.on_folder_statuses_updated)
             
-            # Show as modal dialog
-            result = self.folder_manager_dialog.exec_()
+            # Clean up reference when dialog is closed
+            self.folder_manager_dialog.destroyed.connect(lambda: setattr(self, 'folder_manager_dialog', None))
             
-            # If user double-clicked a folder, load its contents
-            if result == QDialog.Accepted and hasattr(self.folder_manager_dialog, 'selected_folder_path'):
-                folder_path = self.folder_manager_dialog.selected_folder_path
-                if folder_path:
-                    debug_ui_events(f"Loading folder from Folder Manager: {folder_path}")
-                    self.load_folder_direct(folder_path)
+            # Show as non-modal dialog so both windows can be used simultaneously
+            self.folder_manager_dialog.show()
             
         except Exception as e:
             from PyQt5.QtWidgets import QMessageBox

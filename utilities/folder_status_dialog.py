@@ -22,43 +22,45 @@ import os
 from typing import Optional, List, Dict, Set
 from .path_mapper import PathMapper
 from .folder_status_manager import (FolderStatusManager, STATUS_DISCARDED,
-                                   STATUS_NOT_EVALUATED, STATUS_REQUIRING_TAGS,
-                                   STATUS_TAGGED_LOCAL, STATUS_SYNCED,
-                                   STATUS_NOT_FOUND)
+                                   STATUS_DISMISSED, STATUS_NEW, STATUS_WATCHED,
+                                   STATUS_NOT_FOUND, STATUS_NOT_EVALUATED,
+                                   FILE_STATUS_ON_CLOUD, FILE_STATUS_DISMISSED,
+                                   FILE_STATUS_NEW, FILE_STATUS_NOT_FOUND)
 from .folder_scanner import FolderScanner, FolderItem, ScanProgress
 
 
 # Status display configuration
 STATUS_CONFIG = {
-    STATUS_DISCARDED: {
-        'label': 'Discarded',
+    STATUS_DISMISSED: {
+        'label': 'Dismissed',
         'color': QColor(180, 180, 180),  # Gray
-        'description': 'Won\'t be processed'
+        'description': 'Images dismissed from workflow'
     },
-    STATUS_NOT_EVALUATED: {
-        'label': 'Not Evaluated',
+    STATUS_NEW: {
+        'label': 'New',
         'color': QColor(255, 255, 200),  # Light yellow
-        'description': 'Default state, needs review'
+        'description': 'New images, not yet processed'
     },
-    STATUS_REQUIRING_TAGS: {
-        'label': 'Requiring Tags',
-        'color': QColor(255, 200, 100),  # Orange
-        'description': 'Selected for tagging'
-    },
-    STATUS_TAGGED_LOCAL: {
-        'label': 'Tagged (Local)',
+    STATUS_WATCHED: {
+        'label': 'Watched',
         'color': QColor(150, 200, 255),  # Light blue
-        'description': 'Tagged but not uploaded'
-    },
-    STATUS_SYNCED: {
-        'label': 'Synced',
-        'color': QColor(150, 255, 150),  # Light green
-        'description': 'Tagged and uploaded to Cloudinary'
+        'description': 'Folder being monitored'
     },
     STATUS_NOT_FOUND: {
         'label': 'Not Found',
         'color': QColor(255, 150, 150),  # Light red
         'description': 'Missing from filesystem'
+    },
+    STATUS_DISCARDED: {
+        'label': 'Discarded',
+        'color': QColor(220, 220, 220),  # Light gray
+        'description': 'Won\'t be processed (deprecated)'
+    },
+    # Legacy statuses for migration
+    STATUS_NOT_EVALUATED: {
+        'label': 'Not Evaluated (Legacy)',
+        'color': QColor(255, 230, 180),  # Pale orange
+        'description': 'Will be converted to Watched'
     }
 }
 
@@ -112,11 +114,14 @@ class FolderStatusDialog(QDialog):
         
         # Tree view (create first so it can be referenced by other components)
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(['Name', 'Status', 'Images', 'Folders'])
-        self.tree.setColumnWidth(0, 350)
-        self.tree.setColumnWidth(1, 150)
-        self.tree.setColumnWidth(2, 80)
-        self.tree.setColumnWidth(3, 80)
+        self.tree.setHeaderLabels(['Name', 'Status', 'Tot. Images', 'On Cloud', 'Dismissed', 'New', 'Folders'])
+        self.tree.setColumnWidth(0, 300)  # Name
+        self.tree.setColumnWidth(1, 120)  # Status
+        self.tree.setColumnWidth(2, 90)   # Tot. Images
+        self.tree.setColumnWidth(3, 80)   # On Cloud
+        self.tree.setColumnWidth(4, 80)   # Dismissed
+        self.tree.setColumnWidth(5, 60)   # New
+        self.tree.setColumnWidth(6, 70)   # Folders
         self.tree.header().setStretchLastSection(True)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
@@ -236,6 +241,31 @@ class FolderStatusDialog(QDialog):
             # Scan root folders
             root_items = self.scanner.scan_root_folders(progress_callback=on_progress)
             
+            # Now reconcile each root folder with the repository
+            total_roots = len(root_items)
+            progress_dlg.setLabelText("Reconciling with repository...")
+            progress_dlg.setMaximum(total_roots)
+            
+            for idx, item in enumerate(root_items):
+                if progress_dlg.wasCanceled():
+                    break
+                
+                progress_dlg.setValue(idx)
+                progress_dlg.setLabelText(f"Reconciling {item.name}...")
+                QApplication.processEvents()
+                
+                # Reconcile this folder
+                try:
+                    recon_result = self.status_manager.reconcile_folder_with_filesystem(
+                        item.relative_path, 
+                        progress_callback=None  # No sub-progress for now
+                    )
+                    # Store reconciliation results for tree display
+                    item.recon_result = recon_result
+                except Exception as e:
+                    print(f"Error reconciling {item.name}: {e}")
+                    item.recon_result = None
+            
             progress_dlg.close()
             
             # Add to tree
@@ -305,7 +335,13 @@ class FolderStatusDialog(QDialog):
     def _update_tree_item_status(self, tree_item: QTreeWidgetItem, folder_item: FolderItem):
         """Update tree item's status display and color."""
         status = folder_item.status
-        config = STATUS_CONFIG.get(status, STATUS_CONFIG[STATUS_NOT_EVALUATED])
+        
+        # Migrate legacy status
+        if status == STATUS_NOT_EVALUATED:
+            status = STATUS_WATCHED
+            folder_item.status = STATUS_WATCHED
+        
+        config = STATUS_CONFIG.get(status, STATUS_CONFIG[STATUS_WATCHED])
         
         # Set status text
         tree_item.setText(1, config['label'])
@@ -314,16 +350,69 @@ class FolderStatusDialog(QDialog):
         for col in range(tree_item.columnCount()):
             tree_item.setBackground(col, QBrush(config['color']))
         
-        # Set counts (images and folders)
-        if folder_item.is_loaded:
-            # Count only image files (not all files)
+        # Set counts based on reconciliation results
+        if hasattr(folder_item, 'recon_result') and folder_item.recon_result is not None:
+            recon = folder_item.recon_result
+            
+            # Handle different scenarios based on reconciliation result
+            if isinstance(recon, dict):
+                # Scenario 5: WATCHED folder with detailed counts
+                total_images = recon.get('total_images', 0)
+                on_cloud = recon.get('on_cloud', 0)
+                dismissed = recon.get('dismissed', 0)
+                new = recon.get('new', 0)
+                folders = recon.get('folders', 0)
+                
+                tree_item.setText(2, str(total_images))
+                tree_item.setText(3, str(on_cloud))
+                tree_item.setText(4, str(dismissed))
+                tree_item.setText(5, str(new))
+                tree_item.setText(6, str(folders))
+                
+            elif recon == "-":
+                # Scenario 1: DISMISSED folder - show dashes
+                tree_item.setText(2, "-")
+                tree_item.setText(3, "-")
+                tree_item.setText(4, "-")
+                tree_item.setText(5, "-")
+                tree_item.setText(6, "-")
+                
+            else:
+                # Scenarios 2, 3, 4: NEW or NOT_FOUND folders
+                # Count from filesystem (folder_item.children)
+                if folder_item.is_loaded:
+                    image_count = sum(1 for c in folder_item.children if not c.is_directory)
+                    folder_count = sum(1 for c in folder_item.children if c.is_directory)
+                    
+                    tree_item.setText(2, str(image_count))
+                    tree_item.setText(3, "0")  # No cloud data for new folders
+                    tree_item.setText(4, "0")
+                    tree_item.setText(5, str(image_count))  # All are "new"
+                    tree_item.setText(6, str(folder_count))
+                else:
+                    tree_item.setText(2, "?")
+                    tree_item.setText(3, "?")
+                    tree_item.setText(4, "?")
+                    tree_item.setText(5, "?")
+                    tree_item.setText(6, "?")
+        
+        elif folder_item.is_loaded:
+            # No reconciliation data yet, count from filesystem
             image_count = sum(1 for c in folder_item.children if not c.is_directory)
             folder_count = sum(1 for c in folder_item.children if c.is_directory)
+            
             tree_item.setText(2, str(image_count))
-            tree_item.setText(3, str(folder_count))
+            tree_item.setText(3, "0")
+            tree_item.setText(4, "0")
+            tree_item.setText(5, str(image_count))
+            tree_item.setText(6, str(folder_count))
         else:
+            # Not loaded yet
             tree_item.setText(2, "?")
             tree_item.setText(3, "?")
+            tree_item.setText(4, "?")
+            tree_item.setText(5, "?")
+            tree_item.setText(6, "?")
     
     def _on_item_expanded(self, tree_item: QTreeWidgetItem):
         """Handle tree item expansion - load children if not loaded."""
@@ -370,6 +459,21 @@ class FolderStatusDialog(QDialog):
             
             # Scan folder contents (non-recursive, just immediate children)
             self.scanner.scan_folder_contents(folder_item, recursive=False, progress_callback=on_progress)
+            
+            # Reconcile this folder with the repository
+            progress_dlg.setLabelText(f"Reconciling {folder_item.name}...")
+            progress_dlg.setValue(50)  # Mid-point indicator
+            QApplication.processEvents()
+            
+            try:
+                recon_result = self.status_manager.reconcile_folder_with_filesystem(
+                    folder_item.relative_path,
+                    progress_callback=None  # No sub-progress for now
+                )
+                folder_item.recon_result = recon_result
+            except Exception as e:
+                print(f"Error reconciling {folder_item.name}: {e}")
+                folder_item.recon_result = None
             
             progress_dlg.close()
             
@@ -642,8 +746,11 @@ class FolderStatusDialog(QDialog):
             )
             return
         
-        # Close dialog and signal parent to load folder
-        self.accept()
-        
-        # Store the selected folder path (as string) for parent to handle
+        # Don't close dialog - keep it open for multiple folder selections
+        # Instead, emit a signal that the parent can catch
         self.selected_folder_path = absolute_path
+        
+        # Get the parent window and call load_folder_direct
+        parent = self.parent()
+        if parent and hasattr(parent, 'load_folder_direct'):
+            parent.load_folder_direct(absolute_path)

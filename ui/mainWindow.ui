@@ -25,6 +25,16 @@
        </widget>
       </item>
       <item>
+       <widget class="QPushButton" name="dismissButton">
+        <property name="text">
+         <string>Dismiss</string>
+        </property>
+        <property name="toolTip">
+         <string>Dismiss selected images (move to end of queue)</string>
+        </property>
+       </widget>
+      </item>
+      <item>
        <spacer name="horizontalSpacer_4">
         <property name="orientation">
          <enum>Qt::Horizontal</enum>

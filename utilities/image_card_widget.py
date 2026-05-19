@@ -29,6 +29,7 @@ class ImageCardWidget(QWidget):
     context_menu_requested = pyqtSignal(str, object)  # file_path, position
     double_clicked = pyqtSignal(str)           # file_path
     clear_other_selections = pyqtSignal(str)   # file_path of item to keep selected
+    revive_dismissed = pyqtSignal(str)         # file_path to revive from dismissed state
     
     def __init__(self, file_path, max_width=300, preview_pixmap=None, cloudinary_synced=False, cloudinary_public_id=None, 
                  original_tags=None, cloudinary_tags=None, parent=None):
@@ -38,6 +39,7 @@ class ImageCardWidget(QWidget):
         self.max_width = max_width
         self.preview_pixmap = preview_pixmap  # Store preview pixmap if provided
         self.is_selected = False
+        self.is_dismissed = False  # Track dismissed state
         
         # CENTRALIZED METADATA - Single source of truth for all image data
         self.public_id = cloudinary_public_id or ""  # Cloudinary public_id (string)
@@ -938,6 +940,25 @@ class ImageCardWidget(QWidget):
         """Get current selection state"""
         return self.is_selected
     
+    def set_dismissed(self, dismissed):
+        """Set dismissed state and update visual style"""
+        import os
+        print(f"[WIDGET] set_dismissed({dismissed}) called for {os.path.basename(self.file_path)}")
+        print(f"[WIDGET]   Current is_dismissed={self.is_dismissed}")
+        
+        if self.is_dismissed == dismissed:
+            print(f"[WIDGET]   No change needed, returning")
+            return
+            
+        self.is_dismissed = dismissed
+        print(f"[WIDGET]   Set is_dismissed to {self.is_dismissed}, calling _update_visual_style()")
+        self._update_visual_style()
+        print(f"[WIDGET]   _update_visual_style() completed")
+        
+    def is_dismissed_state(self):
+        """Get current dismissed state"""
+        return self.is_dismissed
+    
     def set_cloudinary_status(self, is_on_cloudinary):
         """Set Cloudinary sync status and update visual style"""
         if self.is_on_cloudinary == is_on_cloudinary:
@@ -1003,6 +1024,65 @@ class ImageCardWidget(QWidget):
     
     def _update_visual_style(self):
         """Update visual style based on selection state and Cloudinary sync status"""
+        import os
+        print(f"[VISUAL] _update_visual_style called for {os.path.basename(self.file_path) if hasattr(self, 'file_path') else 'unknown'}")
+        print(f"[VISUAL]   is_dismissed={self.is_dismissed}, is_selected={self.is_selected}, is_on_cloudinary={self.is_on_cloudinary}")
+        
+        # Check if dismissed - override all other styling
+        if self.is_dismissed:
+            print(f"[VISUAL]   Applying DISMISSED styling")
+            # Dismissed state: gray out everything
+            # Note: CSS 'opacity' doesn't work in Qt stylesheets, so we use solid colors
+            self.container_frame.setStyleSheet("""
+                QFrame {
+                    border: 2px solid #999999;
+                    border-radius: 4px;
+                    background-color: #d0d0d0;
+                }
+                QFrame:hover {
+                    border: 2px solid #666666;
+                    background-color: #c0c0c0;
+                }
+            """)
+            # Also gray out the image using QGraphicsOpacityEffect
+            if self.image_label:
+                from PyQt5.QtWidgets import QGraphicsOpacityEffect
+                opacity_effect = QGraphicsOpacityEffect(self.image_label)
+                opacity_effect.setOpacity(0.4)  # 40% opacity
+                self.image_label.setGraphicsEffect(opacity_effect)
+                
+            # Gray out text field
+            if self.text_edit:
+                self.text_edit.setStyleSheet("""
+                    QPlainTextEdit {
+                        border: 2px solid #999999;
+                        border-radius: 3px;
+                        padding: 2px;
+                        font-size: 10px;
+                        line-height: 1.2;
+                        background-color: #e8e8e8;
+                        color: #888888;
+                    }
+                """)
+                # Also apply opacity to text field
+                text_opacity_effect = QGraphicsOpacityEffect(self.text_edit)
+                text_opacity_effect.setOpacity(0.6)  # 60% opacity
+                self.text_edit.setGraphicsEffect(text_opacity_effect)
+                
+            # Force repaint
+            if self.container_frame:
+                self.container_frame.update()
+            self.update()
+            print(f"[VISUAL]   DISMISSED styling applied with opacity effects")
+            return
+        
+        print(f"[VISUAL]   Applying NORMAL styling")
+        # Clear any opacity effects when not dismissed
+        if self.image_label:
+            self.image_label.setGraphicsEffect(None)
+        if self.text_edit:
+            self.text_edit.setGraphicsEffect(None)
+            
         # Determine background color and border based on both states
         if self.is_on_cloudinary:
             # Dark yellow background when synced with Cloudinary
@@ -1039,6 +1119,26 @@ class ImageCardWidget(QWidget):
                 background-color: {hover_color};
             }}
         """)
+        
+        # Restore normal image styling if not dismissed
+        if self.image_label:
+            self.image_label.setStyleSheet("border: none; background-color: transparent;")
+        
+        # Restore normal text field styling if not dismissed
+        if self.text_edit:
+            self.text_edit.setStyleSheet("""
+                QPlainTextEdit {
+                    border: 2px solid #cccccc;
+                    border-radius: 3px;
+                    padding: 2px;
+                    font-size: 10px;
+                    line-height: 1.2;
+                }
+                QPlainTextEdit:focus {
+                    border: 2px solid #0078d4;
+                    padding: 4px;
+                }
+            """)
         
         # Force widget to repaint with new styling
         if self.container_frame:
@@ -1109,13 +1209,27 @@ class ImageCardWidget(QWidget):
         """Handle mouse press for selection"""
         if event.button() == Qt.LeftButton:
             from PyQt5.QtWidgets import QApplication
+            import os
             modifiers = QApplication.keyboardModifiers()
+            
+            print(f"[MOUSE] Click on {os.path.basename(self.file_path)}, is_dismissed={self.is_dismissed}, Ctrl={modifiers == Qt.ControlModifier}")
+            
+            # Check if this image is dismissed - emit signal to revive it
+            # Only emit revive signal if the image is actually dismissed
+            if self.is_dismissed:
+                print(f"[MOUSE]   Image is dismissed, emitting revive_dismissed signal")
+                self.revive_dismissed.emit(self.file_path)
+                # Don't process selection for dismissed images
+                super().mousePressEvent(event)
+                return
             
             if modifiers == Qt.ControlModifier:
                 # Ctrl+click: Toggle selection without affecting others
+                print(f"[MOUSE]   Ctrl+click: toggling selection (currently {self.is_selected})")
                 self.set_selected(not self.is_selected)
             else:
                 # Normal click: Clear others and select this one
+                print(f"[MOUSE]   Normal click: clearing others and selecting this one")
                 # Emit a special signal to clear other selections first
                 self.clear_other_selections.emit(self.file_path)
                 self.set_selected(True)

@@ -18,21 +18,38 @@ from utilities.path_mapper import PathMapper
 from utilities.file_lock_manager import FileLockManager
 
 
-# Status constants
+# Status constants for FOLDERS
 STATUS_DISCARDED = "discarded"
-STATUS_NOT_EVALUATED = "not_evaluated"
-STATUS_REQUIRING_TAGS = "requiring_tags"
-STATUS_TAGGED_LOCAL = "tagged_local"
-STATUS_SYNCED = "synced"
+STATUS_DISMISSED = "dismissed"
+STATUS_NEW = "new"
+STATUS_WATCHED = "watched"
 STATUS_NOT_FOUND = "not_found"
 
+# Status constants for FILES (in watched folders)
+FILE_STATUS_ON_CLOUD = "on_cloud"
+FILE_STATUS_DISMISSED = "dismissed"
+FILE_STATUS_NEW = "new"
+FILE_STATUS_NOT_FOUND = "not_found"
+
+# Legacy status for migration
+STATUS_NOT_EVALUATED = "not_evaluated"  # Will be converted to STATUS_WATCHED
+STATUS_REQUIRING_TAGS = "requiring_tags"  # Legacy, can be removed
+STATUS_TAGGED_LOCAL = "tagged_local"  # Legacy, can be removed
+STATUS_SYNCED = "synced"  # Legacy, can be removed
+
 ALL_STATUSES = [
-    STATUS_DISCARDED,
-    STATUS_NOT_EVALUATED,
-    STATUS_REQUIRING_TAGS,
-    STATUS_TAGGED_LOCAL,
-    STATUS_SYNCED,
-    STATUS_NOT_FOUND
+    STATUS_DISMISSED,
+    STATUS_NEW,
+    STATUS_WATCHED,
+    STATUS_NOT_FOUND,
+    STATUS_DISCARDED  # Keep as deprecated but supported
+]
+
+ALL_FILE_STATUSES = [
+    FILE_STATUS_ON_CLOUD,
+    FILE_STATUS_DISMISSED,
+    FILE_STATUS_NEW,
+    FILE_STATUS_NOT_FOUND
 ]
 
 # Supported image file extensions
@@ -49,12 +66,17 @@ class FolderStatusManager:
     Manages folder and file status database (CSV) with locking support.
     
     CSV Structure:
-    relative_path,status,last_modified,cloudinary_id,date_tagged,date_synced,notes
+    relative_path,item_type,status,last_modified,cloudinary_id,date_tagged,date_synced,notes
+    
+    item_type: 'folder' or 'file'
+    status for folders: dismissed, new, watched, not_found
+    status for files in watched folders: on_cloud, dismissed, new, not_found
     """
     
     CSV_FILENAME = "folder_status.csv"
     CSV_HEADERS = [
         'relative_path',
+        'item_type',  # 'folder' or 'file'
         'status',
         'last_modified',
         'cloudinary_id',
@@ -101,22 +123,41 @@ class FolderStatusManager:
             with open(self.csv_path, 'r', newline='', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 self._status_cache = {}
+                migrated_count = 0
                 
                 for row in reader:
                     rel_path = row['relative_path']
+                    status = row['status']
+                    
+                    # Get item_type, default to 'folder' for backward compatibility
+                    item_type = row.get('item_type', 'folder')
+                    
+                    # Migrate legacy statuses
+                    if status == STATUS_NOT_EVALUATED:
+                        status = STATUS_WATCHED
+                        migrated_count += 1
+                        debug("folder_status", f"Migrated {rel_path}: not_evaluated -> watched")
+                    
                     self._status_cache[rel_path] = {
-                        'status': row['status'],
-                        'last_modified': row['last_modified'],
-                        'cloudinary_id': row['cloudinary_id'],
-                        'date_tagged': row['date_tagged'],
-                        'date_synced': row['date_synced'],
-                        'notes': row['notes']
+                        'item_type': item_type,
+                        'status': status,
+                        'last_modified': row.get('last_modified', ''),
+                        'cloudinary_id': row.get('cloudinary_id', ''),
+                        'date_tagged': row.get('date_tagged', ''),
+                        'date_synced': row.get('date_synced', ''),
+                        'notes': row.get('notes', '')
                     }
             
             self._cache_loaded = True
             count = len(self._status_cache)
+            
+            # Save immediately if migrations were performed
+            if migrated_count > 0:
+                debug("folder_status", f"Migrated {migrated_count} entries, saving database")
+                self.save_status_db()
+            
             debug("folder_status", f"Loaded {count} entries from CSV")
-            return True, f"Loaded {count} entries"
+            return True, f"Loaded {count} entries" + (f" (migrated {migrated_count})" if migrated_count > 0 else "")
             
         except Exception as e:
             msg = f"Failed to load status database: {e}"
@@ -143,12 +184,13 @@ class FolderStatusManager:
                 for rel_path, data in self._status_cache.items():
                     writer.writerow({
                         'relative_path': rel_path,
+                        'item_type': data.get('item_type', 'folder'),
                         'status': data['status'],
-                        'last_modified': data['last_modified'],
-                        'cloudinary_id': data['cloudinary_id'],
-                        'date_tagged': data['date_tagged'],
-                        'date_synced': data['date_synced'],
-                        'notes': data['notes']
+                        'last_modified': data.get('last_modified', ''),
+                        'cloudinary_id': data.get('cloudinary_id', ''),
+                        'date_tagged': data.get('date_tagged', ''),
+                        'date_synced': data.get('date_synced', ''),
+                        'notes': data.get('notes', '')
                     })
             
             # Replace original file with temp file
@@ -461,6 +503,298 @@ class FolderStatusManager:
         
         debug("folder_status", f"Statistics: {stats}")
         return stats
+    
+    def reconcile_folder_with_filesystem(self, folder_rel_path: str, progress_callback=None):
+        """
+        Reconcile a folder between filesystem and repository.
+        Implements all 5 scenarios for folder status management.
+        
+        Args:
+            folder_rel_path: Relative path to the folder
+            progress_callback: Optional callback(current, total, message) for progress updates
+            
+        Returns:
+            Dict with keys: total_images, on_cloud, dismissed, new, folders, status
+        """
+        if not self._cache_loaded:
+            self.load_status_db()
+        
+        absolute_path = self.path_mapper.to_absolute(folder_rel_path)
+        folder_exists = Path(absolute_path).exists()
+        folder_in_repo = folder_rel_path in self._status_cache
+        
+        debug("folder_status", f"Reconciling: {folder_rel_path}")
+        debug("folder_status", f"  Exists in FS: {folder_exists}, In repo: {folder_in_repo}")
+        
+        # Get or create folder status
+        if folder_in_repo:
+            folder_status = self._status_cache[folder_rel_path]['status']
+        else:
+            folder_status = STATUS_NEW
+        
+        # SCENARIO 1: Folder is DISMISSED
+        if folder_status == STATUS_DISMISSED:
+            debug("folder_status", f"  Scenario 1: Folder is DISMISSED - skipping")
+            return {
+                'total_images': '-',
+                'on_cloud': '-',
+                'dismissed': '-',
+                'new': '-',
+                'folders': '-',
+                'status': STATUS_DISMISSED
+            }
+        
+        # SCENARIO 3: Folder in repo but NOT FOUND in filesystem
+        if folder_in_repo and not folder_exists:
+            debug("folder_status", f"  Scenario 3: Folder NOT FOUND in filesystem")
+            # Mark as not found
+            self._status_cache[folder_rel_path]['status'] = STATUS_NOT_FOUND
+            self._status_cache[folder_rel_path]['item_type'] = 'folder'
+            return {
+                'total_images': 0,
+                'on_cloud': 0,
+                'dismissed': 0,
+                'new': 0,
+                'folders': 0,
+                'status': STATUS_NOT_FOUND
+            }
+        
+        # SCENARIO 2: Folder in filesystem but NOT in repo
+        if not folder_in_repo and folder_exists:
+            debug("folder_status", f"  Scenario 2: Folder is NEW (not in repo)")
+            return self._scan_new_folder(folder_rel_path, absolute_path, progress_callback)
+        
+        # SCENARIO 4: Folder is marked as NEW
+        if folder_status == STATUS_NEW and folder_exists:
+            debug("folder_status", f"  Scenario 4: Folder marked as NEW - rescanning from scratch")
+            # Delete all repo info about this folder and its contents
+            self._delete_folder_and_contents_from_repo(folder_rel_path)
+            return self._scan_new_folder(folder_rel_path, absolute_path, progress_callback)
+        
+        # SCENARIO 5: Folder is WATCHED
+        if folder_status == STATUS_WATCHED and folder_exists:
+            debug("folder_status", f"  Scenario 5: Folder is WATCHED - reconciling contents")
+            return self._reconcile_watched_folder(folder_rel_path, absolute_path, progress_callback)
+        
+        # Default case
+        debug("folder_status", f"  Default case - treating as new")
+        return self._scan_new_folder(folder_rel_path, absolute_path, progress_callback)
+    
+    def _scan_new_folder(self, folder_rel_path: str, absolute_path: str, progress_callback=None):
+        """Scan a NEW folder recursively and mark everything as new."""
+        debug("folder_status", f"Scanning NEW folder: {folder_rel_path}")
+        
+        total_images = 0
+        total_folders = 0
+        
+        try:
+            folder_path = Path(absolute_path)
+            
+            # Add folder itself as NEW
+            self._status_cache[folder_rel_path] = {
+                'item_type': 'folder',
+                'status': STATUS_NEW,
+                'last_modified': datetime.now().isoformat(),
+                'cloudinary_id': '',
+                'date_tagged': '',
+                'date_synced': '',
+                'notes': 'Auto-discovered'
+            }
+            
+            # Scan all items in folder
+            items = list(folder_path.iterdir())
+            
+            for idx, item in enumerate(items):
+                if progress_callback:
+                    progress_callback(idx + 1, len(items), f"Scanning {item.name}")
+                
+                item_rel_path = self.path_mapper.to_relative(str(item))
+                
+                if item.is_dir():
+                    # Subfolder - mark as NEW
+                    total_folders += 1
+                    self._status_cache[item_rel_path] = {
+                        'item_type': 'folder',
+                        'status': STATUS_NEW,
+                        'last_modified': datetime.now().isoformat(),
+                        'cloudinary_id': '',
+                        'date_tagged': '',
+                        'date_synced': '',
+                        'notes': 'Auto-discovered'
+                    }
+                else:
+                    # Check if it's an image file
+                    if item.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
+                        total_images += 1
+                        # Add file as NEW
+                        self._status_cache[item_rel_path] = {
+                            'item_type': 'file',
+                            'status': FILE_STATUS_NEW,
+                            'last_modified': datetime.now().isoformat(),
+                            'cloudinary_id': '',
+                            'date_tagged': '',
+                            'date_synced': '',
+                            'notes': 'Auto-discovered'
+                        }
+            
+            # Save after scanning
+            self.save_status_db()
+            
+            return {
+                'total_images': total_images,
+                'on_cloud': 0,
+                'dismissed': 0,
+                'new': total_images,  # All images are new
+                'folders': total_folders,
+                'status': STATUS_NEW
+            }
+            
+        except Exception as e:
+            debug("errors", f"Error scanning new folder {folder_rel_path}: {e}")
+            return {
+                'total_images': 0,
+                'on_cloud': 0,
+                'dismissed': 0,
+                'new': 0,
+                'folders': 0,
+                'status': STATUS_NEW
+            }
+    
+    def _reconcile_watched_folder(self, folder_rel_path: str, absolute_path: str, progress_callback=None):
+        """Reconcile a WATCHED folder with expected watched/dismissed states."""
+        debug("folder_status", f"Reconciling WATCHED folder: {folder_rel_path}")
+        
+        folder_path = Path(absolute_path)
+        
+        # Counters
+        total_images = 0
+        on_cloud_count = 0
+        dismissed_count = 0
+        new_count = 0
+        total_folders = 0
+        
+        # Get all items currently in repo under this folder
+        repo_items = {
+            path: data for path, data in self._status_cache.items()
+            if path.startswith(folder_rel_path + '/') or path == folder_rel_path
+        }
+        
+        # Get all items currently in filesystem
+        try:
+            fs_items = list(folder_path.iterdir())
+            
+            # Track which repo items we've seen
+            seen_repo_items = set()
+            
+            for idx, item in enumerate(fs_items):
+                if progress_callback:
+                    progress_callback(idx + 1, len(fs_items), f"Checking {item.name}")
+                
+                item_rel_path = self.path_mapper.to_relative(str(item))
+                seen_repo_items.add(item_rel_path)
+                
+                if item.is_dir():
+                    total_folders += 1
+                    # Check if folder is in repo
+                    if item_rel_path in self._status_cache:
+                        # Expected: watched or dismissed
+                        folder_data = self._status_cache[item_rel_path]
+                        if folder_data['status'] not in [STATUS_WATCHED, STATUS_DISMISSED]:
+                            debug("folder_status", f"  Unexpected status for subfolder {item.name}: {folder_data['status']}")
+                    else:
+                        # New subfolder discovered
+                        debug("folder_status", f"  New subfolder discovered: {item.name}")
+                        self._status_cache[item_rel_path] = {
+                            'item_type': 'folder',
+                            'status': STATUS_NEW,
+                            'last_modified': datetime.now().isoformat(),
+                            'cloudinary_id': '',
+                            'date_tagged': '',
+                            'date_synced': '',
+                            'notes': 'Auto-discovered in watched folder'
+                        }
+                else:
+                    # Check if it's an image file
+                    if item.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
+                        total_images += 1
+                        
+                        # Check if file is in repo
+                        if item_rel_path in self._status_cache:
+                            file_data = self._status_cache[item_rel_path]
+                            file_status = file_data['status']
+                            
+                            # Count by status
+                            if file_status == FILE_STATUS_ON_CLOUD:
+                                on_cloud_count += 1
+                            elif file_status == FILE_STATUS_DISMISSED:
+                                dismissed_count += 1
+                            elif file_status == FILE_STATUS_NEW:
+                                new_count += 1
+                            else:
+                                debug("folder_status", f"  Unexpected file status: {file_status}")
+                                new_count += 1
+                        else:
+                            # New file discovered in watched folder
+                            debug("folder_status", f"  New file discovered: {item.name}")
+                            new_count += 1
+                            self._status_cache[item_rel_path] = {
+                                'item_type': 'file',
+                                'status': FILE_STATUS_NEW,
+                                'last_modified': datetime.now().isoformat(),
+                                'cloudinary_id': '',
+                                'date_tagged': '',
+                                'date_synced': '',
+                                'notes': 'Auto-discovered in watched folder'
+                            }
+            
+            # Check for items in repo that are no longer in filesystem
+            for repo_path, repo_data in repo_items.items():
+                if repo_path not in seen_repo_items and repo_path != folder_rel_path:
+                    debug("folder_status", f"  Item not found in FS: {repo_path}")
+                    # Mark as not found
+                    self._status_cache[repo_path]['status'] = (
+                        STATUS_NOT_FOUND if repo_data['item_type'] == 'folder'
+                        else FILE_STATUS_NOT_FOUND
+                    )
+            
+            # Save changes
+            self.save_status_db()
+            
+            return {
+                'total_images': total_images,
+                'on_cloud': on_cloud_count,
+                'dismissed': dismissed_count,
+                'new': new_count,
+                'folders': total_folders,
+                'status': STATUS_WATCHED
+            }
+            
+        except Exception as e:
+            debug("errors", f"Error reconciling watched folder {folder_rel_path}: {e}")
+            return {
+                'total_images': 0,
+                'on_cloud': 0,
+                'dismissed': 0,
+                'new': 0,
+                'folders': 0,
+                'status': STATUS_WATCHED
+            }
+    
+    def _delete_folder_and_contents_from_repo(self, folder_rel_path: str):
+        """Delete a folder and all its contents from the repository."""
+        debug("folder_status", f"Deleting folder and contents from repo: {folder_rel_path}")
+        
+        # Find all items that start with this folder path
+        items_to_delete = [
+            path for path in self._status_cache.keys()
+            if path.startswith(folder_rel_path + '/') or path == folder_rel_path
+        ]
+        
+        for item_path in items_to_delete:
+            del self._status_cache[item_path]
+            debug("folder_status", f"  Deleted: {item_path}")
+        
+        debug("folder_status", f"Deleted {len(items_to_delete)} items")
     
     def __str__(self) -> str:
         if self._cache_loaded:

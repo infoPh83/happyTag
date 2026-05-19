@@ -31,8 +31,11 @@ class ImageFlowManager(QWidget):
     tags_changed = pyqtSignal(str, str)  # file_path, new_tags
     context_menu_requested = pyqtSignal(str, object)  # file_path, position
     
-    def __init__(self, parent=None, use_internal_scroll=False):
+    def __init__(self, parent=None, use_internal_scroll=False, main_window=None):
         super().__init__(parent)
+        
+        # Store reference to main window for callbacks
+        self.main_window = main_window
         
         # Configuration
         self.widget_width = 200  # Default widget width (controlled by slider)
@@ -140,6 +143,7 @@ class ImageFlowManager(QWidget):
         widget.context_menu_requested.connect(self._on_context_menu)
         widget.double_clicked.connect(self._on_double_clicked)
         widget.clear_other_selections.connect(self._on_clear_other_selections)
+        widget.revive_dismissed.connect(self._on_revive_dismissed)
         
         # Store widget
         self.image_widgets[file_path] = widget
@@ -248,6 +252,20 @@ class ImageFlowManager(QWidget):
         for file_path, widget in self.image_widgets.items():
             if file_path != keep_selected_file and widget.is_selected_state():
                 widget.set_selected(False)
+    
+    def _on_revive_dismissed(self, file_path):
+        """Handle revival of dismissed images - forward to main window"""
+        import os
+        print(f"[FLOW_MGR] _on_revive_dismissed called for {os.path.basename(file_path)}")
+        print(f"[FLOW_MGR]   main_window = {self.main_window}")
+        print(f"[FLOW_MGR]   hasattr revive_dismissed_image = {hasattr(self.main_window, 'revive_dismissed_image') if self.main_window else False}")
+        
+        # Check if main_window has the revive method
+        if self.main_window and hasattr(self.main_window, 'revive_dismissed_image'):
+            print(f"[FLOW_MGR]   Calling main_window.revive_dismissed_image()")
+            self.main_window.revive_dismissed_image(file_path)
+        else:
+            print(f"[FLOW_MGR]   WARNING: main_window not set or doesn't have revive_dismissed_image method!")
     
     def _on_tags_changed(self, file_path, new_tags):
         """Handle tags change from individual widgets"""
