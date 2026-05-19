@@ -105,8 +105,8 @@ class FolderStatusDialog(QDialog):
         # Setup UI
         self._setup_ui()
         
-        # Load root folders
-        self._load_root_folders()
+        # Defer loading root folders until dialog is shown
+        QTimer.singleShot(0, self._load_root_folders)
     
     def _setup_ui(self):
         """Create and layout UI components."""
@@ -415,7 +415,11 @@ class FolderStatusDialog(QDialog):
             tree_item.setText(6, "?")
     
     def _on_item_expanded(self, tree_item: QTreeWidgetItem):
-        """Handle tree item expansion - load children if not loaded."""
+        """Handle tree item expansion - load children if not loaded.
+        
+        This only loads immediate children (shallow scan) since all reconciliation
+        was already done when opening the dialog.
+        """
         relative_path = self._get_item_path(tree_item)
         folder_item = self.loaded_items.get(relative_path)
         
@@ -430,58 +434,49 @@ class FolderStatusDialog(QDialog):
         tree_item.takeChildren()
         
         try:
-            # Show progress dialog for large folders
-            progress_dlg = QProgressDialog(f"Scanning {folder_item.name}...", "Cancel", 0, 100, self)
-            progress_dlg.setWindowModality(Qt.WindowModal)
-            progress_dlg.setMinimumDuration(500)
-            progress_dlg.setAutoClose(False)
-            progress_dlg.setAutoReset(False)
+            # Quick scan of immediate children only (no reconciliation needed)
+            from pathlib import Path
+            folder_path = Path(self.path_mapper.to_absolute(folder_item.relative_path))
             
-            # Track last update
-            last_update = [0]
-            update_interval = 20  # Update every 20 items
-            
-            # Create progress callback
-            def on_progress(scan_progress: ScanProgress):
-                if scan_progress.is_cancelled:
-                    return
-                    
-                if progress_dlg.wasCanceled():
-                    scan_progress.is_cancelled = True
-                    return
+            # Get immediate children from filesystem
+            for child_path in folder_path.iterdir():
+                child_rel_path = self.path_mapper.to_relative(str(child_path))
+                child_name = child_path.name
                 
-                # Update less frequently
-                total_items = scan_progress.scanned_folders + scan_progress.scanned_files
-                if total_items - last_update[0] >= update_interval or scan_progress.get_percentage() >= 100:
-                    last_update[0] = total_items
-                    progress_dlg.setValue(scan_progress.get_percentage())
-                    QApplication.processEvents()
-            
-            # Scan folder contents (non-recursive, just immediate children)
-            self.scanner.scan_folder_contents(folder_item, recursive=False, progress_callback=on_progress)
-            
-            # Reconcile this folder with the repository
-            progress_dlg.setLabelText(f"Reconciling {folder_item.name}...")
-            progress_dlg.setValue(50)  # Mid-point indicator
-            QApplication.processEvents()
-            
-            try:
-                recon_result = self.status_manager.reconcile_folder_with_filesystem(
-                    folder_item.relative_path,
-                    progress_callback=None  # No sub-progress for now
+                # Create FolderItem for this child
+                child_item = FolderItem(
+                    relative_path=child_rel_path,
+                    is_directory=child_path.is_dir(),
+                    name=child_name,
+                    parent_path=folder_item.relative_path
                 )
-                folder_item.recon_result = recon_result
-            except Exception as e:
-                print(f"Error reconciling {folder_item.name}: {e}")
-                folder_item.recon_result = None
+                
+                # Get status from repository
+                child_item.status = self.status_manager.get_status(child_rel_path)
+                
+                # If it's a folder, get reconciliation data from repository
+                if child_item.is_directory:
+                    try:
+                        # This is fast - just reads from CSV cache
+                        child_recon = self.status_manager.reconcile_folder_with_filesystem(
+                            child_rel_path,
+                            progress_callback=None
+                        )
+                        child_item.recon_result = child_recon
+                    except Exception as e:
+                        print(f"Error getting data for {child_name}: {e}")
+                        child_item.recon_result = None
+                
+                folder_item.add_child(child_item)
             
-            progress_dlg.close()
+            # Mark as loaded
+            folder_item.is_loaded = True
             
             # Add children to tree
             for child in folder_item.children:
-                self._add_item_to_tree(child, tree_item)
+                child_tree_item = self._add_item_to_tree(child, tree_item)
             
-            # Update counts
+            # Update parent display
             self._update_tree_item_status(tree_item, folder_item)
             
         except Exception as e:

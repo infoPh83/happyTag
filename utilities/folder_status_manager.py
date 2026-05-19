@@ -581,7 +581,10 @@ class FolderStatusManager:
         return self._scan_new_folder(folder_rel_path, absolute_path, progress_callback)
     
     def _scan_new_folder(self, folder_rel_path: str, absolute_path: str, progress_callback=None):
-        """Scan a NEW folder recursively and mark everything as new."""
+        """Scan a NEW folder recursively and mark everything as new.
+        
+        This scans RECURSIVELY through all subfolders to count and register all images.
+        """
         debug("folder_status", f"Scanning NEW folder: {folder_rel_path}")
         
         total_images = 0
@@ -601,8 +604,16 @@ class FolderStatusManager:
                 'notes': 'Auto-discovered'
             }
             
-            # Scan all items in folder
-            items = list(folder_path.iterdir())
+            # Scan all items in folder RECURSIVELY
+            items = []
+            for item in folder_path.rglob('*'):
+                items.append(item)
+            
+            # Count immediate child folders separately
+            immediate_child_folders = 0
+            for item in folder_path.iterdir():
+                if item.is_dir():
+                    immediate_child_folders += 1
             
             for idx, item in enumerate(items):
                 if progress_callback:
@@ -612,7 +623,6 @@ class FolderStatusManager:
                 
                 if item.is_dir():
                     # Subfolder - mark as NEW
-                    total_folders += 1
                     self._status_cache[item_rel_path] = {
                         'item_type': 'folder',
                         'status': STATUS_NEW,
@@ -645,7 +655,7 @@ class FolderStatusManager:
                 'on_cloud': 0,
                 'dismissed': 0,
                 'new': total_images,  # All images are new
-                'folders': total_folders,
+                'folders': immediate_child_folders,  # Only immediate child folders
                 'status': STATUS_NEW
             }
             
@@ -661,7 +671,10 @@ class FolderStatusManager:
             }
     
     def _reconcile_watched_folder(self, folder_rel_path: str, absolute_path: str, progress_callback=None):
-        """Reconcile a WATCHED folder with expected watched/dismissed states."""
+        """Reconcile a WATCHED folder with expected watched/dismissed states.
+        
+        This scans RECURSIVELY through all subfolders to count all images.
+        """
         debug("folder_status", f"Reconciling WATCHED folder: {folder_rel_path}")
         
         folder_path = Path(absolute_path)
@@ -679,12 +692,21 @@ class FolderStatusManager:
             if path.startswith(folder_rel_path + '/') or path == folder_rel_path
         }
         
-        # Get all items currently in filesystem
+        # Get all items currently in filesystem (RECURSIVELY)
         try:
-            fs_items = list(folder_path.iterdir())
+            # Use rglob to recursively find all items
+            fs_items = []
+            for item in folder_path.rglob('*'):
+                fs_items.append(item)
             
             # Track which repo items we've seen
             seen_repo_items = set()
+            
+            # Also count immediate child folders separately
+            immediate_child_folders = set()
+            for item in folder_path.iterdir():
+                if item.is_dir():
+                    immediate_child_folders.add(self.path_mapper.to_relative(str(item)))
             
             for idx, item in enumerate(fs_items):
                 if progress_callback:
@@ -694,7 +716,6 @@ class FolderStatusManager:
                 seen_repo_items.add(item_rel_path)
                 
                 if item.is_dir():
-                    total_folders += 1
                     # Check if folder is in repo
                     if item_rel_path in self._status_cache:
                         # Expected: watched or dismissed
@@ -765,7 +786,7 @@ class FolderStatusManager:
                 'on_cloud': on_cloud_count,
                 'dismissed': dismissed_count,
                 'new': new_count,
-                'folders': total_folders,
+                'folders': len(immediate_child_folders),  # Only immediate child folders
                 'status': STATUS_WATCHED
             }
             
