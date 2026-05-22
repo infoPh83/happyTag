@@ -17,7 +17,7 @@ from utilities.debug_utils import debug
 from utilities.path_mapper import PathMapper
 from utilities.folder_status_manager import (
     FolderStatusManager,
-    STATUS_DISCARDED,
+    STATUS_DISMISSED,
     SUPPORTED_IMAGE_EXTENSIONS
 )
 
@@ -216,9 +216,9 @@ class FolderScanner:
         """
         debug("scanner", f"Scanning folder contents: {folder_item.relative_path} (recursive={recursive})")
         
-        # Check if folder is discarded
-        if folder_item.status == STATUS_DISCARDED:
-            debug("scanner", f"Skipping discarded folder: {folder_item.relative_path}")
+        # Check if folder is dismissed
+        if folder_item.status == STATUS_DISMISSED:
+            debug("scanner", f"Skipping dismissed folder: {folder_item.relative_path}")
             folder_item.is_loaded = True
             return []
         
@@ -343,10 +343,10 @@ class FolderScanner:
                 if not root_rel:
                     continue
                 
-                # Check if this folder is discarded
+                # Check if this folder is dismissed
                 root_status = self.status_manager.get_status(root_rel)
-                if root_status == STATUS_DISCARDED:
-                    debug("scanner", f"Skipping discarded folder tree: {root_rel}")
+                if root_status == STATUS_DISMISSED:
+                    debug("scanner", f"Skipping dismissed folder tree: {root_rel}")
                     dirs[:] = []  # Don't descend into subdirectories
                     continue
                 
@@ -379,8 +379,8 @@ class FolderScanner:
                     if progress_callback:
                         progress_callback(self.progress)
                     
-                    # If folder is discarded, remove from dirs to skip scanning
-                    if status == STATUS_DISCARDED:
+                    # If folder is dismissed, remove from dirs to skip scanning
+                    if status == STATUS_DISMISSED:
                         dirs.remove(dirname)
                 
                 # Process files
@@ -441,7 +441,7 @@ class FolderScanner:
             for root, dirs, files in os.walk(abs_path):
                 # Check if discarded
                 root_rel = self.path_mapper.to_relative(root)
-                if root_rel and self.status_manager.get_status(root_rel) == STATUS_DISCARDED:
+                if root_rel and self.status_manager.get_status(root_rel) == STATUS_DISMISSED:
                     dirs[:] = []  # Skip subdirectories
                     continue
                 
