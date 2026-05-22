@@ -13,6 +13,7 @@ Features:
 
 import os
 import re
+import csv
 import time
 import tempfile
 import shutil
@@ -93,6 +94,7 @@ class CloudinaryUploadHandler(QObject):
         self.tag_widgets = []  # Will store references to tag input widgets
         self.source_folder_name = None  # Will store the folder name extracted from first file
         self.metadata_write_failures = []  # Track files where metadata writing failed
+        self._csv_database = {}  # Tracks uploaded file entries for CSV persistence
         
     def get_metadata_failure_summary(self):
         """
@@ -140,6 +142,7 @@ class CloudinaryUploadHandler(QObject):
         self.tag_widgets = []
         self.source_folder_name = None
         self.metadata_write_failures = []  # Reset metadata failure tracking
+        self._csv_database = {}
         debug_upload("Upload handler reset complete - ready for new session")
         
     def set_assessment_data(self, assessment_data):
@@ -311,7 +314,11 @@ class CloudinaryUploadHandler(QObject):
             completion_msg = f"NEW upload phase complete: {uploaded_count} uploaded/updated, {error_count} errors, {metadata_failures_count} metadata failures"
             debug_upload(completion_msg)
             log_session_message(completion_msg, "UPLOAD")
-            
+
+            # Save uploaded file entries to the CSV database
+            if uploaded_count > 0:
+                self._save_csv_database()
+
             # END UPLOAD TIMING and update main app
             upload_time = time.time() - upload_start
             debug_upload(f"Upload and post-upload phases completed in {upload_time:.3f} seconds")
@@ -848,13 +855,67 @@ class CloudinaryUploadHandler(QObject):
                 # Use the original file path that serves as the widget key
                 widget_key_path = original_file_path if original_file_path else str(file_path_obj)
                 self._update_widget_public_id(widget_key_path, final_public_id)
-                
+
+            # Record this upload in the CSV database
+            try:
+                orig_path = Path(original_file_path) if original_file_path else file_path_obj
+                original_size = orig_path.stat().st_size if orig_path.exists() else 0
+                resized_size = response.get('bytes', original_size)
+                file_ext = orig_path.suffix.lstrip('.').lower()
+                entry_key = orig_path.name
+                self._csv_database[entry_key] = {
+                    'file_name': entry_key,
+                    'original_size': original_size,
+                    'resized_size': resized_size,
+                    'filetype': file_ext,
+                    'public_id': final_public_id,
+                    'url': cloudinary_url,
+                    'upload_date': datetime.now().isoformat()
+                }
+            except Exception as db_err:
+                debug_upload(f"Could not record CSV entry: {db_err}")
+
             return True
             
         except Exception as e:
             debug_upload(f"Cloudinary upload failed for {file_path}: {e}")
             return False
             
+    def _save_csv_database(self):
+        """Merge newly uploaded file entries into the persistent CSV database."""
+        if not self._csv_database:
+            return
+        try:
+            from utilities.settings_dialog import SettingsDialog
+            from utilities.cloudinary_update_v13 import DATABASE_FILE_NAME
+            settings = SettingsDialog.get_cloudinary_settings()
+            log_folder = settings.get('log_folder', '').strip()
+            if not log_folder:
+                log_folder = str(Path.cwd() / 'logs')
+            db_path = Path(log_folder) / DATABASE_FILE_NAME
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Load existing entries so we don't overwrite previous uploads
+            existing = {}
+            if db_path.exists():
+                with open(db_path, mode='r', newline='') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        existing[row['file_name']] = row
+
+            existing.update(self._csv_database)
+
+            fieldnames = ['file_name', 'original_size', 'resized_size', 'filetype', 'public_id', 'url', 'upload_date']
+            with open(db_path, mode='w', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                for entry in existing.values():
+                    writer.writerow({k: entry.get(k, '') for k in fieldnames})
+
+            print(f"[CSV] Saved database with {len(existing)} entries to {db_path}")
+        except Exception as e:
+            print(f"[CSV] Failed to save database: {e}")
+
     def _generate_folder_name(self):
         """
         Generate folder name for Cloudinary upload based on source folder.

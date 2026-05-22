@@ -298,7 +298,10 @@ class CloudinaryUpdater(QObject):
                 local_directory, self.database, self.cloudinary_files, self.resized_dir, self.mode)
 
             # Save the updated database to the CSV file
-            update_csv_database(database_file_path, self.database)
+            try:
+                update_csv_database(database_file_path, self.database)
+            except Exception as csv_err:
+                print(f"[CSV] Assessment save FAILED: {csv_err}")
 
             # Display Cloudinary usage and storage details
             cloudinaryAvailableStorage = get_cloudinary_credits(self)
@@ -411,7 +414,10 @@ class CloudinaryUpdater(QObject):
         # Save the updated database
         # database_file_path = Path(LOG_FILE_PATH) / DATABASE_FILE_NAME
         database_file_path = Path(self.logFilePath) / DATABASE_FILE_NAME
-        update_csv_database(database_file_path, self.database)
+        try:
+            update_csv_database(database_file_path, self.database)
+        except Exception as csv_err:
+            print(f"[CSV] Upload save FAILED: {csv_err}")
 
         # Calculate final statistics
         resize_error_count = len(resize_errors)
