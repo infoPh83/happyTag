@@ -25,33 +25,45 @@ from typing import Optional, List, Dict, Set
 from .path_mapper import PathMapper
 from .folder_status_manager import (FolderStatusManager,
                                    STATUS_DISMISSED, STATUS_NEW, STATUS_WATCHED,
-                                   STATUS_NOT_FOUND,
+                                   STATUS_NOT_FOUND, STATUS_PART_WATCHED,
                                    FILE_STATUS_ON_CLOUD, FILE_STATUS_DISMISSED,
                                    FILE_STATUS_NEW, FILE_STATUS_NOT_FOUND)
 from .folder_scanner import FolderScanner, FolderItem, ScanProgress
 
 
 # Status display configuration
+# 'user_assignable': False means the status is auto-computed and not shown in the
+#   context menu or status filter dropdown.
 STATUS_CONFIG = {
     STATUS_DISMISSED: {
         'label': 'Dismissed',
         'color': QColor(180, 180, 180),  # Gray
-        'description': 'Folder dismissed from workflow'
+        'description': 'Folder dismissed from workflow',
+        'user_assignable': True,
     },
     STATUS_NEW: {
         'label': 'New',
         'color': QColor(255, 255, 200),  # Light yellow
-        'description': 'New images, not yet processed'
+        'description': 'New folder, not yet reviewed',
+        'user_assignable': False,
     },
     STATUS_WATCHED: {
         'label': 'Watched',
         'color': QColor(150, 200, 255),  # Light blue
-        'description': 'Folder being monitored'
+        'description': 'Folder being monitored',
+        'user_assignable': True,
     },
     STATUS_NOT_FOUND: {
         'label': 'Not Found',
         'color': QColor(255, 150, 150),  # Light red
-        'description': 'Missing from filesystem'
+        'description': 'Missing from filesystem',
+        'user_assignable': False,
+    },
+    STATUS_PART_WATCHED: {
+        'label': 'Part Watched',
+        'color': QColor(255, 210, 140),  # Amber
+        'description': 'Contains a mix of watched and dismissed sub-folders',
+        'user_assignable': False,
     },
 }
 
@@ -147,6 +159,8 @@ class FolderStatusDialog(QDialog):
         self.status_filter.addItem("All Statuses", None)
         for status_code, config in STATUS_CONFIG.items():
             self.status_filter.addItem(config['label'], status_code)
+        # Note: STATUS_PART_WATCHED is included so users can filter by it;
+        # _apply_filters handles it via has_watched_descendant() at runtime.
         self.status_filter.currentIndexChanged.connect(self._on_filter_changed)
         layout.addWidget(self.status_filter)
         
@@ -403,9 +417,22 @@ class FolderStatusDialog(QDialog):
         return tree_item.data(0, Qt.UserRole) or ""
     
     def _update_tree_item_status(self, tree_item: QTreeWidgetItem, folder_item: FolderItem):
-        """Update tree item's status display and color."""
+        """Update tree item's status display and color.
+
+        The displayed status may differ from the stored status:
+        - A dismissed folder that has at least one watched descendant is shown
+          as STATUS_PART_WATCHED (amber) to signal the mixed state.
+        """
         status = folder_item.status
-        
+
+        # Compute effective display status
+        if (
+            status == STATUS_DISMISSED
+            and folder_item.is_directory
+            and self.status_manager.has_watched_descendant(folder_item.relative_path)
+        ):
+            status = STATUS_PART_WATCHED
+
         config = STATUS_CONFIG.get(status, STATUS_CONFIG[STATUS_WATCHED])
         
         # Set status text
@@ -415,8 +442,8 @@ class FolderStatusDialog(QDialog):
         for col in range(tree_item.columnCount()):
             tree_item.setBackground(col, QBrush(config['color']))
         
-        # Dismissed folders show only name + status; count columns are left blank
-        if folder_item.status == STATUS_DISMISSED:
+        # Dismissed / part-watched folders show only name + status; count columns are left blank
+        if status in (STATUS_DISMISSED, STATUS_PART_WATCHED):
             for col in range(2, 7):
                 tree_item.setText(col, '')
             return
@@ -544,20 +571,14 @@ class FolderStatusDialog(QDialog):
         if not folder_item:
             return
         
-        # Status change actions
+        # Status change actions — only user-assignable statuses (Watched / Dismissed)
         status_menu = menu.addMenu("Set Status")
         for status_code, config in STATUS_CONFIG.items():
+            if not config.get('user_assignable', False):
+                continue
             action = status_menu.addAction(config['label'])
             action.triggered.connect(lambda checked, s=status_code: self._set_item_status(item, s, False))
-        
-        # Recursive status change (folders only)
-        if folder_item.is_directory:
-            menu.addSeparator()
-            recursive_menu = menu.addMenu("Set Folder and Contents")
-            for status_code, config in STATUS_CONFIG.items():
-                action = recursive_menu.addAction(config['label'])
-                action.triggered.connect(lambda checked, s=status_code: self._set_item_status(item, s, True))
-        
+
         # Scan actions
         if folder_item.is_directory:
             menu.addSeparator()
@@ -824,7 +845,16 @@ class FolderStatusDialog(QDialog):
             
             # Status filter
             if self.filter_status and folder_item:
-                if folder_item.status != self.filter_status:
+                if self.filter_status == STATUS_PART_WATCHED:
+                    # part_watched is computed, not stored
+                    is_part_watched = (
+                        folder_item.status == STATUS_DISMISSED
+                        and folder_item.is_directory
+                        and self.status_manager.has_watched_descendant(folder_item.relative_path)
+                    )
+                    if not is_part_watched:
+                        visible = False
+                elif folder_item.status != self.filter_status:
                     visible = False
             
             item.setHidden(not visible)

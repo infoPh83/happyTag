@@ -23,6 +23,7 @@ STATUS_DISMISSED = "dismissed"
 STATUS_NEW = "new"
 STATUS_WATCHED = "watched"
 STATUS_NOT_FOUND = "not_found"
+STATUS_PART_WATCHED = "part_watched"  # auto-computed: dismissed folder with at least one watched descendant
 
 # Status constants for FILES (in watched folders)
 FILE_STATUS_ON_CLOUD = "on_cloud"
@@ -35,6 +36,7 @@ ALL_STATUSES = [
     STATUS_NEW,
     STATUS_WATCHED,
     STATUS_NOT_FOUND,
+    STATUS_PART_WATCHED,
 ]
 
 ALL_FILE_STATUSES = [
@@ -969,6 +971,21 @@ class FolderStatusManager:
             if key.startswith(prefix) and data.get('item_type') == 'folder':
                 remainder = key[len(prefix):]
                 if '/' not in remainder:
+                    return True
+        return False
+
+    def has_watched_descendant(self, rel_path: str) -> bool:
+        """
+        Return True if any descendant folder of rel_path has STATUS_WATCHED in the
+        CSV cache.  Used to compute the auto STATUS_PART_WATCHED display state.
+        Does not touch the filesystem.
+        """
+        if not self._cache_loaded:
+            self.load_status_db()
+        prefix = rel_path + "/"
+        for key, data in self._status_cache.items():
+            if key.startswith(prefix) and data.get('item_type') == 'folder':
+                if data.get('status') == STATUS_WATCHED:
                     return True
         return False
 
