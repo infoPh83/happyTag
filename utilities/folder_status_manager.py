@@ -179,7 +179,10 @@ class FolderStatusManager:
             if migrated_count > 0:
                 debug("folder_status", f"Migrated {migrated_count} entries, saving database")
                 self.save_status_db()
-            
+
+            # Fix any inferred statuses that are out of sync
+            self.recompute_all_inferred_statuses()
+
             debug("folder_status", f"Loaded {count} entries from CSV")
             return True, f"Loaded {count} entries" + (f" (migrated {migrated_count})" if migrated_count > 0 else "")
             
@@ -307,7 +310,56 @@ class FolderStatusManager:
         
         # Save to disk
         return self.save_status_db()
-    
+
+    def update_file_status(self, absolute_path: str, status: str,
+                           cloudinary_id: str = "", cloudinary_url: str = "",
+                           upload_date: str = "") -> Tuple[bool, str]:
+        """
+        Update the status (and optional Cloudinary metadata) for a single image file.
+
+        Called from the main window whenever a photo is dismissed or uploaded so
+        the folder status counters stay in sync without a full reconciliation scan.
+
+        Args:
+            absolute_path: Absolute filesystem path to the image file.
+            status: New file status (FILE_STATUS_ON_CLOUD, FILE_STATUS_DISMISSED, etc.)
+            cloudinary_id: Cloudinary public_id (only relevant for on_cloud status).
+            cloudinary_url: Cloudinary secure URL (optional).
+            upload_date: ISO timestamp of the upload; auto-filled when status
+                         changes to on_cloud if not provided.
+
+        Returns:
+            Tuple of (success, message)
+        """
+        if not self._cache_loaded:
+            self.load_status_db()
+
+        rel_path = self.path_mapper.to_relative(absolute_path)
+        now = datetime.now().isoformat()
+        existing = self._status_cache.get(rel_path, {})
+
+        # Auto-stamp upload_date when transitioning to on_cloud
+        effective_upload_date = upload_date
+        if (not effective_upload_date
+                and status == FILE_STATUS_ON_CLOUD
+                and existing.get('status') != FILE_STATUS_ON_CLOUD):
+            effective_upload_date = now
+
+        self._status_cache[rel_path] = {
+            'item_type': 'file',
+            'status': status,
+            'cloudinary_id': cloudinary_id or existing.get('cloudinary_id', ''),
+            'cloudinary_url': cloudinary_url or existing.get('cloudinary_url', ''),
+            'original_size': existing.get('original_size', ''),
+            'upload_size': existing.get('upload_size', ''),
+            'upload_date': effective_upload_date or existing.get('upload_date', ''),
+            'last_modified': now,
+            'notes': existing.get('notes', '')
+        }
+
+        debug("folder_status", f"update_file_status: {rel_path} -> {status}")
+        return self.save_status_db()
+
     def set_folder_recursive(self, relative_path: str, status: str, 
                             scan_filesystem: bool = True) -> Tuple[bool, str, int]:
         """
@@ -598,7 +650,12 @@ class FolderStatusManager:
         if folder_status == STATUS_WATCHED and folder_exists:
             debug("folder_status", f"  Scenario 5: Folder is WATCHED - reconciling contents")
             return self._reconcile_watched_folder(folder_rel_path, absolute_path, progress_callback)
-        
+
+        # SCENARIO 5b: Folder is PART_WATCHED - reconcile like watched for file counting
+        if folder_status == STATUS_PART_WATCHED and folder_exists:
+            debug("folder_status", f"  Scenario 5b: Folder is PART_WATCHED - reconciling contents")
+            return self._reconcile_watched_folder(folder_rel_path, absolute_path, progress_callback)
+
         # Default case
         debug("folder_status", f"  Default case - treating as new")
         return self._scan_new_folder(folder_rel_path, absolute_path, progress_callback)
@@ -679,7 +736,7 @@ class FolderStatusManager:
                 'nested': nested_images,
                 'on_cloud': 0,
                 'dismissed': 0,
-                'new': direct_images,  # status counts are for direct images only
+                'new': direct_images + nested_images,  # all new files
                 'status': STATUS_NEW
             }
             
@@ -759,15 +816,14 @@ class FolderStatusManager:
                         # Check if file is in repo
                         if item_rel_path in self._status_cache:
                             file_status = self._status_cache[item_rel_path]['status']
-                            
-                            # Track status counts for direct images only
-                            if is_direct:
-                                if file_status == FILE_STATUS_ON_CLOUD:
-                                    on_cloud_count += 1
-                                elif file_status == FILE_STATUS_DISMISSED:
-                                    dismissed_count += 1
-                                else:
-                                    new_count += 1
+                            # Count status for ALL files (direct + nested) so that
+                            # on_cloud + dismissed + new == direct + nested at every level
+                            if file_status == FILE_STATUS_ON_CLOUD:
+                                on_cloud_count += 1
+                            elif file_status == FILE_STATUS_DISMISSED:
+                                dismissed_count += 1
+                            else:
+                                new_count += 1
                         else:
                             # New file discovered in watched folder
                             debug("folder_status", f"  New file discovered: {item.name}")
@@ -782,8 +838,7 @@ class FolderStatusManager:
                                 'last_modified': datetime.now().isoformat(),
                                 'notes': 'Auto-discovered in watched folder'
                             }
-                            if is_direct:
-                                new_count += 1
+                            new_count += 1
             
             # Check for items in repo that are no longer in filesystem
             for repo_path, repo_data in repo_items.items():
@@ -817,40 +872,17 @@ class FolderStatusManager:
     
     def dismiss_folder(self, relative_path: str) -> Tuple[bool, str]:
         """
-        Mark a folder as dismissed and remove all its descendants from the database.
-        
-        This is a clean-slate dismiss: the folder entry is kept (as dismissed),
-        but all tracked child images and subfolders are deleted from the CSV.
-        
+        Mark a folder and all its descendant folders as dismissed.
+        File entries (and their Cloudinary metadata) are preserved in the database.
+        Ancestor statuses are recomputed automatically.
+
         Args:
             relative_path: Folder path relative to network root
-            
+
         Returns:
             Tuple of (success, message)
         """
-        if not self._cache_loaded:
-            self.load_status_db()
-        
-        rel_path = self.path_mapper.normalize_path(relative_path)
-        
-        # Delete this folder and all its descendants from cache
-        self._delete_folder_and_contents_from_repo(rel_path)
-        
-        # Add back just the folder itself as dismissed
-        self._status_cache[rel_path] = {
-            'item_type': 'folder',
-            'status': STATUS_DISMISSED,
-            'cloudinary_id': '',
-            'cloudinary_url': '',
-            'original_size': '',
-            'upload_size': '',
-            'upload_date': '',
-            'last_modified': datetime.now().isoformat(),
-            'notes': ''
-        }
-        
-        debug("folder_status", f"Dismissed folder: {rel_path}")
-        return self.save_status_db()
+        return self.set_folder_direct(relative_path, STATUS_DISMISSED)
     
     def set_file_on_cloud(self, relative_path: str, cloudinary_id: str = '',
                           cloudinary_url: str = '', original_size: str = '',
@@ -958,6 +990,192 @@ class FolderStatusManager:
 
         debug("folder_status", f"seed_folder_structure: {added} added, {skipped} skipped")
         return added, skipped
+
+    def reset_all_folders_to_dismissed(self) -> Tuple[bool, str]:
+        """
+        Set every folder entry in the cache to 'dismissed'.
+        File entries (and their Cloudinary metadata) are preserved.
+        Intended for a clean-slate reset so the user can re-watch folders via the UI.
+
+        Returns:
+            Tuple of (success, message)
+        """
+        if not self._cache_loaded:
+            self.load_status_db()
+        now = datetime.now().isoformat()
+        count = 0
+        for data in self._status_cache.values():
+            if data.get('item_type') == 'folder' and data.get('status') != STATUS_DISMISSED:
+                data['status'] = STATUS_DISMISSED
+                data['last_modified'] = now
+                count += 1
+        debug("folder_status", f"reset_all_folders_to_dismissed: {count} folders reset")
+        return self.save_status_db()
+
+    def infer_folder_status(self, rel_path: str) -> Optional[str]:
+        """
+        Infer the correct status of a folder from its direct child folders in the cache.
+
+        Returns:
+            STATUS_WATCHED      if all direct child folders are watched (and none are part_watched)
+            STATUS_DISMISSED    if all direct child folders are dismissed
+            STATUS_PART_WATCHED if any direct child is part_watched, OR there is a mix
+                                of watched and dismissed children
+            None                if there are no direct child folders (cannot infer)
+        """
+        if not self._cache_loaded:
+            self.load_status_db()
+        prefix = rel_path + "/"
+        part_watched_count = 0
+        watched_count = 0
+        dismissed_count = 0
+        for key, data in self._status_cache.items():
+            if not key.startswith(prefix):
+                continue
+            remainder = key[len(prefix):]
+            if '/' in remainder or data.get('item_type') != 'folder':
+                continue
+            s = data['status']
+            if s == STATUS_PART_WATCHED:
+                part_watched_count += 1
+            elif s == STATUS_WATCHED:
+                watched_count += 1
+            elif s == STATUS_DISMISSED:
+                dismissed_count += 1
+            # STATUS_NEW / STATUS_NOT_FOUND are ignored for inference
+
+        if part_watched_count == 0 and watched_count == 0 and dismissed_count == 0:
+            return None
+        # Any part_watched child means this folder is also part_watched
+        if part_watched_count > 0:
+            return STATUS_PART_WATCHED
+        # Mix of watched and dismissed → part_watched
+        if watched_count > 0 and dismissed_count > 0:
+            return STATUS_PART_WATCHED
+        if watched_count > 0:
+            return STATUS_WATCHED
+        return STATUS_DISMISSED
+
+    def propagate_status_to_ancestors(self, rel_path: str) -> List[str]:
+        """
+        Walk up the path hierarchy from rel_path, recomputing each ancestor's
+        inferred status (watched / dismissed / part_watched).
+
+        Returns:
+            List of relative paths that were updated.
+        """
+        if not self._cache_loaded:
+            self.load_status_db()
+        changed: List[str] = []
+        now = datetime.now().isoformat()
+        path = rel_path
+        while '/' in path:
+            parent = path.rsplit('/', 1)[0]
+            inferred = self.infer_folder_status(parent)
+            if inferred is not None:
+                entry = self._status_cache.get(parent)
+                if entry and entry.get('status') not in (STATUS_NEW, STATUS_NOT_FOUND):
+                    if entry.get('status') != inferred:
+                        entry['status'] = inferred
+                        entry['last_modified'] = now
+                        changed.append(parent)
+                        debug("folder_status", f"propagate: {parent} -> {inferred}")
+            path = parent
+        return changed
+
+    def set_folder_direct(self, rel_path: str, status: str) -> Tuple[bool, str]:
+        """
+        Directly assign 'watched' or 'dismissed' to a folder and all its
+        descendant folders, then propagate inferred statuses up to ancestors.
+
+        Only STATUS_WATCHED and STATUS_DISMISSED are valid direct-assignment values.
+        File entries are left untouched (their Cloudinary metadata is preserved).
+
+        Returns:
+            Tuple of (success, message)
+        """
+        if status not in (STATUS_WATCHED, STATUS_DISMISSED):
+            return False, f"Direct assignment only supports 'watched' or 'dismissed'; got '{status}'"
+        if not self._cache_loaded:
+            self.load_status_db()
+
+        rel_path = self.path_mapper.normalize_path(rel_path)
+        now = datetime.now().isoformat()
+
+        # Update or create the target folder entry
+        existing = self._status_cache.get(rel_path, {})
+        self._status_cache[rel_path] = {
+            'item_type': 'folder',
+            'status': status,
+            'cloudinary_id': existing.get('cloudinary_id', ''),
+            'cloudinary_url': existing.get('cloudinary_url', ''),
+            'original_size': existing.get('original_size', ''),
+            'upload_size': existing.get('upload_size', ''),
+            'upload_date': existing.get('upload_date', ''),
+            'last_modified': now,
+            'notes': existing.get('notes', ''),
+        }
+
+        # Set all descendant folders to the same status; leave file entries alone
+        prefix = rel_path + '/'
+        for key, data in self._status_cache.items():
+            if key.startswith(prefix) and data.get('item_type') == 'folder':
+                data['status'] = status
+                data['last_modified'] = now
+
+        # Propagate inferred status upward to ancestors
+        self.propagate_status_to_ancestors(rel_path)
+
+        debug("folder_status", f"set_folder_direct: {rel_path} -> {status}")
+        return self.save_status_db()
+
+    def recompute_all_inferred_statuses(self) -> int:
+        """
+        Recompute inferred (part_watched / watched / dismissed) statuses for all
+        folders in the cache, processing deepest paths first so that child updates
+        feed correctly into parent computations.
+
+        Called once after loading the database to repair any inconsistencies
+        (e.g. folders that were set watched but have dismissed children).
+
+        Returns:
+            Number of entries that were updated.
+        """
+        if not self._cache_loaded:
+            return 0
+
+        folder_paths = [
+            key for key, data in self._status_cache.items()
+            if data.get('item_type') == 'folder'
+        ]
+        # Process deepest first so parent inference sees up-to-date child statuses
+        folder_paths.sort(key=lambda p: p.count('/'), reverse=True)
+
+        now = datetime.now().isoformat()
+        changed = 0
+
+        for rel_path in folder_paths:
+            inferred = self.infer_folder_status(rel_path)
+            if inferred is None:
+                continue
+            entry = self._status_cache.get(rel_path)
+            if not entry:
+                continue
+            current = entry.get('status')
+            # Only recompute statuses in the inferred domain; leave new/not_found alone
+            if current not in (STATUS_DISMISSED, STATUS_WATCHED, STATUS_PART_WATCHED):
+                continue
+            if current != inferred:
+                entry['status'] = inferred
+                entry['last_modified'] = now
+                changed += 1
+                debug("folder_status", f"recompute: {rel_path} {current} -> {inferred}")
+
+        if changed > 0:
+            self.save_status_db()
+
+        debug("folder_status", f"recompute_all_inferred_statuses: {changed} changes")
+        return changed
 
     def has_child_folders(self, rel_path: str) -> bool:
         """

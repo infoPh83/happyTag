@@ -2443,6 +2443,7 @@ class MainWindow(QMainWindow):
         
         # Track how many we're dismissing
         dismissed_count = 0
+        newly_dismissed_paths = []
         
         # Add selected images to dismissed set and categorize widgets
         for widget in current_widgets:
@@ -2450,6 +2451,7 @@ class MainWindow(QMainWindow):
                 if widget.file_path in self.selected_images:
                     # Add to dismissed set
                     self.dismissed_images.add(widget.file_path)
+                    newly_dismissed_paths.append(widget.file_path)
                     print(f"[DISMISS] Dismissing: {os.path.basename(widget.file_path)}")
                     # Set dismissed state on widget (triggers visual update)
                     if hasattr(widget, 'set_dismissed'):
@@ -2494,6 +2496,9 @@ class MainWindow(QMainWindow):
         
         # Update status bar
         self.update_status_bar()
+
+        # Report dismissed images to folder status manager
+        self._notify_files_dismissed(newly_dismissed_paths)
         
         debug("ui_events", f"Dismissed {dismissed_count} images, moved to end of queue")
 
@@ -2506,7 +2511,16 @@ class MainWindow(QMainWindow):
         if file_path in self.dismissed_images:
             # Remove from dismissed set
             self.dismissed_images.remove(file_path)
-            
+
+            # Clear dismissed status in CSV so it doesn't come back on next reload
+            _fsm = self._get_folder_status_manager()
+            if _fsm:
+                try:
+                    from utilities.folder_status_manager import FILE_STATUS_NEW
+                    _fsm.update_file_status(file_path, FILE_STATUS_NEW)
+                except Exception as _e:
+                    debug_errors(f"Could not clear dismissed status for {os.path.basename(file_path)}: {_e}")
+
             print(f"[REVIVE]   Removed from dismissed_images, now reviving...")
             debug("ui_events", f"Reviving dismissed image: {file_path}")
             
@@ -2920,6 +2934,20 @@ class MainWindow(QMainWindow):
                 self.image_flow_manager.set_widget_width(widget_width)
                 
                 # Prepare image data for the flow manager
+                # Pre-load dismissed file set from CSV so dismissed state survives reloads
+                _previously_dismissed = set()
+                _fsm_for_load = self._get_folder_status_manager()
+                if _fsm_for_load:
+                    try:
+                        from utilities.folder_status_manager import FILE_STATUS_DISMISSED as _FSD
+                        if not _fsm_for_load._cache_loaded:
+                            _fsm_for_load.load_status_db()
+                        for _rp, _rd in _fsm_for_load._status_cache.items():
+                            if _rd.get('item_type') == 'file' and _rd.get('status') == _FSD:
+                                _previously_dismissed.add(_fsm_for_load.path_mapper.to_absolute(_rp))
+                    except Exception as _e:
+                        debug_errors(f"Could not load dismissed files from CSV: {_e}")
+
                 image_data = []
                 for file_path in self.image_files:
                     if file_path in self.image_previews:
@@ -3005,14 +3033,34 @@ class MainWindow(QMainWindow):
                             'public_id': public_id,
                             'original_tags': original_tags_list,
                             'cloudinary_tags': cloudinary_tags_list,
-                            'public_id_to_be': public_id_to_be
+                            'public_id_to_be': public_id_to_be,
+                            'is_dismissed': file_path in _previously_dismissed,
                         })
                     else:
                         print(f"Warning: No preview available for {file_path}, skipping...")
                 
                 # Load images into the flow manager - much simpler than grid!
                 self.image_flow_manager.load_images(image_data)
-            
+
+                # Restore dismissed_images in-memory set from CSV
+                self.dismissed_images = _previously_dismissed.copy()
+
+                # Re-order layout after widgets are created: active first, dismissed at end
+                if _previously_dismissed:
+                    from PyQt5.QtCore import QTimer as _QTimer
+                    def _reorder_dismissed_to_end():
+                        widgets = list(self.image_flow_manager.image_widgets.values())
+                        active = [w for w in widgets if not getattr(w, 'is_dismissed', False)]
+                        dismissed = [w for w in widgets if getattr(w, 'is_dismissed', False)]
+                        if dismissed:
+                            while self.image_flow_manager.flow_layout.count():
+                                child = self.image_flow_manager.flow_layout.takeAt(0)
+                                if child.widget():
+                                    child.widget().setParent(None)
+                            for w in active + dismissed:
+                                self.image_flow_manager.flow_layout.addWidget(w)
+                    _QTimer.singleShot(300, _reorder_dismissed_to_end)
+
             # Update backward compatibility references
             self.image_widgets = list(self.image_flow_manager.image_widgets.values())
             
@@ -3701,8 +3749,72 @@ class MainWindow(QMainWindow):
         """Handle folder status updates from Folder Manager"""
         # Future: Could refresh the image list if filtering by folder status
         debug_ui_events("Folder statuses updated")
-    
-    def initialize_cloudinary(self):
+
+    # ------------------------------------------------------------------
+    # Folder-status reporting helpers
+    # These keep the Folder Manager CSV in sync when photos are dismissed
+    # or uploaded from the main window, without requiring a full rescan.
+    # ------------------------------------------------------------------
+
+    def _get_folder_status_manager(self):
+        """Return the active FolderStatusManager, reusing the dialog's instance if open."""
+        if hasattr(self, 'folder_manager_dialog') and self.folder_manager_dialog is not None:
+            return self.folder_manager_dialog.status_manager
+        try:
+            from utilities.folder_status_manager import FolderStatusManager
+            from utilities.settings_dialog import SettingsDialog
+            settings = SettingsDialog.get_cloudinary_settings()
+            network_root = settings.get('network_root', '').strip()
+            if network_root and os.path.exists(network_root):
+                if not hasattr(self, '_standalone_status_manager') or self._standalone_status_manager is None:
+                    self._standalone_status_manager = FolderStatusManager(network_root)
+                return self._standalone_status_manager
+        except Exception as e:
+            debug_errors(f"_get_folder_status_manager: {e}")
+        return None
+
+    def _notify_files_dismissed(self, file_paths):
+        """Mark the given image files as dismissed in the folder status CSV."""
+        if not file_paths:
+            return
+        mgr = self._get_folder_status_manager()
+        if not mgr:
+            return
+        from utilities.folder_status_manager import FILE_STATUS_DISMISSED
+        affected_folders = set()
+        for fp in file_paths:
+            try:
+                mgr.update_file_status(fp, FILE_STATUS_DISMISSED)
+                affected_folders.add(mgr.path_mapper.to_relative(os.path.dirname(fp)))
+            except Exception as e:
+                debug_errors(f"_notify_files_dismissed: {fp}: {e}")
+        # Refresh open dialog
+        if affected_folders and hasattr(self, 'folder_manager_dialog') and self.folder_manager_dialog is not None:
+            self.folder_manager_dialog.refresh_folder_counts(affected_folders)
+
+    def _notify_files_uploaded(self, image_widgets):
+        """Mark successfully uploaded image files as on_cloud in the folder status CSV."""
+        if not image_widgets:
+            return
+        mgr = self._get_folder_status_manager()
+        if not mgr:
+            return
+        from utilities.folder_status_manager import FILE_STATUS_ON_CLOUD
+        affected_folders = set()
+        for file_path, widget in image_widgets.items():
+            public_id = widget.get_cloudinary_public_id() if hasattr(widget, 'get_cloudinary_public_id') else ""
+            on_cloud = widget.get_cloudinary_status() if hasattr(widget, 'get_cloudinary_status') else False
+            if public_id and on_cloud:
+                try:
+                    mgr.update_file_status(file_path, FILE_STATUS_ON_CLOUD, cloudinary_id=public_id)
+                    affected_folders.add(mgr.path_mapper.to_relative(os.path.dirname(file_path)))
+                except Exception as e:
+                    debug_errors(f"_notify_files_uploaded: {file_path}: {e}")
+        # Refresh open dialog
+        if affected_folders and hasattr(self, 'folder_manager_dialog') and self.folder_manager_dialog is not None:
+            self.folder_manager_dialog.refresh_folder_counts(affected_folders)
+
+
         """Initialize Cloudinary integration with unified validation (called after settings changes)"""
         debug_startup("Re-initializing Cloudinary integration after settings change...")
         
@@ -3894,7 +4006,12 @@ class MainWindow(QMainWindow):
                 # Update progress periodically during analysis
                 if i % 5 == 0 or i == total_widgets:  # Update every 5 files or on last file
                     self.update_progress_label(f"Analyzing files... ({i}/{total_widgets})")
-                
+
+                # Skip dismissed images — user explicitly excluded them
+                if getattr(widget, 'is_dismissed', False):
+                    debug_upload(f"  Skipping dismissed image: {os.path.basename(file_path)}")
+                    continue
+
                 # Get current UI tags
                 ui_tags = widget.get_tags()
                 ui_tags_list = [tag.strip() for tag in ui_tags] if isinstance(ui_tags, list) else parse_keywords_from_text(str(ui_tags))
@@ -4302,6 +4419,9 @@ class MainWindow(QMainWindow):
         for widget in self.image_flow_manager.image_widgets.values():
             if hasattr(widget, 'update'):
                 widget.update()
+
+        # Report uploaded files to folder status manager
+        self._notify_files_uploaded(self.image_flow_manager.image_widgets)
     
     def update_progress_label(self, message):
         """Update the progress label with a custom message"""

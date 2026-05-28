@@ -108,7 +108,7 @@ class ImageFlowManager(QWidget):
                 widget.set_text_size(text_size)
             
     def add_image(self, file_path, tags=None, metadata=None, preview_pixmap=None, cloudinary_synced=False, 
-                  public_id=None, original_tags=None, cloudinary_tags=None, public_id_to_be=None):
+                  public_id=None, original_tags=None, cloudinary_tags=None, public_id_to_be=None, is_dismissed=False):
         """Add an image to the flow layout with enhanced metadata for upload optimization"""
         if file_path in self.image_widgets:
             print(f"[WARNING] Image already exists in flow: {file_path}")
@@ -132,6 +132,10 @@ class ImageFlowManager(QWidget):
             widget.set_cloudinary_tags(cloudinary_tags)
         if public_id_to_be:
             widget.set_public_id_to_be(public_id_to_be)
+
+        # Restore persisted dismissed state
+        if is_dismissed:
+            widget.set_dismissed(True)
         
         # Apply default text size to new widget
         if hasattr(widget, 'set_text_size'):
@@ -438,12 +442,13 @@ class ImageFlowManager(QWidget):
                 original_tags = image_data.get('original_tags', [])
                 cloudinary_tags = image_data.get('cloudinary_tags', [])
                 public_id_to_be = image_data.get('public_id_to_be')
+                is_dismissed = image_data.get('is_dismissed', False)
 
                 # Add the image with preview pixmap, sync status, and enhanced metadata
                 self.add_image(file_path, tags=tags, metadata=metadata, preview_pixmap=preview_pixmap, 
                               cloudinary_synced=cloudinary_synced, public_id=public_id, 
                               original_tags=original_tags, cloudinary_tags=cloudinary_tags,
-                              public_id_to_be=public_id_to_be)
+                              public_id_to_be=public_id_to_be, is_dismissed=is_dismissed)
             
             # Force garbage collection after each batch to free memory
             gc.collect()
@@ -476,12 +481,13 @@ class ImageFlowManager(QWidget):
             original_tags = image_data.get('original_tags', [])
             cloudinary_tags = image_data.get('cloudinary_tags', [])
             public_id_to_be = image_data.get('public_id_to_be')
+            is_dismissed = image_data.get('is_dismissed', False)
 
             # Add the image with preview pixmap, sync status, and enhanced metadata
             self.add_image(file_path, tags=tags, metadata=metadata, preview_pixmap=preview_pixmap, 
                           cloudinary_synced=cloudinary_synced, public_id=public_id, 
                           original_tags=original_tags, cloudinary_tags=cloudinary_tags,
-                          public_id_to_be=public_id_to_be)
+                          public_id_to_be=public_id_to_be, is_dismissed=is_dismissed)
             
         # Re-enable updates and force a layout update
         self.setUpdatesEnabled(True)
