@@ -57,6 +57,10 @@ SUPPORTED_IMAGE_EXTENSIONS = {
     '.gif'
 }
 
+# File types the app recognises as images but cannot load/upload.
+# They are counted in the Dismissed column so they don't inflate New counts.
+UNSUPPORTED_BY_APP_EXTENSIONS = {'.bmp', '.psd'}
+
 
 class FolderStatusManager:
     """
@@ -715,10 +719,15 @@ class FolderStatusManager:
                             direct_images += 1
                         else:
                             nested_images += 1
-                        # Add file as NEW
+                        # Unsupported by the app — register as dismissed
+                        file_status = (
+                            FILE_STATUS_DISMISSED
+                            if item.suffix.lower() in UNSUPPORTED_BY_APP_EXTENSIONS
+                            else FILE_STATUS_NEW
+                        )
                         self._status_cache[item_rel_path] = {
                             'item_type': 'file',
-                            'status': FILE_STATUS_NEW,
+                            'status': file_status,
                             'cloudinary_id': '',
                             'cloudinary_url': '',
                             'original_size': '',
@@ -730,13 +739,22 @@ class FolderStatusManager:
             
             # Save after scanning
             self.save_status_db()
-            
+
+            # Tally dismissed (unsupported) vs new from what was just written to cache
+            dismissed_images = sum(
+                1 for p, d in self._status_cache.items()
+                if p.startswith(folder_rel_path + '/') and
+                   d.get('item_type') == 'file' and
+                   d.get('status') == FILE_STATUS_DISMISSED
+            )
+            new_images = direct_images + nested_images - dismissed_images
+
             return {
                 'direct': direct_images,
                 'nested': nested_images,
                 'on_cloud': 0,
-                'dismissed': 0,
-                'new': direct_images + nested_images,  # all new files
+                'dismissed': dismissed_images,
+                'new': new_images,
                 'status': STATUS_NEW
             }
             
@@ -777,7 +795,26 @@ class FolderStatusManager:
         # Get all items currently in filesystem (RECURSIVELY)
         try:
             fs_items = list(folder_path.rglob('*'))
-            
+
+            # Build set of dismissed folder rel-paths under this root so we can
+            # skip their entire subtree when counting.
+            dismissed_folder_rels = {
+                path for path, data in self._status_cache.items()
+                if data.get('item_type') == 'folder'
+                and data.get('status') == STATUS_DISMISSED
+                and path.startswith(folder_rel_path + '/')
+            }
+
+            def _inside_dismissed_folder(item_path: Path) -> bool:
+                """Return True if any ancestor between item_path and folder_path is dismissed."""
+                for ancestor in item_path.parents:
+                    if ancestor == folder_path:
+                        break
+                    rel = self.path_mapper.to_relative(str(ancestor))
+                    if rel in dismissed_folder_rels:
+                        return True
+                return False
+
             # Track which repo items we've seen
             seen_repo_items = set()
             
@@ -789,6 +826,9 @@ class FolderStatusManager:
                 seen_repo_items.add(item_rel_path)
                 
                 if item.is_dir():
+                    # Skip dirs that are themselves dismissed or inside a dismissed subtree
+                    if item_rel_path in dismissed_folder_rels or _inside_dismissed_folder(item):
+                        continue
                     # Check if folder is in repo
                     if item_rel_path not in self._status_cache:
                         debug("folder_status", f"  New subfolder discovered: {item.name}")
@@ -804,6 +844,10 @@ class FolderStatusManager:
                             'notes': 'Auto-discovered in watched folder'
                         }
                 else:
+                    # Skip files inside dismissed subfolders entirely — they don't
+                    # contribute to any count column of the parent.
+                    if _inside_dismissed_folder(item):
+                        continue
                     # Check if it's an image file
                     if item.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
                         is_direct = (item.parent == folder_path)
@@ -812,7 +856,27 @@ class FolderStatusManager:
                             direct_count += 1
                         else:
                             nested_count += 1
-                        
+
+                        # Unsupported by the app — always count as dismissed
+                        if item.suffix.lower() in UNSUPPORTED_BY_APP_EXTENSIONS:
+                            dismissed_count += 1
+                            # Ensure the cache entry reflects dismissed
+                            if item_rel_path not in self._status_cache:
+                                self._status_cache[item_rel_path] = {
+                                    'item_type': 'file',
+                                    'status': FILE_STATUS_DISMISSED,
+                                    'cloudinary_id': '',
+                                    'cloudinary_url': '',
+                                    'original_size': '',
+                                    'upload_size': '',
+                                    'upload_date': '',
+                                    'last_modified': datetime.now().isoformat(),
+                                    'notes': 'Unsupported file type'
+                                }
+                            elif self._status_cache[item_rel_path].get('status') == FILE_STATUS_NEW:
+                                self._status_cache[item_rel_path]['status'] = FILE_STATUS_DISMISSED
+                            continue
+
                         # Check if file is in repo
                         if item_rel_path in self._status_cache:
                             file_status = self._status_cache[item_rel_path]['status']

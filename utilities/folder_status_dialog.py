@@ -842,6 +842,12 @@ class FolderStatusDialog(QDialog):
             parent_folder = self.loaded_items.get(parent_path)
             if parent_folder:
                 parent_folder.status = self.status_manager.get_status(parent_path)
+                try:
+                    parent_folder.recon_result = self.status_manager.reconcile_folder_with_filesystem(
+                        parent_path, progress_callback=None
+                    )
+                except Exception:
+                    pass
                 self._update_tree_item_status(parent_item, parent_folder)
             parent_item = parent_item.parent()
 
