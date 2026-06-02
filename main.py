@@ -869,7 +869,18 @@ class MainWindow(QMainWindow):
     def _initialize_assessment_system(self):
         """Initialize Image Assessment System"""
         if not hasattr(self, 'image_assessment') or self.image_assessment is None:
-            self.image_assessment = ImageAssessment(cloudinary_updater=self.cloudinary_updater, main_app=self)
+            # cloudinary_updater may not be ready yet (async init), so fall back to settings directly
+            fallback_max_size = None
+            if not self.cloudinary_updater or not hasattr(self.cloudinary_updater, 'maxFileSize') or self.cloudinary_updater.maxFileSize <= 0:
+                try:
+                    from utilities.settings_dialog import SettingsDialog
+                    cloudinary_settings = SettingsDialog.get_cloudinary_settings()
+                    max_size_mb = float(cloudinary_settings.get('max_size', '3.2'))
+                    fallback_max_size = max_size_mb * 1024 * 1024
+                    debug_startup(f"Cloudinary not ready yet - using fallback max file size from settings: {fallback_max_size:,.0f} bytes")
+                except Exception as e:
+                    debug_errors(f"Could not get fallback max_size from settings: {e}")
+            self.image_assessment = ImageAssessment(cloudinary_updater=self.cloudinary_updater, main_app=self, max_file_size=fallback_max_size)
             self.setup_image_assessment_connections()
             debug_startup("Image Assessment System initialized")
 
@@ -4619,7 +4630,7 @@ class MainWindow(QMainWindow):
             self.credits_bar_initialized = False
             if hasattr(self, '_last_credits_values'):
                 delattr(self, '_last_credits_values')
-            self.initialize_cloudinary()
+            self._initialize_cloudinary_async()
             
     def on_tag_clicked(self, tag_text):
         debug_tags(f"Tag clicked: '{tag_text}' | Selected images: {self.selected_images}")
