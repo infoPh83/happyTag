@@ -79,10 +79,19 @@ class FileLockManager:
                 if self._is_lock_expired(existing_lock):
                     debug("locking", f"Existing lock expired, removing: {existing_lock}")
                     self._remove_lock_file()
+                elif (existing_lock.get('username') == self.username and
+                      existing_lock.get('hostname') == self.hostname and
+                      existing_lock.get('process_id') == self.process_id):
+                    # Same process re-acquiring its own lock — allow it
+                    debug("locking", "Re-acquiring own lock (same process)")
+                    self._remove_lock_file()
                 elif not force:
-                    # Lock is valid and held by another user
+                    # Lock is valid and held by another user or another instance
                     lock_age = self._get_lock_age(existing_lock)
-                    msg = (f"Resource is locked by {existing_lock['username']}@{existing_lock['hostname']}\n"
+                    holder = f"{existing_lock['username']}@{existing_lock['hostname']}"
+                    if existing_lock.get('process_id') and existing_lock.get('hostname') == self.hostname:
+                        holder += f" (another instance on this machine)"
+                    msg = (f"Folder Manager is already open by {holder}\n"
                            f"Lock acquired {lock_age} minutes ago\n"
                            f"Lock will expire in {self.TIMEOUT_MINUTES - lock_age} minutes")
                     debug("locking", f"Lock acquisition failed: {msg}")
@@ -134,8 +143,9 @@ class FileLockManager:
             return False, "Failed to read lock file"
         
         if (existing_lock['username'] != self.username or 
-            existing_lock['hostname'] != self.hostname):
-            msg = f"Lock is held by {existing_lock['username']}@{existing_lock['hostname']}"
+            existing_lock['hostname'] != self.hostname or
+            existing_lock.get('process_id') != self.process_id):
+            msg = f"Lock is held by {existing_lock['username']}@{existing_lock['hostname']} (PID {existing_lock.get('process_id', '?')})"
             debug("errors", f"Cannot release lock: {msg}")
             return False, msg
         
@@ -160,8 +170,9 @@ class FileLockManager:
             return False
         
         if (existing_lock['username'] != self.username or 
-            existing_lock['hostname'] != self.hostname):
-            debug("errors", "Cannot refresh: lock held by another user")
+            existing_lock['hostname'] != self.hostname or
+            existing_lock.get('process_id') != self.process_id):
+            debug("errors", "Cannot refresh: lock held by another user/process")
             return False
         
         # Update timestamp
@@ -227,7 +238,8 @@ class FileLockManager:
             return False
         
         is_mine = (lock_info['username'] == self.username and 
-                   lock_info['hostname'] == self.hostname)
+                   lock_info['hostname'] == self.hostname and
+                   lock_info.get('process_id') == self.process_id)
         
         debug("locking", f"is_locked_by_me: {is_mine}")
         return is_mine

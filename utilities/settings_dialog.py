@@ -544,8 +544,8 @@ class SettingsDialog(QDialog):
                     api_secret=cloudinary_settings['api_secret']
                 )
                 
-                # Test connection with a simple API call
-                response = cloudinary.api.usage()
+                # Test connection with ping (works regardless of billing permissions)
+                cloudinary.api.ping()
                 connection_valid = True
                 result['connected'] = True
                 

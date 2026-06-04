@@ -364,6 +364,39 @@ class FolderStatusManager:
         debug("folder_status", f"update_file_status: {rel_path} -> {status}")
         return self.save_status_db()
 
+    def batch_update_file_statuses(self, updates: List[Tuple[str, str]]) -> Tuple[bool, str]:
+        """Update statuses for multiple files and write the CSV only once.
+
+        Args:
+            updates: List of (absolute_path, status) tuples.
+
+        Returns:
+            Tuple of (success, message)
+        """
+        if not self._cache_loaded:
+            self.load_status_db()
+
+        now = datetime.now().isoformat()
+        for absolute_path, status in updates:
+            rel_path = self.path_mapper.to_relative(absolute_path)
+            if not rel_path:
+                continue
+            existing = self._status_cache.get(rel_path, {})
+            self._status_cache[rel_path] = {
+                'item_type': 'file',
+                'status': status,
+                'cloudinary_id': existing.get('cloudinary_id', ''),
+                'cloudinary_url': existing.get('cloudinary_url', ''),
+                'original_size': existing.get('original_size', ''),
+                'upload_size': existing.get('upload_size', ''),
+                'upload_date': existing.get('upload_date', ''),
+                'last_modified': now,
+                'notes': existing.get('notes', '')
+            }
+            debug("folder_status", f"batch_update_file_status: {rel_path} -> {status}")
+
+        return self.save_status_db()
+
     def set_folder_recursive(self, relative_path: str, status: str, 
                             scan_filesystem: bool = True) -> Tuple[bool, str, int]:
         """

@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (QMainWindow, QApplication, QFileDialog,
                            QWidget, QLabel, QTextEdit, QMessageBox,
                            QVBoxLayout, QSizePolicy, QProgressBar, QRubberBand, QDialog,
                            QHBoxLayout, QPushButton)
-from PyQt5.QtCore import Qt, QTimer, QSize, QRect, QUrl
+from PyQt5.QtCore import Qt, QTimer, QSize, QRect, QUrl, QThread, pyqtSignal
 from PyQt5.QtGui import QPixmap, QImage, QDesktopServices
 from PyQt5 import uic
 from utilities.tag_manager import TagManager
@@ -165,6 +165,27 @@ except ImportError:
     EXIFTOOL_AVAILABLE = False
     EXIFTOOL_PATH = None
     debug_startup("Warning: PyExifTool module not available - using fallback metadata reading")
+
+
+class _DismissWorker(QThread):
+    """Batch-writes dismissed file statuses to the CSV in a background thread."""
+    done = pyqtSignal(set)  # emits affected_folders when finished
+
+    def __init__(self, status_manager, file_paths, status):
+        super().__init__()
+        self._mgr = status_manager
+        self._file_paths = file_paths
+        self._status = status
+
+    def run(self):
+        from utilities.folder_status_manager import FILE_STATUS_DISMISSED
+        import os
+        updates = [(fp, self._status) for fp in self._file_paths]
+        self._mgr.batch_update_file_statuses(updates)
+        affected = {self._mgr.path_mapper.to_relative(os.path.dirname(fp))
+                    for fp in self._file_paths}
+        self.done.emit(affected)
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -3727,6 +3748,7 @@ class MainWindow(QMainWindow):
         # Create and show dialog
         try:
             from utilities.folder_status_dialog import FolderStatusDialog
+            from utilities.file_lock_manager import LockError
             
             # Check if dialog already exists and is visible
             if hasattr(self, 'folder_manager_dialog') and self.folder_manager_dialog is not None:
@@ -3735,18 +3757,26 @@ class MainWindow(QMainWindow):
                 self.folder_manager_dialog.activateWindow()
                 return
             
-            # Create new dialog
+            # Create new dialog — raises LockError if another instance already has it open
             self.folder_manager_dialog = FolderStatusDialog(network_root, self)
             
             # Connect statuses_updated signal to update UI if needed
             self.folder_manager_dialog.statuses_updated.connect(self.on_folder_statuses_updated)
             
-            # Clean up reference when dialog is closed
-            self.folder_manager_dialog.destroyed.connect(lambda: setattr(self, 'folder_manager_dialog', None))
+            # Clean up reference when dialog is closed (use finished for immediate cleanup)
+            self.folder_manager_dialog.finished.connect(lambda: setattr(self, 'folder_manager_dialog', None))
             
             # Show as non-modal dialog so both windows can be used simultaneously
             self.folder_manager_dialog.show()
-            
+
+        except LockError as e:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Folder Manager Already Open",
+                f"The Folder Manager is already open by another instance of HappyTag:\n\n{str(e)}\n\n"
+                "Close the other instance first, or wait for the lock to expire."
+            )
         except Exception as e:
             from PyQt5.QtWidgets import QMessageBox
             QMessageBox.critical(
@@ -3785,21 +3815,24 @@ class MainWindow(QMainWindow):
         return None
 
     def _notify_files_dismissed(self, file_paths):
-        """Mark the given image files as dismissed in the folder status CSV."""
+        """Mark the given image files as dismissed in the folder status CSV (background thread)."""
         if not file_paths:
             return
         mgr = self._get_folder_status_manager()
         if not mgr:
             return
         from utilities.folder_status_manager import FILE_STATUS_DISMISSED
-        affected_folders = set()
-        for fp in file_paths:
-            try:
-                mgr.update_file_status(fp, FILE_STATUS_DISMISSED)
-                affected_folders.add(mgr.path_mapper.to_relative(os.path.dirname(fp)))
-            except Exception as e:
-                debug_errors(f"_notify_files_dismissed: {fp}: {e}")
-        # Refresh open dialog
+        worker = _DismissWorker(mgr, list(file_paths), FILE_STATUS_DISMISSED)
+        worker.done.connect(self._on_dismiss_csv_written)
+        # Keep a reference so the thread isn't garbage collected
+        if not hasattr(self, '_dismiss_workers'):
+            self._dismiss_workers = []
+        self._dismiss_workers.append(worker)
+        worker.finished.connect(lambda: self._dismiss_workers.remove(worker) if worker in self._dismiss_workers else None)
+        worker.start()
+
+    def _on_dismiss_csv_written(self, affected_folders):
+        """Slot: refresh the folder dialog counts after the background CSV write finishes."""
         if affected_folders and hasattr(self, 'folder_manager_dialog') and self.folder_manager_dialog is not None:
             self.folder_manager_dialog.refresh_folder_counts(affected_folders)
 
@@ -4453,8 +4486,16 @@ class MainWindow(QMainWindow):
                 
                 # Retrieve Cloudinary files list once at initialization
                 self._retrieve_cloudinary_files_cache()
-                
-                if len(data) > 10:
+
+                # Check if usage data was unavailable (e.g. missing billing permission)
+                usage_unavailable = data[14] if len(data) > 14 else False
+
+                if usage_unavailable:
+                    debug_cloudinary("Usage data unavailable (403 billing permission) - showing connected state with unavailable credits")
+                    self._update_cloudinary_ui_status(True, "Connected")
+                    resources_count = data[4] if len(data) > 4 else 0
+                    self.update_credits_bar(0, 0, 0, resources_count, usage_unavailable=True)
+                elif len(data) > 10:
                     storage_credits = data[8] if len(data) > 8 else "Unknown"
                     transformations = data[9] if len(data) > 9 else "Unknown"
                     bandwidth = data[10] if len(data) > 10 else "Unknown"
@@ -4553,9 +4594,9 @@ class MainWindow(QMainWindow):
         
         debug_cloudinary("Finished populating cloudinary_tags in widgets")
     
-    def update_credits_bar(self, storage_percent, transformations_percent, bandwidth_percent, resources_count=0):
+    def update_credits_bar(self, storage_percent, transformations_percent, bandwidth_percent, resources_count=0, usage_unavailable=False):
         """Update the CloudinaryCreditsBar with usage data and resources count"""
-        debug_cloudinary(f"update_credits_bar called with resources_count: {resources_count}")
+        debug_cloudinary(f"update_credits_bar called with resources_count: {resources_count}, usage_unavailable: {usage_unavailable}")
         debug_cloudinary(f"main.py update_credits_bar() called with:")
         debug_cloudinary(f"  Storage: {storage_percent} (type: {type(storage_percent)})")
         debug_cloudinary(f"  Transformations: {transformations_percent} (type: {type(transformations_percent)})")
@@ -4569,7 +4610,7 @@ class MainWindow(QMainWindow):
             
         # Check if this is a duplicate update (same values as last time)
         # Include resources_count in the comparison to ensure overlay text updates
-        current_values = (storage_percent, transformations_percent, bandwidth_percent, resources_count)
+        current_values = (storage_percent, transformations_percent, bandwidth_percent, resources_count, usage_unavailable)
         if hasattr(self, '_last_credits_values') and self._last_credits_values == current_values:
             debug_cloudinary("Credits bar values unchanged - skipping unnecessary update")
             return
@@ -4587,7 +4628,16 @@ class MainWindow(QMainWindow):
             
             if credits_bar is not None:
                 debug_layout(f"[UPLOAD REFRESH] Credits bar found, updating overlay text...")
-                
+
+                if usage_unavailable:
+                    # Show unavailable state: grey out bar and display message
+                    credits_bar.setValues(0, 0, 0)
+                    unavailable_text = f"{resources_count} online images — credits unavailable" if resources_count > 0 else "Credits unavailable"
+                    credits_bar.setOverlayText(unavailable_text)
+                    self._last_credits_values = current_values
+                    debug_cloudinary("Credits bar set to unavailable state")
+                    return
+
                 # Credits bar was already configured in pre-population, just update overlay text and resources count
                 if resources_count > 0:
                     overlay_text = f"{resources_count} online images"

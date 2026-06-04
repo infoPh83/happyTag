@@ -625,19 +625,37 @@ def get_cloudinary_status(cloudinary_updater_instance):
     """Get Cloudinary usage details."""
     try:
         debug_cloudinary("Starting Cloudinary status check...")
-        result = usage()
-        debug_cloudinary(f"Cloudinary API result: {result}")
-        
-        api_key = cloudinary_updater_instance.apiKey
-        api_secret = cloudinary_updater_instance.apiSecret
-        url = f"https://api.cloudinary.com/v1_1/{cloudinary_updater_instance.cloudName}/usage"
 
-        debug_cloudinary("in get_cloudinary_status")
-        debug_cloudinary(f"Cloudinary API URL: {url}")
-        debug_cloudinary(f"Cloudinary API Key: {api_key}")
+        # Get actual resource count first (works even without billing permission)
+        actual_resource_count = get_actual_resource_count(cloudinary_updater_instance)
+        num_files = actual_resource_count if (actual_resource_count is not None and actual_resource_count > 0) else 0
 
-        response = requests.get(url, auth=HTTPBasicAuth(api_key, api_secret))
-        headers = response.headers
+        try:
+            result = usage()
+            debug_cloudinary(f"Cloudinary API result: {result}")
+        except Exception as usage_err:
+            err_str = str(usage_err)
+            if "403" in err_str or "missing permissions" in err_str.lower():
+                debug_cloudinary("Usage API returned 403 - billing permission not granted. Returning unavailable credits data.")
+                # Return a special flag so the UI shows "Unavailable" but stays connected
+                return [
+                    True,          # [0] Success flag (connected)
+                    'N/A',         # [1] Transformations usage
+                    'N/A',         # [2] Storage usage
+                    'N/A',         # [3] Bandwidth usage
+                    num_files,     # [4] Number of files (from resources API)
+                    0,             # [5] Transformations %
+                    0,             # [6] Storage %
+                    0,             # [7] Bandwidth %
+                    0,             # [8] Storage credits
+                    0,             # [9] Transformations credits
+                    0,             # [10] Bandwidth credits
+                    0,             # [11] Remaining credits
+                    cloudinary_updater_instance.maxFileSize,  # [12] Average file size
+                    0,             # [13] Remaining storage
+                    True,          # [14] usage_unavailable flag
+                ]
+            raise  # Re-raise non-403 errors
 
         transformations = result.get('transformations', {})
         transformationsCount = transformations.get('usage', 'N/A')
@@ -658,15 +676,12 @@ def get_cloudinary_status(cloudinary_updater_instance):
         remainingCredits = CREDITS_MAX - usedCredits
         remainingStorage = (remainingCredits) * 1024 * 1024 * 1024  
         
-        # Get actual resource count from resources API (more accurate)
-        actual_resource_count = get_actual_resource_count(cloudinary_updater_instance)
-        if actual_resource_count is not None and actual_resource_count > 0:
-            num_files = actual_resource_count
-            debug_cloudinary(f"Using actual resource count: {num_files}")
-        else:
-            # Fallback to usage API count (this is actually more reliable for billing)
+        # num_files was already fetched above; fallback to usage API count if needed
+        if num_files == 0:
             num_files = result.get('resources', 0)
-            debug_cloudinary(f"Using usage API resource count (this is the authoritative count for billing): {num_files}")
+            debug_cloudinary(f"Using usage API resource count: {num_files}")
+        else:
+            debug_cloudinary(f"Using actual resource count: {num_files}")
         
         average_file_size = 0
         if num_files > 0:
@@ -708,7 +723,8 @@ def get_cloudinary_status(cloudinary_updater_instance):
             bandwidthCredits,  # Bandwidth credits value
             remainingCredits,  # Remaining credits
             average_file_size,  # Average file size
-            remainingStorage  # Remaining storage
+            remainingStorage,  # Remaining storage
+            False,  # [14] usage_unavailable flag (False = usage data is available)
         ]
         
         debug_cloudinary(f"\nReturn data array:")
