@@ -614,7 +614,8 @@ class MainWindow(QMainWindow):
                     elif "connection failed" in status_message.lower():
                         self.label.setText("Cloudinary connection failed")
                     else:
-                        self.label.setText("Not connected to Cloudinary")
+                        self.label.setOpenExternalLinks(True)
+                        self.label.setText('Please add your IP address <a href="https://console.cloudinary.com/app/c-2607aa1695167a96b92a8f2a2e0f00/settings/security">here</a>')
                 
                 # Disable Cloudinary sync action        
                 if hasattr(self, 'actionSynch_with_Cloudinary'):
@@ -3771,12 +3772,21 @@ class MainWindow(QMainWindow):
 
         except LockError as e:
             from PyQt5.QtWidgets import QMessageBox
-            QMessageBox.warning(
-                self,
-                "Folder Manager Already Open",
+            from PyQt5.QtCore import QUrl
+            from PyQt5.QtGui import QDesktopServices
+            _lock_msg_box = QMessageBox(self)
+            _lock_msg_box.setIcon(QMessageBox.Warning)
+            _lock_msg_box.setWindowTitle("Folder Manager Already Open")
+            _lock_msg_box.setText(
                 f"The Folder Manager is already open by another instance of HappyTag:\n\n{str(e)}\n\n"
-                "Close the other instance first, or wait for the lock to expire."
+                "Close the other instance first, or wait for the lock to expire.\n\n"
+                "If the app closed unexpectedly you can manually delete the lock file in the folder below."
             )
+            _open_btn = _lock_msg_box.addButton("Open Lock Folder in Finder", QMessageBox.ActionRole)
+            _lock_msg_box.addButton(QMessageBox.Ok)
+            _lock_msg_box.exec_()
+            if _lock_msg_box.clickedButton() == _open_btn:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(network_root)))
         except Exception as e:
             from PyQt5.QtWidgets import QMessageBox
             QMessageBox.critical(

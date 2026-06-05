@@ -1090,9 +1090,10 @@ class FolderStatusManager:
 
     def reset_all_folders_to_dismissed(self) -> Tuple[bool, str]:
         """
-        Set every folder entry in the cache to 'dismissed'.
-        File entries (and their Cloudinary metadata) are preserved.
-        Intended for a clean-slate reset so the user can re-watch folders via the UI.
+        Set every folder entry in the cache to 'dismissed' and remove all
+        file entries.  After a reset every folder is dismissed and no file
+        entries exist, matching the expectation that files are only tracked
+        for watched folders.
 
         Returns:
             Tuple of (success, message)
@@ -1100,13 +1101,21 @@ class FolderStatusManager:
         if not self._cache_loaded:
             self.load_status_db()
         now = datetime.now().isoformat()
-        count = 0
-        for data in self._status_cache.values():
-            if data.get('item_type') == 'folder' and data.get('status') != STATUS_DISMISSED:
-                data['status'] = STATUS_DISMISSED
-                data['last_modified'] = now
-                count += 1
-        debug("folder_status", f"reset_all_folders_to_dismissed: {count} folders reset")
+        folder_count = 0
+        file_keys = []
+        for key, data in self._status_cache.items():
+            if data.get('item_type') == 'folder':
+                if data.get('status') != STATUS_DISMISSED:
+                    data['status'] = STATUS_DISMISSED
+                    data['last_modified'] = now
+                    folder_count += 1
+            elif data.get('item_type') == 'file':
+                file_keys.append(key)
+        for key in file_keys:
+            del self._status_cache[key]
+        debug("folder_status",
+              f"reset_all_folders_to_dismissed: {folder_count} folders reset, "
+              f"{len(file_keys)} file entries removed")
         return self.save_status_db()
 
     def infer_folder_status(self, rel_path: str) -> Optional[str]:
