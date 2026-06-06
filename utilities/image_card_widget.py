@@ -942,18 +942,11 @@ class ImageCardWidget(QWidget):
     
     def set_dismissed(self, dismissed):
         """Set dismissed state and update visual style"""
-        import os
-        print(f"[WIDGET] set_dismissed({dismissed}) called for {os.path.basename(self.file_path)}")
-        print(f"[WIDGET]   Current is_dismissed={self.is_dismissed}")
-        
         if self.is_dismissed == dismissed:
-            print(f"[WIDGET]   No change needed, returning")
             return
             
         self.is_dismissed = dismissed
-        print(f"[WIDGET]   Set is_dismissed to {self.is_dismissed}, calling _update_visual_style()")
         self._update_visual_style()
-        print(f"[WIDGET]   _update_visual_style() completed")
         
     def is_dismissed_state(self):
         """Get current dismissed state"""
@@ -1024,13 +1017,8 @@ class ImageCardWidget(QWidget):
     
     def _update_visual_style(self):
         """Update visual style based on selection state and Cloudinary sync status"""
-        import os
-        print(f"[VISUAL] _update_visual_style called for {os.path.basename(self.file_path) if hasattr(self, 'file_path') else 'unknown'}")
-        print(f"[VISUAL]   is_dismissed={self.is_dismissed}, is_selected={self.is_selected}, is_on_cloudinary={self.is_on_cloudinary}")
-        
         # Check if dismissed - override all other styling
         if self.is_dismissed:
-            print(f"[VISUAL]   Applying DISMISSED styling")
             # Dismissed state: gray out everything
             # Note: CSS 'opacity' doesn't work in Qt stylesheets, so we use solid colors
             self.container_frame.setStyleSheet("""
@@ -1073,10 +1061,8 @@ class ImageCardWidget(QWidget):
             if self.container_frame:
                 self.container_frame.update()
             self.update()
-            print(f"[VISUAL]   DISMISSED styling applied with opacity effects")
             return
         
-        print(f"[VISUAL]   Applying NORMAL styling")
         # Clear any opacity effects when not dismissed
         if self.image_label:
             self.image_label.setGraphicsEffect(None)
@@ -1212,25 +1198,15 @@ class ImageCardWidget(QWidget):
             import os
             modifiers = QApplication.keyboardModifiers()
             
-            print(f"[MOUSE] Click on {os.path.basename(self.file_path)}, is_dismissed={self.is_dismissed}, Ctrl={modifiers == Qt.ControlModifier}")
-            
             # Check if this image is dismissed - emit signal to revive it
-            # Only emit revive signal if the image is actually dismissed
             if self.is_dismissed:
-                print(f"[MOUSE]   Image is dismissed, emitting revive_dismissed signal")
                 self.revive_dismissed.emit(self.file_path)
-                # Don't process selection for dismissed images
                 super().mousePressEvent(event)
                 return
             
             if modifiers == Qt.ControlModifier:
-                # Ctrl+click: Toggle selection without affecting others
-                print(f"[MOUSE]   Ctrl+click: toggling selection (currently {self.is_selected})")
                 self.set_selected(not self.is_selected)
             else:
-                # Normal click: Clear others and select this one
-                print(f"[MOUSE]   Normal click: clearing others and selecting this one")
-                # Emit a special signal to clear other selections first
                 self.clear_other_selections.emit(self.file_path)
                 self.set_selected(True)
         super().mousePressEvent(event)

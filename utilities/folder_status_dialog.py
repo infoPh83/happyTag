@@ -577,13 +577,11 @@ class FolderStatusDialog(QDialog):
                 if child.is_directory:
                     self._add_item_to_tree(child, tree_item)
         else:
-            # Add expand arrow if:
-            #   - non-dismissed folder (will scan filesystem on expand), OR
-            #   - dismissed folder that has known children in the CSV cache
-            needs_arrow = (
-                folder_item.status != STATUS_DISMISSED
-                or self.status_manager.has_child_folders(folder_item.relative_path)
-            )
+            # Add expand arrow only if the CSV cache knows this folder has
+            # child folders. Dismissed folders and watched folders without
+            # sub-folders both get no arrow — which also means watched leaf
+            # folders paint their full row correctly without needing an expand.
+            needs_arrow = self.status_manager.has_child_folders(folder_item.relative_path)
             if needs_arrow:
                 placeholder = QTreeWidgetItem()
                 placeholder.setText(0, "Loading...")
@@ -631,6 +629,11 @@ class FolderStatusDialog(QDialog):
 
         The status is read directly from folder_item.status, which is kept in
         sync with the CSV (part_watched is stored, not computed at display time).
+
+        Colour rules:
+          - ALL columns coloured  → watched/part-watched, direct > 0, new > 0
+                                    (rows that need the user's direct attention)
+          - First TWO cols only   → every other case
         """
         status = folder_item.status
         config = STATUS_CONFIG.get(status, STATUS_CONFIG[STATUS_WATCHED])
@@ -638,37 +641,54 @@ class FolderStatusDialog(QDialog):
         # Set status text
         tree_item.setText(1, config['label'])
 
-        # Set background colour on all columns (outcome-based, not raw-status-based)
+        # Determine whether this row needs direct user action
+        recon = getattr(folder_item, 'recon_result', None)
+        needs_action = False
+        if (status in (STATUS_WATCHED, STATUS_PART_WATCHED)
+                and isinstance(recon, dict)):
+            direct = recon.get('direct') or 0
+            new    = recon.get('new')    or 0
+            needs_action = direct > 0 and new > 0
+
         color = self._compute_row_color(status, folder_item)
-        for col in range(tree_item.columnCount()):
-            tree_item.setBackground(col, QBrush(color))
+        no_color = QBrush()  # default (transparent)
+
+        # Use the widget's column count; the item may not yet be attached to the
+        # tree when this is called (e.g. during _add_item_to_tree), so
+        # tree_item.columnCount() would return only the columns set so far (2),
+        # not the full 7-column layout.
+        col_count = self.tree.columnCount()
+
+        if needs_action:
+            # Highlight every column
+            for col in range(col_count):
+                tree_item.setBackground(col, QBrush(color))
+        else:
+            # Colour only Name + Status; clear the rest
+            tree_item.setBackground(0, QBrush(color))
+            tree_item.setBackground(1, QBrush(color))
+            for col in range(2, col_count):
+                tree_item.setBackground(col, no_color)
 
         # Dismissed and not_found folders carry no file counts
         if status in (STATUS_DISMISSED, STATUS_NOT_FOUND):
             for col in range(2, 7):
                 tree_item.setText(col, '')
             return
-        
+
         # Set counts based on reconciliation results
-        if hasattr(folder_item, 'recon_result') and folder_item.recon_result is not None:
-            recon = folder_item.recon_result
-            
-            if isinstance(recon, dict):
-                direct = recon.get('direct')
-                nested = recon.get('nested')
-                on_cloud = recon.get('on_cloud')
-                dismissed = recon.get('dismissed')
-                new = recon.get('new')
-                
-                tree_item.setText(2, '' if direct is None else str(direct))
-                tree_item.setText(3, '' if nested is None else str(nested))
-                tree_item.setText(4, '' if on_cloud is None else str(on_cloud))
-                tree_item.setText(5, '' if dismissed is None else str(dismissed))
-                tree_item.setText(6, '' if new is None else str(new))
-            else:
-                # Unexpected recon format — clear cells
-                for col in range(2, 7):
-                    tree_item.setText(col, '')
+        if isinstance(recon, dict):
+            direct   = recon.get('direct')
+            nested   = recon.get('nested')
+            on_cloud = recon.get('on_cloud')
+            dismissed = recon.get('dismissed')
+            new      = recon.get('new')
+
+            tree_item.setText(2, '' if direct   is None else str(direct))
+            tree_item.setText(3, '' if nested   is None else str(nested))
+            tree_item.setText(4, '' if on_cloud is None else str(on_cloud))
+            tree_item.setText(5, '' if dismissed is None else str(dismissed))
+            tree_item.setText(6, '' if new       is None else str(new))
         else:
             # Not yet reconciled — blank until the folder is expanded or refreshed
             for col in range(2, 7):
@@ -901,8 +921,7 @@ class FolderStatusDialog(QDialog):
         folder_item.children.clear()
         folder_item.is_loaded = False
         tree_item.takeChildren()
-        if self.status_manager.has_child_folders(folder_item.relative_path) \
-                or folder_item.status != STATUS_DISMISSED:
+        if self.status_manager.has_child_folders(folder_item.relative_path):
             placeholder = QTreeWidgetItem()
             placeholder.setText(0, "Loading...")
             tree_item.addChild(placeholder)
@@ -1020,6 +1039,9 @@ class FolderStatusDialog(QDialog):
             parent_folder = self.loaded_items.get(parent_path)
             if parent_folder:
                 parent_folder.status = self.status_manager.get_status(parent_path)
+                # Refresh counts from cache so colour reflects current reality
+                # (e.g. parent turns green when last watched sub-folder completes)
+                parent_folder.recon_result = self.status_manager.count_from_cache(parent_path)
                 self._update_tree_item_status(parent_item, parent_folder)
             parent_item = parent_item.parent()
 
@@ -1039,12 +1061,10 @@ class FolderStatusDialog(QDialog):
             folder_item = self.loaded_items.get(rel_path)
             if tree_item is None or folder_item is None:
                 continue
-            try:
-                folder_item.recon_result = self.status_manager.reconcile_folder_with_filesystem(
-                    rel_path, progress_callback=None
-                )
-            except Exception:
-                folder_item.recon_result = None
+            # Read counts straight from the cache — do NOT call reconcile here,
+            # which would trigger a destructive Scenario-4 rescan for 'new' folders
+            # and wipe the file statuses we just wrote.
+            folder_item.recon_result = self.status_manager.count_from_cache(rel_path)
             self._update_tree_item_status(tree_item, folder_item)
             refreshed_tree_items.append(tree_item)
 

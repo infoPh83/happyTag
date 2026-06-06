@@ -2457,19 +2457,15 @@ class MainWindow(QMainWindow):
     def dismiss_selected_images(self):
         """Dismiss selected images by graying them out and moving them to the end of the queue"""
         if not self.selected_images:
-            print("[DISMISS] No images selected")
             return
         
-        print(f"[DISMISS] Starting dismiss of {len(self.selected_images)} selected images")
         debug("ui_events", f"Dismissing {len(self.selected_images)} selected images")
         
         # Get current widgets
         if not hasattr(self, 'image_flow_manager') or not self.image_flow_manager:
-            print("[DISMISS] No image_flow_manager found")
             return
         
         current_widgets = list(self.image_flow_manager.image_widgets.values())
-        print(f"[DISMISS] Total widgets in manager: {len(current_widgets)}")
         
         dismissed_widgets = []
         active_widgets = []
@@ -2485,14 +2481,9 @@ class MainWindow(QMainWindow):
                     # Add to dismissed set
                     self.dismissed_images.add(widget.file_path)
                     newly_dismissed_paths.append(widget.file_path)
-                    print(f"[DISMISS] Dismissing: {os.path.basename(widget.file_path)}")
                     # Set dismissed state on widget (triggers visual update)
                     if hasattr(widget, 'set_dismissed'):
-                        print(f"[DISMISS]   - Calling set_dismissed(True) on widget")
                         widget.set_dismissed(True)
-                        print(f"[DISMISS]   - Widget is_dismissed = {widget.is_dismissed}")
-                    else:
-                        print(f"[DISMISS]   - WARNING: Widget doesn't have set_dismissed method!")
                     dismissed_widgets.append(widget)
                     dismissed_count += 1
                 elif widget.file_path not in self.dismissed_images:
@@ -2502,8 +2493,6 @@ class MainWindow(QMainWindow):
                     # Already dismissed widgets
                     dismissed_widgets.append(widget)
         
-        print(f"[DISMISS] Dismissed: {dismissed_count}, Active: {len(active_widgets)}, Already dismissed: {len(dismissed_widgets) - dismissed_count}")
-        
         # Clear selection
         self.selected_images.clear()
         for widget in current_widgets:
@@ -2512,8 +2501,6 @@ class MainWindow(QMainWindow):
         
         # Reorder widgets: active first, then dismissed at the end
         reordered_widgets = active_widgets + dismissed_widgets
-        
-        print(f"[DISMISS] Reordering: {len(active_widgets)} active + {len(dismissed_widgets)} dismissed")
         
         # Clear the layout
         while self.image_flow_manager.flow_layout.count():
@@ -2525,8 +2512,6 @@ class MainWindow(QMainWindow):
         for widget in reordered_widgets:
             self.image_flow_manager.flow_layout.addWidget(widget)
         
-        print(f"[DISMISS] Layout updated with reordered widgets")
-        
         # Update status bar
         self.update_status_bar()
 
@@ -2537,10 +2522,6 @@ class MainWindow(QMainWindow):
 
     def revive_dismissed_image(self, file_path):
         """Revive a dismissed image by removing it from dismissed set and restoring its visual style"""
-        print(f"[REVIVE] revive_dismissed_image called for {os.path.basename(file_path)}")
-        print(f"[REVIVE]   file_path in dismissed_images: {file_path in self.dismissed_images}")
-        print(f"[REVIVE]   dismissed_images set: {[os.path.basename(p) for p in self.dismissed_images]}")
-        
         if file_path in self.dismissed_images:
             # Remove from dismissed set
             self.dismissed_images.remove(file_path)
@@ -2554,17 +2535,14 @@ class MainWindow(QMainWindow):
                 except Exception as _e:
                     debug_errors(f"Could not clear dismissed status for {os.path.basename(file_path)}: {_e}")
 
-            print(f"[REVIVE]   Removed from dismissed_images, now reviving...")
             debug("ui_events", f"Reviving dismissed image: {file_path}")
             
             # Get the widget
             if hasattr(self, 'image_flow_manager') and self.image_flow_manager:
                 widget = self.image_flow_manager.image_widgets.get(file_path)
-                print(f"[REVIVE]   Widget found: {widget is not None}")
                 if widget:
                     # Restore normal visual style using widget method
                     if hasattr(widget, 'set_dismissed'):
-                        print(f"[REVIVE]   Calling widget.set_dismissed(False)")
                         widget.set_dismissed(False)
                     
                     # Reorder widgets: move revived image to the front
@@ -2584,8 +2562,6 @@ class MainWindow(QMainWindow):
                             else:
                                 # Active (non-dismissed) widgets
                                 active_widgets.append(w)
-                    
-                    print(f"[REVIVE]   Reordering: {len(revived_widgets)} revived + {len(active_widgets)} active + {len(dismissed_widgets)} dismissed")
                     
                     # Reorder: revived first, then active, then dismissed
                     reordered_widgets = revived_widgets + active_widgets + dismissed_widgets
@@ -4325,14 +4301,10 @@ class MainWindow(QMainWindow):
         
         # Refresh Cloudinary status to update the asset count in the credits bar
         if uploaded_count > 0 and hasattr(self, 'cloudinary_updater') and self.cloudinary_updater:
-            print(f"[UPLOAD REFRESH] Refreshing Cloudinary status after {uploaded_count} successful uploads...")
             try:
                 self.cloudinary_updater.cloud_status()
-                print(f"[UPLOAD REFRESH] Cloudinary status refresh triggered successfully")
             except Exception as e:
-                print(f"[UPLOAD REFRESH] Warning: Failed to refresh Cloudinary status after upload: {e}")
-        else:
-            print(f"[UPLOAD REFRESH] Skipping refresh - uploaded_count: {uploaded_count}, has_cloudinary_updater: {hasattr(self, 'cloudinary_updater')}")
+                debug_errors(f"Failed to refresh Cloudinary status after upload: {e}")
         
         # Check for metadata write failures and show detailed warning if needed
         metadata_failure_summary = None
