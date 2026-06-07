@@ -157,11 +157,15 @@ def test_exiftool_executable(path, timeout=10):
     Returns True if executable works, False otherwise.
     """
     try:
+        kwargs = {}
+        if platform.system().lower() == 'windows':
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
         result = subprocess.run(
             [path, '-ver'], 
             capture_output=True, 
             text=True, 
-            timeout=timeout
+            timeout=timeout,
+            **kwargs
         )
         if result.returncode == 0:
             version = result.stdout.strip()
@@ -180,11 +184,15 @@ def test_exiftool_perl(perl_path, exiftool_pl_path, timeout=10):
     Returns True if executable works, False otherwise.
     """
     try:
+        kwargs = {}
+        if platform.system().lower() == 'windows':
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
         result = subprocess.run(
             [perl_path, exiftool_pl_path, '-ver'], 
             capture_output=True, 
             text=True, 
-            timeout=timeout
+            timeout=timeout,
+            **kwargs
         )
         if result.returncode == 0:
             version = result.stdout.strip()

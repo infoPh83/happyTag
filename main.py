@@ -124,10 +124,12 @@ try:
             debug_startup("Cleaning up any stale ExifTool processes...")
             if platform.system().lower() == 'windows':
                 # Kill any existing exiftool processes on Windows
+                # CREATE_NO_WINDOW prevents a console window from flashing on screen
+                _no_window = subprocess.CREATE_NO_WINDOW
                 subprocess.run(['taskkill', '/f', '/im', 'exiftool.exe'], 
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, creationflags=_no_window)
                 subprocess.run(['taskkill', '/f', '/im', 'exiftool(-k).exe'], 
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, creationflags=_no_window)
             else:
                 # Kill any existing exiftool processes on Unix-like systems
                 subprocess.run(['pkill', '-f', 'exiftool'], 
