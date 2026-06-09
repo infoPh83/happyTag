@@ -35,10 +35,6 @@ a = Analysis(
     excludes=[
         'tkinter',
         'unittest',
-        'email',
-        'http',
-        'urllib',
-        'xml',
         'pydoc',
         'doctest',
         'argparse',

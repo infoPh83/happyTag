@@ -1081,6 +1081,12 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Handle application close event to clean up resources"""
+        # Release folder manager lock before closing
+        if hasattr(self, 'folder_manager_dialog') and self.folder_manager_dialog is not None:
+            try:
+                self.folder_manager_dialog.close()
+            except Exception as e:
+                debug_errors(f"Error closing folder manager dialog on exit: {e}")
         self.cleanup_persistent_exiftool()
         super().closeEvent(event)
 
