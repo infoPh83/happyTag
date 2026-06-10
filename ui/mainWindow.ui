@@ -134,6 +134,16 @@
         </property>
        </widget>
       </item>
+      <item>
+       <widget class="QToolButton" name="cloudinaryLibraryLink">
+        <property name="toolTip">
+         <string>Open Cloudinary Media Library</string>
+        </property>
+        <property name="autoRaise">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
      </layout>
     </item>
     <item>

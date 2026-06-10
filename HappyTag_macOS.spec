@@ -64,6 +64,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='logo/icon.icns',
 )
 
 coll = COLLECT(
@@ -80,7 +81,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='HappyTag.app',
-    icon=None,
+    icon='logo/icon.icns',
     bundle_identifier='com.happytag.app',
     version='1.0.0',
     info_plist={
