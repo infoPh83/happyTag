@@ -85,6 +85,11 @@ class FolderItem:
         self.children: List['FolderItem'] = []
         self.is_loaded = False  # Whether children have been loaded
         self.status = None  # Will be filled by status manager
+        # Ephemeral UI flag: True when this folder was newly discovered on the
+        # filesystem during the current session and was not previously in the CSV.
+        # It is stored as 'dismissed' in the CSV; this flag only affects the label
+        # shown in the tree for the duration of the current dialog session.
+        self.is_new_this_session: bool = False
         
     def add_child(self, child: 'FolderItem'):
         """Add a child item"""

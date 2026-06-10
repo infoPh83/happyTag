@@ -22,10 +22,10 @@ from utilities.file_lock_manager import FileLockManager
 
 # Status constants for FOLDERS
 STATUS_DISMISSED = "dismissed"
-STATUS_NEW = "new"
+STATUS_NEW = "new"          # ephemeral UI-only badge — never written to CSV for folders
 STATUS_WATCHED = "watched"
 STATUS_NOT_FOUND = "not_found"
-STATUS_PART_WATCHED = "part_watched"  # auto-computed: dismissed folder with at least one watched descendant
+STATUS_PART_WATCHED = "part_watched"  # auto-computed: folder with mix of watched/dismissed descendants
 
 # Status constants for FILES (in watched folders)
 FILE_STATUS_ON_CLOUD = "on_cloud"
@@ -33,9 +33,11 @@ FILE_STATUS_DISMISSED = "dismissed"
 FILE_STATUS_NEW = "new"
 FILE_STATUS_NOT_FOUND = "not_found"
 
+# Statuses that are actually persisted in the CSV for folders.
+# STATUS_NEW is intentionally excluded — new folders are stored as dismissed;
+# the 'new' visual badge is an ephemeral, in-memory flag only.
 ALL_STATUSES = [
     STATUS_DISMISSED,
-    STATUS_NEW,
     STATUS_WATCHED,
     STATUS_NOT_FOUND,
     STATUS_PART_WATCHED,
@@ -123,6 +125,10 @@ class FolderStatusManager:
         self._status_cache: Dict[str, Dict] = {}
         self._cache_loaded = False
         self.is_fresh_db = False  # True only when CSV was just created (first launch)
+        # Paths that were newly discovered (added to CSV as dismissed) during this
+        # dialog session.  Used by the UI to show the ephemeral 'New' badge without
+        # persisting STATUS_NEW to the CSV.
+        self._new_this_session: Set[str] = set()
         
         debug("folder_status", f"FolderStatusManager initialized: csv={self.csv_path}")
     
@@ -166,11 +172,12 @@ class FolderStatusManager:
                         status = STATUS_DISMISSED
                         migrated_count += 1
                         debug("folder_status", f"Migrated {rel_path}: discarded -> dismissed")
-                    # Folders must never carry STATUS_NEW — treat as dismissed
+                    # Safety net: STATUS_NEW should never be written to CSV for folders
+                    # (it is an ephemeral UI badge only).  Correct any stale rows.
                     elif status == STATUS_NEW and item_type == 'folder':
                         status = STATUS_DISMISSED
                         migrated_count += 1
-                        debug("folder_status", f"Migrated {rel_path}: folder new -> dismissed")
+                        debug("folder_status", f"Migrated {rel_path}: folder 'new' -> dismissed")
                     
                     self._status_cache[rel_path] = {
                         'item_type': item_type,
@@ -574,36 +581,127 @@ class FolderStatusManager:
         return self.set_status(relative_path, STATUS_NOT_FOUND, 
                               notes=f"Not found as of {datetime.now().isoformat()}")
     
-    def remap_path(self, old_path: str, new_path: str) -> Tuple[bool, str]:
-        """
-        Remap a path that has been moved or renamed.
-        
+    def remap_path(self, old_path: str, new_path: str) -> Tuple[bool, str, int]:
+        """Cascade-rename a folder (and all its descendants) in the CSV.
+
+        When a folder is relocated or renamed on the filesystem this method
+        rewrites every CSV entry whose relative path starts with *old_path*
+        to use the new prefix, preserving all metadata (status, Cloudinary
+        fields, etc.).  The old entries are removed atomically.
+
         Args:
-            old_path: Old relative path
-            new_path: New relative path
-            
+            old_path: Old relative path (the top-level folder that moved).
+            new_path: New relative path for that same folder.
+
         Returns:
-            Tuple of (success, message)
+            Tuple of (success, message, count_updated) where count_updated is
+            the number of CSV rows that were rewritten.
         """
         if not self._cache_loaded:
             self.load_status_db()
-        
-        old_normalized = self.path_mapper.normalize_path(old_path)
-        new_normalized = self.path_mapper.normalize_path(new_path)
-        
-        if old_normalized not in self._status_cache:
-            return False, f"Path not found in database: {old_path}"
-        
-        # Move the entry
-        self._status_cache[new_normalized] = self._status_cache[old_normalized]
-        del self._status_cache[old_normalized]
-        
-        # Update timestamp
-        self._status_cache[new_normalized]['last_modified'] = datetime.now().isoformat()
-        
-        debug("folder_status", f"Remapped: {old_path} -> {new_path}")
-        
-        return self.save_status_db()
+
+        old_norm = self.path_mapper.normalize_path(old_path)
+        new_norm = self.path_mapper.normalize_path(new_path)
+
+        if old_norm not in self._status_cache:
+            return False, f"Path not found in database: {old_path}", 0
+
+        now = datetime.now().isoformat()
+        old_prefix = old_norm + '/'
+
+        # Collect every key that needs renaming (the folder itself + all descendants)
+        keys_to_rename = [
+            k for k in self._status_cache
+            if k == old_norm or k.startswith(old_prefix)
+        ]
+
+        renamed: Dict[str, Dict] = {}
+        for key in keys_to_rename:
+            if key == old_norm:
+                new_key = new_norm
+            else:
+                new_key = new_norm + '/' + key[len(old_prefix):]
+            entry = self._status_cache[key].copy()
+            entry['last_modified'] = now
+            renamed[new_key] = entry
+
+        # Remove old entries and insert renamed ones
+        for key in keys_to_rename:
+            del self._status_cache[key]
+        self._status_cache.update(renamed)
+
+        count = len(keys_to_rename)
+        debug("folder_status", f"remap_path: {old_norm} -> {new_norm} ({count} entries rewritten)")
+
+        success, msg = self.save_status_db()
+        return success, msg, count
+
+    def compare_folder_structure(
+        self, old_rel_path: str, new_abs_path: str
+    ) -> Dict:
+        """Compare the folder tree recorded in the CSV against a candidate
+        filesystem path.  Used during the Relocate workflow to show the user
+        a discrepancy report before committing any changes.
+
+        Only folder names are compared (no file stat calls), so this is fast
+        even on a slow network share.
+
+        Args:
+            old_rel_path: Relative path of the folder as recorded in the CSV
+                          (the 'not found' entry the user wants to relocate).
+            new_abs_path: Absolute path the user picked as the new location.
+
+        Returns:
+            A dict with keys:
+                'matched'  : int   — sub-folders present in both CSV and FS
+                'missing'  : list  — sub-folder rel-paths in CSV but absent from FS
+                'extra'    : list  — sub-folder names on FS but not in CSV
+                'csv_total': int   — total sub-folders recorded in CSV under old path
+                'fs_total' : int   — total sub-folders found on FS under new path
+        """
+        if not self._cache_loaded:
+            self.load_status_db()
+
+        old_norm = self.path_mapper.normalize_path(old_rel_path)
+        old_prefix = old_norm + '/'
+
+        # Sub-folders recorded in CSV (relative suffixes, e.g. "2024/January")
+        csv_sub_folders: Set[str] = set()
+        for key, data in self._status_cache.items():
+            if key.startswith(old_prefix) and data.get('item_type') == 'folder':
+                suffix = key[len(old_prefix):]  # e.g. "2024/January"
+                csv_sub_folders.add(suffix)
+
+        # Sub-folders present on the filesystem under new_abs_path
+        fs_sub_folders: Set[str] = set()
+        new_abs = Path(new_abs_path)
+        if new_abs.exists() and new_abs.is_dir():
+            try:
+                for dirpath, dirnames, _ in os.walk(str(new_abs)):
+                    dirnames[:] = [d for d in sorted(dirnames) if not d.startswith('.')]
+                    # Express as a suffix relative to new_abs_path
+                    rel = os.path.relpath(dirpath, str(new_abs)).replace('\\', '/')
+                    if rel == '.':
+                        continue
+                    fs_sub_folders.add(rel)
+            except Exception as e:
+                debug("errors", f"compare_folder_structure: walk error: {e}")
+
+        matched = csv_sub_folders & fs_sub_folders
+        missing = sorted(csv_sub_folders - fs_sub_folders)
+        extra   = sorted(fs_sub_folders - csv_sub_folders)
+
+        result = {
+            'matched':   len(matched),
+            'missing':   missing,
+            'extra':     extra,
+            'csv_total': len(csv_sub_folders),
+            'fs_total':  len(fs_sub_folders),
+        }
+        debug("folder_status",
+              f"compare_folder_structure: {old_norm} vs {new_abs_path} -> "
+              f"{result['matched']} matched, {len(missing)} missing, {len(extra)} extra")
+        return result
     
     def _create_csv_file(self):
         """Create a new CSV file with headers."""
@@ -1016,12 +1114,16 @@ class FolderStatusManager:
                 continue
             if data.get('item_type') != 'file':
                 continue
+            status = data.get('status')
+            # Files marked not_found no longer exist on disk — exclude them
+            # from all counts so they don't inflate the display numbers.
+            if status == FILE_STATUS_NOT_FOUND:
+                continue
             remainder = path[len(prefix):]
             if '/' not in remainder:
                 direct_count += 1
             else:
                 nested_count += 1
-            status = data.get('status')
             if status == FILE_STATUS_ON_CLOUD:
                 on_cloud_count += 1
             elif status == FILE_STATUS_DISMISSED:
@@ -1038,7 +1140,131 @@ class FolderStatusManager:
             'status': folder_status,
         }
 
-    def dismiss_folder(self, relative_path: str) -> Tuple[bool, str]:
+    def scan_folder_structure_only(
+        self, folder_rel_path: str, progress_callback=None
+    ) -> Dict:
+        """Soft scan: walk the directory tree under *folder_rel_path* checking
+        for structural changes (folders only, no files).
+
+        - Sub-folders found on the filesystem but absent from the CSV → added
+          as 'dismissed' in the cache.
+        - Non-dismissed sub-folders recorded in the CSV but absent from the
+          filesystem → marked as 'not_found'.
+        - Dismissed sub-folders are pruned from the walk (not descended into
+          and not checked for existence) — their status is not their concern.
+
+        This is intentionally lightweight: no stat() calls on files, no image
+        counting.  Suitable for running automatically when the dialog opens.
+
+        Args:
+            folder_rel_path:  Relative path of a watched/part-watched folder.
+            progress_callback: Optional callable(rel_path: str) for UI updates.
+
+        Returns:
+            Dict with keys 'new' (int) and 'not_found' (int).
+        """
+        if not self._cache_loaded:
+            self.load_status_db()
+
+        absolute_path = self.path_mapper.to_absolute(folder_rel_path)
+
+        # If the root folder itself is missing, mark it and bail out.
+        if not Path(absolute_path).exists():
+            if folder_rel_path in self._status_cache:
+                self._status_cache[folder_rel_path]['status'] = STATUS_NOT_FOUND
+                self._status_cache[folder_rel_path]['last_modified'] = datetime.now().isoformat()
+                self.save_status_db()
+            return {'new': 0, 'not_found': 1}
+
+        prefix = folder_rel_path + '/'
+        now = datetime.now().isoformat()
+
+        # Build set of dismissed sub-folder paths so we can prune them from
+        # the os.walk and also skip them in the not-found check below.
+        dismissed_folder_rels: Set[str] = {
+            path for path, data in self._status_cache.items()
+            if path.startswith(prefix)
+            and data.get('item_type') == 'folder'
+            and data.get('status') == STATUS_DISMISSED
+        }
+
+        new_count = 0
+        not_found_count = 0
+        seen_folders: Set[str] = set()
+        changed = False
+
+        try:
+            for root, dirs, _files in os.walk(absolute_path):
+                # Prune hidden dirs and dismissed dirs in-place so os.walk
+                # doesn't descend into them.
+                dirs[:] = [
+                    d for d in dirs
+                    if not d.startswith('.')
+                    and self.path_mapper.to_relative(os.path.join(root, d))
+                       not in dismissed_folder_rels
+                ]
+
+                for dirname in dirs:
+                    dir_abs = os.path.join(root, dirname)
+                    dir_rel = self.path_mapper.to_relative(dir_abs)
+                    if not dir_rel:
+                        continue
+                    seen_folders.add(dir_rel)
+
+                    if dir_rel not in self._status_cache:
+                        # New sub-folder not in CSV — register as dismissed.
+                        self._status_cache[dir_rel] = {
+                            'item_type': 'folder',
+                            'status': STATUS_DISMISSED,
+                            'cloudinary_id': '',
+                            'cloudinary_url': '',
+                            'original_size': '',
+                            'upload_size': '',
+                            'upload_date': '',
+                            'last_modified': now,
+                            'notes': 'Discovered on soft scan',
+                        }
+                        new_count += 1
+                        changed = True
+                        self._new_this_session.add(dir_rel)
+                        if progress_callback:
+                            progress_callback(dir_rel)
+                    elif self._status_cache[dir_rel].get('status') == STATUS_NOT_FOUND:
+                        # Was previously not-found but now exists again.
+                        self._status_cache[dir_rel]['status'] = STATUS_DISMISSED
+                        self._status_cache[dir_rel]['last_modified'] = now
+                        changed = True
+
+        except Exception as e:
+            debug('errors', f'scan_folder_structure_only walk error for {folder_rel_path}: {e}')
+
+        # Check CSV entries for sub-folders that were NOT seen during the walk.
+        # Skip dismissed entries (pruned deliberately) and already-not-found.
+        for path, data in self._status_cache.items():
+            if not path.startswith(prefix):
+                continue
+            if data.get('item_type') != 'folder':
+                continue
+            status = data.get('status', '')
+            if status in (STATUS_DISMISSED, STATUS_NOT_FOUND):
+                continue
+            # Skip folders inside a dismissed subtree (they were pruned).
+            if any(path.startswith(d + '/') for d in dismissed_folder_rels):
+                continue
+            if path not in seen_folders:
+                data['status'] = STATUS_NOT_FOUND
+                data['last_modified'] = now
+                not_found_count += 1
+                changed = True
+
+        if changed:
+            self.recompute_all_inferred_statuses()
+            self.save_status_db()
+
+        debug('folder_status',
+              f'scan_folder_structure_only: {folder_rel_path} → '
+              f'{new_count} new, {not_found_count} not_found')
+        return {'new': new_count, 'not_found': not_found_count}
         """
         Mark a folder and all its descendant folders as dismissed.
         File entries (and their Cloudinary metadata) are preserved in the database.
@@ -1108,13 +1334,19 @@ class FolderStatusManager:
         debug("folder_status", f"Deleted {len(items_to_delete)} items")
     
     def seed_folder_structure(self, progress_callback=None) -> Tuple[int, int]:
-        """
-        First-launch seeding: recursively walks all directories under network_root,
-        adding each unseen folder as 'dismissed'. Saves once at the end.
+        """First-launch seeding: recursively walk the entire folder tree under
+        network_root and register every sub-folder as 'dismissed'.
+
+        Called once when the CSV does not yet exist (is_fresh_db == True).
+        This is the ONLY automatic full-tree walk the app ever performs.
+        On every subsequent launch, only the root level is checked.
+
         Existing entries are never overwritten.
 
         Args:
-            progress_callback: Optional callable(rel_path: str) called for each new folder.
+            progress_callback: Optional callable(rel_path: str) invoked for
+                               each new folder so the caller can update a
+                               progress dialog.
 
         Returns:
             Tuple of (added, skipped) counts.
@@ -1133,7 +1365,7 @@ class FolderStatusManager:
 
             rel = self.path_mapper.to_relative(dirpath)
             if not rel or rel == '.':
-                continue  # Skip the root itself
+                continue  # skip the root itself
 
             if rel in self._status_cache:
                 skipped += 1
@@ -1188,6 +1420,27 @@ class FolderStatusManager:
               f"reset_all_folders_to_dismissed: {folder_count} folders reset, "
               f"{len(file_keys)} file entries removed")
         return self.save_status_db()
+
+    def delete_db(self) -> Tuple[bool, str]:
+        """
+        Delete the CSV file entirely and reset all in-memory state so the
+        next call to load_status_db() treats this as a brand-new first launch.
+
+        Returns:
+            Tuple of (success, message)
+        """
+        try:
+            if self.csv_path.exists():
+                self.csv_path.unlink()
+            # Reset every piece of in-memory state so the manager is clean.
+            self._status_cache.clear()
+            self._cache_loaded = False
+            self.is_fresh_db = False
+            self._new_this_session.clear()
+            debug("folder_status", f"delete_db: CSV deleted ({self.csv_path})")
+            return True, "Database deleted."
+        except Exception as e:
+            return False, f"Could not delete database: {e}"
 
     def infer_folder_status(self, rel_path: str) -> Optional[str]:
         """

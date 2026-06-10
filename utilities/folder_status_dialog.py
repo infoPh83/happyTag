@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
                              QTreeWidget, QTreeWidgetItem, QComboBox, QLabel,
                              QLineEdit, QProgressDialog, QMessageBox, QMenu,
                              QHeaderView, QCheckBox, QGroupBox, QTreeWidgetItemIterator,
-                             QApplication)
+                             QApplication, QFileDialog)
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt5.QtGui import QColor, QBrush, QIcon
 import time
@@ -35,7 +35,7 @@ from .folder_status_manager import (FolderStatusManager,
                                    STATUS_NOT_FOUND, STATUS_PART_WATCHED,
                                    FILE_STATUS_ON_CLOUD, FILE_STATUS_DISMISSED,
                                    FILE_STATUS_NEW, FILE_STATUS_NOT_FOUND)
-from .folder_scanner import FolderScanner, FolderItem, ScanProgress
+from .folder_scanner import FolderItem
 
 
 # ---------------------------------------------------------------------------
@@ -87,8 +87,11 @@ class RootLoadWorker(QThread):
             if self._cancelled:
                 break
             try:
-                # Use cache-only counts — fast, no filesystem walk on open.
-                # Use the Refresh button to trigger a full filesystem reconcile.
+                # Soft scan: walk the folder tree (no files) to find new or
+                # missing sub-folders.  Fast compared to a full reconcile since
+                # it touches directory entries only and skips dismissed subtrees.
+                self._status_manager.scan_folder_structure_only(item.relative_path)
+                # Pull counts from the now-updated cache.
                 recon = self._status_manager.count_from_cache(item.relative_path)
             except Exception:
                 recon = None
@@ -119,71 +122,41 @@ class FolderExpandWorker(QThread):
         print(f"[EXPAND WORKER] Starting expansion of: {self._folder.relative_path}")
         children = []
         try:
-            if self._folder.status == STATUS_DISMISSED:
-                child_data_list = self._status_manager.get_immediate_child_folders(
-                    self._folder.relative_path
+            # Always read from the CSV cache only — never touch the filesystem
+            # on expand.  New sub-folders are only discovered via:
+            #   - the shallow root scan each time the dialog opens
+            #   - an explicit Refresh on a watched folder
+            child_data_list = self._status_manager.get_immediate_child_folders(
+                self._folder.relative_path
+            )
+            for child_data in child_data_list:
+                if self._cancelled:
+                    break
+                child_item = FolderItem(
+                    relative_path=child_data['rel_path'],
+                    is_directory=True,
+                    name=child_data['name'],
+                    parent_path=self._folder.relative_path
                 )
-                for child_data in child_data_list:
-                    if self._cancelled:
-                        break
-                    child_item = FolderItem(
-                        relative_path=child_data['rel_path'],
-                        is_directory=True,
-                        name=child_data['name'],
-                        parent_path=self._folder.relative_path
-                    )
-                    child_item.status = child_data['status']
-                    child_item.is_loaded = False
-                    # Use cache-only counts — no filesystem walk on expand
-                    if child_item.status != STATUS_DISMISSED:
-                        try:
-                            child_item.recon_result = (
-                                self._status_manager.count_from_cache(child_data['rel_path'])
-                            )
-                        except Exception:
-                            child_item.recon_result = None
-                    else:
+                child_item.status = child_data['status']
+                child_item.is_new_this_session = (
+                    child_data['rel_path'] in self._status_manager._new_this_session
+                )
+                child_item.is_loaded = False
+                # Load counts from cache (no filesystem I/O)
+                if child_item.status not in (STATUS_DISMISSED,):
+                    try:
+                        child_item.recon_result = (
+                            self._status_manager.count_from_cache(child_data['rel_path'])
+                        )
+                    except Exception:
                         child_item.recon_result = None
-                    children.append(child_item)
-            else:
-                folder_abs = self._path_mapper.to_absolute(self._folder.relative_path)
-                t_scan = time.time()
-                print(f"[EXPAND WORKER] Calling scandir on: {folder_abs}")
-                # os.scandir gives is_dir() for free from the DirEntry — no extra stat() call
-                with os.scandir(folder_abs) as it:
-                    entries = sorted(it, key=lambda e: e.name.lower())
-                print(f"[EXPAND WORKER] scandir took {time.time() - t_scan:.3f}s, found {len(entries)} items")
-                for entry in entries:
-                    if self._cancelled:
-                        break
-                    if entry.name.startswith('.') or not entry.is_dir():
-                        continue
-                    child_rel = self._path_mapper.to_relative(entry.path)
-                    if not child_rel:
-                        continue
-                    child_item = FolderItem(
-                        relative_path=child_rel,
-                        is_directory=True,
-                        name=entry.name,
-                        parent_path=self._folder.relative_path
-                    )
-                    child_item.status = self._status_manager.get_status(child_rel)
-                    # Use cache-only counts — no filesystem walk on expand
-                    if child_item.status != STATUS_DISMISSED:
-                        try:
-                            t_count = time.time()
-                            child_item.recon_result = (
-                                self._status_manager.count_from_cache(child_rel)
-                            )
-                            print(f"[EXPAND WORKER]   count_from_cache: {child_rel} ({time.time() - t_count:.3f}s)")
-                        except Exception as ex:
-                            print(f"[EXPAND WORKER]   count_from_cache ERROR: {child_rel} -> {ex}")
-                            child_item.recon_result = None
-                    else:
-                        child_item.recon_result = None
-                    children.append(child_item)
+                else:
+                    child_item.recon_result = None
+                children.append(child_item)
 
-            print(f"[EXPAND WORKER] Total worker time: {time.time() - t_worker_start:.3f}s for {len(children)} children")
+            print(f"[EXPAND WORKER] Total worker time: {time.time() - t_worker_start:.3f}s "
+                  f"for {len(children)} children (CSV-only)")
             if not self._cancelled:
                 self.children_ready.emit(self._folder.relative_path, children)
         except Exception as e:
@@ -207,37 +180,20 @@ class _SetStatusWorker(QThread):
         success, msg = self._status_manager.set_folder_direct(
             self._relative_path, self._status
         )
-        if not success:
-            self.done.emit(False, msg, None)
-            return
-
-        recon_result = None
-        if self._status in (STATUS_WATCHED, STATUS_PART_WATCHED, STATUS_NEW):
-            try:
-                recon_result = self._status_manager.reconcile_folder_with_filesystem(
-                    self._relative_path, progress_callback=None
-                )
-            except Exception:
-                recon_result = None
-
-        self.done.emit(True, msg, recon_result)
+        self.done.emit(success, msg, None)
 
 
 # Status display configuration
 # 'user_assignable': False means the status is auto-computed and not shown in the
 #   context menu or status filter dropdown.
+# Note: STATUS_NEW is intentionally absent here — it is an ephemeral UI badge
+# represented by FolderItem.is_new_this_session, never stored in the CSV.
 STATUS_CONFIG = {
     STATUS_DISMISSED: {
         'label': 'Dismissed',
         'color': QColor(180, 180, 180),  # Gray
         'description': 'Folder dismissed from workflow',
         'user_assignable': True,
-    },
-    STATUS_NEW: {
-        'label': 'New',
-        'color': QColor(255, 255, 200),  # Light yellow
-        'description': 'New folder, not yet reviewed',
-        'user_assignable': False,
     },
     STATUS_WATCHED: {
         'label': 'Watched',
@@ -257,6 +213,13 @@ STATUS_CONFIG = {
         'description': 'Contains a mix of watched and dismissed sub-folders',
         'user_assignable': False,
     },
+}
+
+# Separate config entry for the ephemeral 'new this session' badge.
+STATUS_NEW_SESSION_CONFIG = {
+    'label': 'New',
+    'color': QColor(255, 255, 200),  # Light yellow
+    'description': 'New folder discovered this session (stored as Dismissed)',
 }
 
 
@@ -284,7 +247,6 @@ class FolderStatusDialog(QDialog):
         self.network_root = network_root
         self.path_mapper = PathMapper(network_root)
         self.status_manager = FolderStatusManager(network_root)
-        self.scanner = FolderScanner(network_root, self.status_manager)
 
         # Acquire exclusive lock — raises LockError if another instance holds it
         from utilities.file_lock_manager import LockError
@@ -337,6 +299,7 @@ class FolderStatusDialog(QDialog):
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
         self.tree.itemExpanded.connect(self._on_item_expanded)
         self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
+        self.tree.itemSelectionChanged.connect(self._on_tree_selection_changed)
         
         # Top section: filters and controls
         top_layout = self._create_top_section()
@@ -371,9 +334,15 @@ class FolderStatusDialog(QDialog):
         self.status_filter.currentIndexChanged.connect(self._on_filter_changed)
         layout.addWidget(self.status_filter)
         
-        # Refresh button
+        # Refresh button — enabled only when a watched/part-watched folder is selected
         self.refresh_btn = QPushButton("Refresh")
-        self.refresh_btn.clicked.connect(self._refresh_tree)
+        self.refresh_btn.setToolTip(
+            "Scan the selected folder on the filesystem: discover new sub-folders "
+            "and files, mark missing items as Not Found, and update all counters.\n"
+            "Select a Watched or Part Watched folder to enable this button."
+        )
+        self.refresh_btn.setEnabled(False)  # enabled by _on_tree_selection_changed
+        self.refresh_btn.clicked.connect(self._refresh_selected_folder)
         layout.addWidget(self.refresh_btn)
         
         # Expand all / Collapse all
@@ -410,7 +379,16 @@ class FolderStatusDialog(QDialog):
                               f"{config['color'].blue()});")
             label.setToolTip(config['description'])
             legend_layout.addWidget(label)
-        
+
+        # Ephemeral 'New' badge (not in STATUS_CONFIG)
+        new_cfg = STATUS_NEW_SESSION_CONFIG
+        new_lbl = QLabel(f"■ {new_cfg['label']}")
+        new_lbl.setStyleSheet(f"color: rgb({new_cfg['color'].red()}, "
+                              f"{new_cfg['color'].green()}, "
+                              f"{new_cfg['color'].blue()});")
+        new_lbl.setToolTip(new_cfg['description'])
+        legend_layout.addWidget(new_lbl)
+
         legend_layout.addStretch()
         legend_group.setLayout(legend_layout)
         layout.addWidget(legend_group)
@@ -430,10 +408,13 @@ class FolderStatusDialog(QDialog):
     def _load_root_folders(self):
         """Load root folders into the tree.
 
-        The tree is populated immediately from the CSV/filesystem snapshot so
-        the dialog opens without delay.  Reconciliation of watched/new folders
-        (the expensive part) is then done in a background thread so the UI
-        stays responsive while counts fill in.
+        Populates the tree immediately from the CSV + a shallow filesystem check
+        of the network root (one iterdir call, no recursion).  No first-launch
+        seeding — new root folders are discovered here and stored as dismissed
+        with an ephemeral 'new' badge for this session.
+
+        Reconciliation (counting files etc.) is done in a background thread so
+        the UI stays responsive while counts fill in.
         """
         # Cancel any in-flight workers from a previous load/refresh
         self._cancel_all_workers()
@@ -442,7 +423,9 @@ class FolderStatusDialog(QDialog):
             # Ensure DB is loaded (sets is_fresh_db flag)
             self.status_manager.load_status_db()
 
-            # First launch: seed entire folder structure (one-time, sync is acceptable)
+            # First launch: recursively seed the full folder tree as dismissed.
+            # This is the ONLY time we do a full recursive filesystem walk
+            # automatically.  Subsequent launches only check the root level.
             if self.status_manager.is_fresh_db:
                 self._run_first_launch_seed()
 
@@ -456,11 +439,14 @@ class FolderStatusDialog(QDialog):
             for item in root_items:
                 self._add_item_to_tree(item, None)
 
-            # Start background reconciliation for watched/new root folders
+            # Update Refresh button state now that tree is built
+            self._on_tree_selection_changed()
+
+            # Start background cache-read for watched root folders so counts
+            # appear without needing a full filesystem walk on open.
             watched = [item for item in root_items
-                       if item.status in (STATUS_WATCHED, STATUS_PART_WATCHED, STATUS_NEW)]
+                       if item.status in (STATUS_WATCHED, STATUS_PART_WATCHED)]
             if watched:
-                self.refresh_btn.setEnabled(False)
                 self._root_load_worker = RootLoadWorker(self.status_manager, watched)
                 self._root_load_worker.item_reconciled.connect(self._on_root_item_reconciled)
                 self._root_load_worker.finished.connect(self._on_root_load_finished)
@@ -469,23 +455,15 @@ class FolderStatusDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load folders: {str(e)}")
 
-    def _on_root_item_reconciled(self, rel_path: str, recon_result):
-        """Slot: update a root tree item when its reconciliation completes."""
-        folder_item = self.loaded_items.get(rel_path)
-        tree_item = self.tree_items.get(rel_path)
-        if folder_item and tree_item:
-            folder_item.recon_result = recon_result
-            self._update_tree_item_status(tree_item, folder_item)
-
-    def _on_root_load_finished(self):
-        """Slot: called when all root reconciliations are done."""
-        self.refresh_btn.setEnabled(True)
-        self._root_load_worker = None
-
     def _run_first_launch_seed(self):
-        """Show progress and run seed_folder_structure on first launch."""
+        """On the very first launch (no CSV yet), recursively walk the entire
+        folder tree and register every sub-folder as dismissed.  This is the
+        only automatic full-tree walk the app ever performs; subsequent launches
+        only check the root level.  A progress dialog is shown since this may
+        take a moment on a large network drive.
+        """
         progress_dlg = QProgressDialog(
-            "First launch: building folder structure...", None, 0, 0, self)
+            "First launch: building folder structure…", None, 0, 0, self)
         progress_dlg.setWindowModality(Qt.WindowModal)
         progress_dlg.setMinimumDuration(0)
         progress_dlg.setCancelButton(None)
@@ -501,21 +479,51 @@ class FolderStatusDialog(QDialog):
                 progress_dlg.setLabelText(f"Scanning: {label}")
                 QApplication.processEvents()
 
-        added, skipped = self.status_manager.seed_folder_structure(on_progress)
+        self.status_manager.seed_folder_structure(on_progress)
         progress_dlg.close()
 
+    def _on_root_item_reconciled(self, rel_path: str, recon_result):
+        """Slot: update a root tree item when its soft scan + cache read completes."""
+        folder_item = self.loaded_items.get(rel_path)
+        tree_item = self.tree_items.get(rel_path)
+        if folder_item and tree_item:
+            # Refresh status from cache: the soft scan may have changed it
+            # (e.g., watched → not_found if the folder was deleted, or
+            # watched → part_watched if new dismissed sub-folders were found).
+            folder_item.status = self.status_manager.get_status(rel_path)
+            folder_item.recon_result = recon_result
+            self._update_tree_item_status(tree_item, folder_item)
+            # Refresh expand arrow: new sub-folders may have been added to CSV.
+            if not folder_item.is_loaded:
+                had_arrow = tree_item.childCount() > 0
+                has_children = self.status_manager.has_child_folders(rel_path)
+                if has_children and not had_arrow:
+                    placeholder = QTreeWidgetItem()
+                    placeholder.setText(0, "Loading...")
+                    tree_item.addChild(placeholder)
+                elif not has_children and had_arrow:
+                    tree_item.takeChildren()
+
+    def _on_root_load_finished(self):
+        """Slot: called when all root cache-reads are done."""
+        self._root_load_worker = None
+        # Re-evaluate Refresh button based on current selection
+        self._on_tree_selection_changed()
+
     def _collect_root_items(self) -> List[FolderItem]:
-        """Build root-level FolderItems from CSV + filesystem check.
-        
-        Folders in CSV: shown with their CSV status.
-        New folders found on filesystem (not in CSV): added as STATUS_NEW.
-        CSV folders no longer on filesystem: shown as STATUS_NOT_FOUND.
+        """Build root-level FolderItems from CSV + shallow filesystem check.
+
+        - Folders in CSV:                         shown with their CSV status.
+        - Folders on FS but not in CSV:           added to CSV as 'dismissed';
+                                                  FolderItem.is_new_this_session = True
+                                                  so the UI shows the 'New' badge.
+        - Folders in CSV but not on FS:           shown as STATUS_NOT_FOUND.
         """
         cache = self.status_manager._status_cache
         network_root = Path(self.network_root)
         new_added = False
 
-        # What's on the filesystem at root level
+        # What's on the filesystem at root level (one iterdir, no recursion)
         fs_folders: Dict[str, str] = {}  # rel_path -> name
         try:
             for p in sorted(network_root.iterdir(), key=lambda x: x.name.lower()):
@@ -526,7 +534,7 @@ class FolderStatusDialog(QDialog):
         except Exception:
             pass
 
-        # CSV root entries (immediate children = no '/' in path)
+        # CSV root entries (immediate children of network_root = no '/' in path)
         csv_roots = {
             k: v for k, v in cache.items()
             if '/' not in k and v.get('item_type') == 'folder'
@@ -534,28 +542,36 @@ class FolderStatusDialog(QDialog):
 
         root_items: List[FolderItem] = []
 
+        # On first launch the seed just populated the CSV, so every folder
+        # the user sees is brand-new to them — mark them all with the badge.
+        first_launch = self.status_manager.is_fresh_db
+
         # Filesystem folders first
         for rel_path, name in fs_folders.items():
             csv_data = csv_roots.get(rel_path)
             if csv_data:
                 status = csv_data['status']
+                is_new = first_launch  # True on first launch, False otherwise
             else:
-                # Brand-new folder — add to cache as new
+                # Brand-new folder not yet in CSV — store as dismissed
                 cache[rel_path] = {
                     'item_type': 'folder',
-                    'status': STATUS_NEW,
+                    'status': STATUS_DISMISSED,
                     'cloudinary_id': '', 'cloudinary_url': '',
                     'original_size': '', 'upload_size': '',
                     'upload_date': '',
                     'last_modified': datetime.now().isoformat(),
                     'notes': 'Auto-discovered'
                 }
-                status = STATUS_NEW
+                status = STATUS_DISMISSED
+                is_new = True
                 new_added = True
+                self.status_manager._new_this_session.add(rel_path)
 
             item = FolderItem(relative_path=rel_path, is_directory=True,
                               name=name, parent_path=None)
             item.status = status
+            item.is_new_this_session = is_new
             item.is_loaded = False
             item.recon_result = None
             root_items.append(item)
@@ -566,6 +582,7 @@ class FolderStatusDialog(QDialog):
                 item = FolderItem(relative_path=rel_path, is_directory=True,
                                   name=rel_path.split('/')[-1], parent_path=None)
                 item.status = STATUS_NOT_FOUND
+                item.is_new_this_session = False
                 item.is_loaded = False
                 item.recon_result = None
                 root_items.append(item)
@@ -636,6 +653,7 @@ class FolderStatusDialog(QDialog):
         """Return the row background colour based on outcome rather than raw status.
 
         Priority:
+          - New this session → light yellow (ephemeral badge)
           - Dismissed  → grey  (always, regardless of counts)
           - Not found  → red   (always)
           - recon available and new > 0           → amber  (needs work)
@@ -643,6 +661,8 @@ class FolderStatusDialog(QDialog):
           - recon available and no images at all  → light neutral (pure container)
           - recon not yet loaded                  → STATUS_CONFIG placeholder colour
         """
+        if getattr(folder_item, 'is_new_this_session', False):
+            return STATUS_NEW_SESSION_CONFIG['color']
         if status == STATUS_DISMISSED:
             return QColor(180, 180, 180)   # Grey
         if status == STATUS_NOT_FOUND:
@@ -675,10 +695,14 @@ class FolderStatusDialog(QDialog):
           - First TWO cols only   → every other case
         """
         status = folder_item.status
-        config = STATUS_CONFIG.get(status, STATUS_CONFIG[STATUS_WATCHED])
+        is_new_badge = getattr(folder_item, 'is_new_this_session', False)
 
-        # Set status text
-        tree_item.setText(1, config['label'])
+        # Status text: show 'New' badge label when applicable, otherwise use STATUS_CONFIG
+        if is_new_badge:
+            tree_item.setText(1, STATUS_NEW_SESSION_CONFIG['label'])
+        else:
+            config = STATUS_CONFIG.get(status, STATUS_CONFIG[STATUS_WATCHED])
+            tree_item.setText(1, config['label'])
 
         # Determine whether this row needs direct user action
         recon = getattr(folder_item, 'recon_result', None)
@@ -768,6 +792,7 @@ class FolderStatusDialog(QDialog):
             return
 
         tree_item.takeChildren()
+        folder_item.children.clear()  # ensure clean slate before adding fresh children
         for child_item in children:
             folder_item.add_child(child_item)
 
@@ -792,45 +817,53 @@ class FolderStatusDialog(QDialog):
         item = self.tree.itemAt(position)
         if not item:
             return
-        
+
         menu = QMenu(self)
-        
-        # Get the folder item
+
         relative_path = self._get_item_path(item)
         folder_item = self.loaded_items.get(relative_path)
-        
+
         if not folder_item:
             return
-        
-        # Status change actions — only user-assignable statuses (Watched / Dismissed)
-        status_menu = menu.addMenu("Set Status")
-        for status_code, config in STATUS_CONFIG.items():
-            if not config.get('user_assignable', False):
-                continue
-            action = status_menu.addAction(config['label'])
-            action.triggered.connect(lambda checked, s=status_code: self._set_item_status(item, s, False))
 
-        # Scan actions
-        if folder_item.is_directory:
+        # Status change actions — only user-assignable statuses (Watched / Dismissed).
+        # Not shown for NOT_FOUND folders (use Relocate or Dismiss instead).
+        if folder_item.status != STATUS_NOT_FOUND:
+            status_menu = menu.addMenu("Set Status")
+            for status_code, config in STATUS_CONFIG.items():
+                if not config.get('user_assignable', False):
+                    continue
+                action = status_menu.addAction(config['label'])
+                action.triggered.connect(
+                    lambda checked, s=status_code: self._set_item_status(item, s, False)
+                )
+
+        # Refresh action — only meaningful for watched/part-watched folders
+        if folder_item.status in (STATUS_WATCHED, STATUS_PART_WATCHED):
             menu.addSeparator()
-            rescan_action = menu.addAction("Re-scan Folder Structure")
-            rescan_action.setToolTip("Add any new sub-folders (as Dismissed) without full image scan")
-            rescan_action.triggered.connect(lambda: self._rescan_folder_structure(item))
+            refresh_action = menu.addAction("Refresh")
+            refresh_action.setToolTip(
+                "Scan this folder on the filesystem: find new sub-folders and files, "
+                "mark missing items as Not Found, and update all counters."
+            )
+            refresh_action.triggered.connect(lambda: self._do_refresh_folder(item))
 
-            scan_action = menu.addAction("Deep Scan (Recursive)")
-            scan_action.triggered.connect(lambda: self._deep_scan_folder(item))
-
-        # "Not Found" folders: offer permanent removal from the database
+        # "Not Found" folders: offer relocation or dismissal
         if folder_item.status == STATUS_NOT_FOUND:
             menu.addSeparator()
-            ack_action = menu.addAction("Acknowledge (Remove from DB)")
-            ack_action.setToolTip(
-                "Permanently remove this folder (and all sub-entries) from the database. "
-                "It will no longer appear in this list."
+            relocate_action = menu.addAction("Relocate\u2026")
+            relocate_action.setToolTip(
+                "Point this database entry to the folder's new location on the filesystem."
             )
-            ack_action.triggered.connect(lambda: self._acknowledge_not_found(item))
+            relocate_action.triggered.connect(lambda: self._relocate_folder(item))
 
-        # Show menu
+            dismiss_action = menu.addAction("Dismiss (Remove from DB)")
+            dismiss_action.setToolTip(
+                "Permanently remove this folder and all its sub-entries from the database. "
+                "Use when the folder is gone and you no longer need its history."
+            )
+            dismiss_action.triggered.connect(lambda: self._dismiss_not_found(item))
+
         menu.exec_(self.tree.viewport().mapToGlobal(position))
     
     def _set_item_status(self, tree_item: QTreeWidgetItem, status: str, recursive: bool = False):
@@ -881,13 +914,11 @@ class FolderStatusDialog(QDialog):
                     QMessageBox.critical(self, "Error", msg)
                     return
 
-                # Update the in-memory folder item and tree
+                # Clear ephemeral 'New' badge — folder now has an explicit status.
                 _folder.status = _status
+                _folder.is_new_this_session = False
+                self.status_manager._new_this_session.discard(_rel)
                 self._reload_folder_item(_folder, _item)
-
-                if recon_result is not None:
-                    _folder.recon_result = recon_result
-                    self._update_tree_item_status(_item, _folder)
 
                 # If already expanded, reload children so placeholder doesn't stick.
                 if _item.isExpanded():
@@ -896,28 +927,51 @@ class FolderStatusDialog(QDialog):
                 self._refresh_ancestor_tree_items(_item)
                 self.statuses_updated.emit()
 
+                # For watched folders, immediately run a full filesystem scan so
+                # sub-folders are discovered and file counts are populated.
+                # _do_refresh_folder shows its own progress dialog.
+                if _status == STATUS_WATCHED:
+                    self._do_refresh_folder(_item)
+
             worker.done.connect(_on_done)
             worker.start()
 
         except Exception as e:
             QApplication.restoreOverrideCursor()
             QMessageBox.critical(self, "Error", f"Failed to update status: {str(e)}")
-    
-    def _rescan_folder_structure(self, tree_item: QTreeWidgetItem):
-        """Walk a folder on the filesystem and add any new sub-folders as dismissed.
-        
-        Does NOT scan for images — it only updates the folder hierarchy in the CSV.
-        Existing entries (including watched sub-folders) are never overwritten.
-        """
+
+    # ------------------------------------------------------------------
+    # Refresh (filesystem reconcile)
+    # ------------------------------------------------------------------
+
+    def _on_tree_selection_changed(self):
+        """Enable the Refresh button only when a watched/part-watched folder is selected."""
+        selected = self.tree.selectedItems()
+        if selected:
+            rel_path = self._get_item_path(selected[0])
+            folder_item = self.loaded_items.get(rel_path)
+            if folder_item and folder_item.status in (STATUS_WATCHED, STATUS_PART_WATCHED):
+                self.refresh_btn.setEnabled(True)
+                return
+        self.refresh_btn.setEnabled(False)
+
+    def _refresh_selected_folder(self):
+        """Toolbar Refresh: reconcile the selected watched/part-watched folder."""
+        selected = self.tree.selectedItems()
+        if not selected:
+            return
+        self._do_refresh_folder(selected[0])
+
+    def _do_refresh_folder(self, tree_item: QTreeWidgetItem):
+        """Run reconcile_folder_with_filesystem on *tree_item* in a background thread."""
         relative_path = self._get_item_path(tree_item)
         folder_item = self.loaded_items.get(relative_path)
         if not folder_item or not folder_item.is_directory:
             return
 
-        abs_path = self.path_mapper.to_absolute(relative_path)
-
+        # Show a progress dialog (indeterminate — we don't know total upfront)
         progress_dlg = QProgressDialog(
-            f"Scanning folder structure: {folder_item.name}...",
+            f"Refreshing '{folder_item.name}'…\n\nScanning filesystem for new and missing items.",
             "Cancel", 0, 0, self
         )
         progress_dlg.setWindowModality(Qt.WindowModal)
@@ -925,150 +979,79 @@ class FolderStatusDialog(QDialog):
         progress_dlg.show()
         QApplication.processEvents()
 
-        cache = self.status_manager._status_cache
-        now = datetime.now().isoformat()
-        added = 0
-        cancelled = False
+        cancelled = [False]
 
-        for dirpath, dirnames, _ in os.walk(abs_path):
-            dirnames[:] = sorted([d for d in dirnames if not d.startswith('.')])
-
-            rel = self.path_mapper.to_relative(dirpath)
-            if not rel or rel == '.' or rel == relative_path:
-                continue  # skip the folder itself
-
-            if rel not in cache:
-                cache[rel] = {
-                    'item_type': 'folder',
-                    'status': STATUS_DISMISSED,
-                    'cloudinary_id': '', 'cloudinary_url': '',
-                    'original_size': '', 'upload_size': '',
-                    'upload_date': '',
-                    'last_modified': now,
-                    'notes': 'Discovered on rescan'
-                }
-                added += 1
-
-            label = rel if len(rel) <= 70 else '...' + rel[-67:]
-            progress_dlg.setLabelText(f"Scanning: {label}")
+        def progress_cb(current, total, message):
+            if progress_dlg.wasCanceled():
+                cancelled[0] = True
+                return
+            label = message if len(message) <= 80 else '...' + message[-77:]
+            progress_dlg.setLabelText(
+                f"Refreshing '{folder_item.name}'…\n{label}"
+            )
             QApplication.processEvents()
 
-            if progress_dlg.wasCanceled():
-                cancelled = True
-                break
+        try:
+            recon = self.status_manager.reconcile_folder_with_filesystem(
+                relative_path, progress_callback=progress_cb
+            )
+        except Exception as e:
+            progress_dlg.close()
+            QMessageBox.critical(self, "Refresh Error", str(e))
+            return
 
         progress_dlg.close()
 
-        if added > 0:
-            self.status_manager.save_status_db()
-            # Recompute inferred statuses: new dismissed sub-folders may change
-            # this folder's status (e.g. watched → part_watched) and its ancestors
-            self.status_manager.recompute_all_inferred_statuses()
-            folder_item.status = self.status_manager.get_status(relative_path)
+        if cancelled[0]:
+            return
 
-        # Refresh this folder's expand state in the tree
+        # Update in-memory item and tree
+        folder_item.recon_result = recon
+        folder_item.status = recon.get('status', folder_item.status)
+        self.status_manager._status_cache.get(relative_path, {})  # ensure cache ref
+        folder_item.status = self.status_manager.get_status(relative_path)
+
+        # Invalidate children so the expand worker re-reads from the updated cache
         folder_item.children.clear()
         folder_item.is_loaded = False
         tree_item.takeChildren()
+        if self.status_manager.has_child_folders(relative_path):
+            placeholder = QTreeWidgetItem()
+            placeholder.setText(0, "Loading…")
+            tree_item.addChild(placeholder)
+
+        self._update_tree_item_status(tree_item, folder_item)
+
+        # If the item was already expanded when Refresh was called, the
+        # itemExpanded signal won't fire again (Qt only fires it on a
+        # collapse→expand transition).  Trigger the expand worker manually
+        # so the "Loading…" placeholder is replaced immediately.
+        if tree_item.isExpanded():
+            self._on_item_expanded(tree_item)
+
+        self._refresh_ancestor_tree_items(tree_item)
+        self._on_tree_selection_changed()
+        self.statuses_updated.emit()
+
+    def _reload_folder_item(self, folder_item: FolderItem, tree_item: QTreeWidgetItem):
+        """Reset a folder item's expand state in the tree after a status change.
+        
+        The caller is responsible for setting folder_item.status to the correct
+        value before calling this method.
+        """
+        if not folder_item.is_directory:
+            return
+
+        folder_item.children.clear()
+        folder_item.is_loaded = False
+        tree_item.takeChildren()
+
+        # Add expand placeholder if sub-folders exist in the CSV
         if self.status_manager.has_child_folders(folder_item.relative_path):
             placeholder = QTreeWidgetItem()
             placeholder.setText(0, "Loading...")
             tree_item.addChild(placeholder)
-        self._update_tree_item_status(tree_item, folder_item)
-        self._refresh_ancestor_tree_items(tree_item)
 
-        msg = f"Added {added} new folder(s) to the structure."
-        if cancelled:
-            msg += " (scan was cancelled)"
-        QMessageBox.information(self, "Re-scan Complete", msg)
-
-    def _deep_scan_folder(self, tree_item: QTreeWidgetItem):
-        """Perform a deep recursive scan of a folder."""
-        relative_path = self._get_item_path(tree_item)
-        folder_item = self.loaded_items.get(relative_path)
-        
-        if not folder_item or not folder_item.is_directory:
-            return
-        
-        try:
-            # Show progress dialog - create once before scanning
-            progress_dlg = QProgressDialog(f"Deep scanning {folder_item.name}...", "Cancel", 0, 100, self)
-            progress_dlg.setWindowModality(Qt.WindowModal)
-            progress_dlg.setMinimumDuration(0)  # Show immediately
-            progress_dlg.setAutoClose(False)  # Don't auto-close
-            progress_dlg.setAutoReset(False)  # Don't auto-reset
-            progress_dlg.show()  # Force show immediately
-            
-            # Track last update to avoid too frequent updates
-            last_update = [0]  # Use list for closure modification
-            update_interval = 50  # Update every 50 items
-            
-            # Create progress callback
-            def on_progress(scan_progress: ScanProgress):
-                if scan_progress.is_cancelled:
-                    return
-                    
-                # Check if cancelled by user
-                if progress_dlg.wasCanceled():
-                    scan_progress.is_cancelled = True
-                    return
-                
-                # Update less frequently to avoid UI lag
-                total_items = scan_progress.scanned_folders + scan_progress.scanned_files
-                if total_items - last_update[0] >= update_interval or scan_progress.get_percentage() >= 100:
-                    last_update[0] = total_items
-                    progress_dlg.setValue(scan_progress.get_percentage())
-                    progress_dlg.setLabelText(f"Scanning: {scan_progress.current_path}\n"
-                                            f"Folders: {scan_progress.scanned_folders}/{scan_progress.total_folders} | "
-                                            f"Files: {scan_progress.scanned_files}/{scan_progress.total_files}")
-                    QApplication.processEvents()  # Allow UI to update
-            
-            # Scan recursively
-            self.scanner.scan_folder_contents(folder_item, recursive=True, progress_callback=on_progress)
-            
-            progress_dlg.close()
-            
-            # Rebuild tree for this folder
-            tree_item.takeChildren()
-            for child in folder_item.children:
-                self._add_item_to_tree(child, tree_item)
-
-            # Re-reconcile so counts reflect the newly scanned files
-            folder_item.recon_result = self.status_manager.reconcile_folder_with_filesystem(
-                relative_path
-            )
-
-            # Update counts on this item and bubble up to all ancestors
-            self._update_tree_item_status(tree_item, folder_item)
-            self._refresh_ancestor_tree_items(tree_item)
-            
-            QMessageBox.information(
-                self,
-                "Scan Complete",
-                f"Found {len([c for c in folder_item.children if c.is_directory])} folders "
-                f"and {len([c for c in folder_item.children if not c.is_directory])} files."
-            )
-            
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to scan folder: {str(e)}")
-    
-    def _reload_folder_item(self, folder_item: FolderItem, tree_item: QTreeWidgetItem):
-        """Reload a folder item and update tree."""
-        if not folder_item.is_directory:
-            return
-        
-        # Clear children
-        folder_item.children.clear()
-        folder_item.is_loaded = False
-        tree_item.takeChildren()
-        
-        # Add placeholder
-        placeholder = QTreeWidgetItem()
-        placeholder.setText(0, "Loading...")
-        tree_item.addChild(placeholder)
-        
-        # Update status
-        folder_item.status = self.status_manager.get_status(folder_item.relative_path)
         self._update_tree_item_status(tree_item, folder_item)
 
     def _refresh_ancestor_tree_items(self, tree_item: QTreeWidgetItem):
@@ -1156,13 +1139,14 @@ class FolderStatusDialog(QDialog):
             
             item.setHidden(not visible)
             iterator += 1
-    
-    def _acknowledge_not_found(self, tree_item: QTreeWidgetItem):
-        """Permanently remove a 'Not Found' folder (and all its descendants) from
-        the database so it stops appearing in the tree.
 
-        This is only offered for folders with STATUS_NOT_FOUND, i.e. entries that
-        exist in the CSV but whose corresponding path is no longer on the filesystem.
+    # ------------------------------------------------------------------
+    # Not-Found folder actions: Relocate and Dismiss
+    # ------------------------------------------------------------------
+
+    def _dismiss_not_found(self, tree_item: QTreeWidgetItem):
+        """Permanently remove a NOT_FOUND folder and all its descendants from
+        the database.  Replaces the old 'Acknowledge (Remove from DB)' action.
         """
         relative_path = self._get_item_path(tree_item)
         folder_item = self.loaded_items.get(relative_path)
@@ -1171,10 +1155,10 @@ class FolderStatusDialog(QDialog):
 
         reply = QMessageBox.question(
             self,
-            "Acknowledge Missing Folder",
+            "Dismiss Missing Folder",
             f"Remove '{folder_item.name}' and all its sub-entries from the database?\n\n"
             "The folder is no longer present on the filesystem. "
-            "Acknowledging it will permanently remove it from this list.\n\n"
+            "Dismissing it will permanently remove it from this list.\n\n"
             "This cannot be undone.",
             QMessageBox.Yes | QMessageBox.No,
         )
@@ -1186,7 +1170,128 @@ class FolderStatusDialog(QDialog):
             QMessageBox.critical(self, "Error", f"Failed to remove folder: {msg}")
             return
 
-        # Remove from in-memory tracking
+        self._remove_tree_item(tree_item, relative_path)
+        self.statuses_updated.emit()
+
+    def _relocate_folder(self, tree_item: QTreeWidgetItem):
+        """Guide the user through relocating a NOT_FOUND folder to its new path.
+
+        Steps:
+          1. Folder-picker dialog.
+          2. Structural comparison (folder names only) — fast on network drives.
+          3. Confirmation dialog showing matched / missing / extra sub-folders.
+          4. On confirm: cascade-rename all CSV entries to the new path.
+        """
+        relative_path = self._get_item_path(tree_item)
+        folder_item = self.loaded_items.get(relative_path)
+        if not folder_item:
+            return
+
+        # Step 1 — Pick new location
+        new_abs_path = QFileDialog.getExistingDirectory(
+            self,
+            f"Select new location for '{folder_item.name}'",
+            self.network_root,
+            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks
+        )
+        if not new_abs_path:
+            return  # User cancelled
+
+        # Verify the chosen path is under the network root
+        new_rel_path = self.path_mapper.to_relative(new_abs_path)
+        if not new_rel_path:
+            QMessageBox.warning(
+                self,
+                "Invalid Location",
+                "The selected folder must be inside the configured network root folder.\n\n"
+                f"Network root: {self.network_root}\n"
+                f"Selected:     {new_abs_path}"
+            )
+            return
+
+        # Don't allow relocating to a path that already has a different CSV entry
+        existing = self.status_manager._status_cache.get(new_rel_path)
+        if existing and new_rel_path != relative_path:
+            QMessageBox.warning(
+                self,
+                "Path Already in Database",
+                f"The selected location already has a database entry:\n\n"
+                f"{new_rel_path}  ({existing.get('status', '?')})\n\n"
+                "Please choose a different location, or dismiss the existing entry first."
+            )
+            return
+
+        # Step 2 — Structural comparison (folder names only, no file stats)
+        comparison = self.status_manager.compare_folder_structure(relative_path, new_abs_path)
+
+        # Step 3 — Confirmation dialog
+        matched   = comparison['matched']
+        missing   = comparison['missing']
+        extra     = comparison['extra']
+        csv_total = comparison['csv_total']
+        fs_total  = comparison['fs_total']
+
+        summary_lines = [
+            f"Old path:  {relative_path}",
+            f"New path:  {new_rel_path}",
+            "",
+            f"Sub-folders in database:     {csv_total}",
+            f"Sub-folders on filesystem:   {fs_total}",
+            f"Matched (same name & path):  {matched}",
+        ]
+        if missing:
+            summary_lines.append("")
+            summary_lines.append(f"Missing from new location ({len(missing)}):")
+            for p in missing[:20]:
+                summary_lines.append(f"  – {p}")
+            if len(missing) > 20:
+                summary_lines.append(f"  … and {len(missing) - 20} more")
+        if extra:
+            summary_lines.append("")
+            summary_lines.append(f"New sub-folders not in database ({len(extra)}):")
+            for p in extra[:10]:
+                summary_lines.append(f"  + {p}")
+            if len(extra) > 10:
+                summary_lines.append(f"  … and {len(extra) - 10} more")
+
+        has_discrepancies = bool(missing or extra)
+        warning_suffix = (
+            "\n\nDiscrepancies detected. You can still confirm if the folder was "
+            "intentionally reorganised, but check the list carefully."
+            if has_discrepancies else ""
+        )
+
+        reply = QMessageBox.question(
+            self,
+            "Confirm Relocation",
+            "\n".join(summary_lines) + warning_suffix,
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        # Step 4 — Cascade-rename all CSV entries
+        success, msg, count = self.status_manager.remap_path(relative_path, new_rel_path)
+        if not success:
+            QMessageBox.critical(self, "Relocation Failed", msg)
+            return
+
+        # Update in-memory tree: remove old entry, reload root (cleanest approach)
+        self._remove_tree_item(tree_item, relative_path)
+        # Reload the root so the renamed folder appears at its new position
+        self._load_root_folders()
+        self.statuses_updated.emit()
+
+        QMessageBox.information(
+            self,
+            "Relocation Complete",
+            f"Successfully relocated '{folder_item.name}'.\n\n"
+            f"{count} database entries updated.\n"
+            f"New path: {new_rel_path}"
+        )
+
+    def _remove_tree_item(self, tree_item: QTreeWidgetItem, relative_path: str):
+        """Remove a tree item and all its descendants from the UI caches."""
         parent_item = tree_item.parent()
         if parent_item:
             parent_item.removeChild(tree_item)
@@ -1195,41 +1300,25 @@ class FolderStatusDialog(QDialog):
             if index >= 0:
                 self.tree.takeTopLevelItem(index)
 
-        # Clean up all descendant references from the caches
         prefix = relative_path + '/'
-        stale_paths = [p for p in list(self.loaded_items.keys())
-                       if p == relative_path or p.startswith(prefix)]
-        for p in stale_paths:
+        stale = [p for p in list(self.loaded_items) if p == relative_path or p.startswith(prefix)]
+        for p in stale:
             self.loaded_items.pop(p, None)
             self.tree_items.pop(p, None)
 
-        # Update parent's expand arrow if it now has no children
         if parent_item:
             parent_rel = self._get_item_path(parent_item)
             parent_folder = self.loaded_items.get(parent_rel)
             if parent_folder and not self.status_manager.has_child_folders(parent_rel):
-                parent_item.takeChildren()  # remove any remaining placeholder
-
-        self.statuses_updated.emit()
-
-    def _refresh_tree(self):
-        """Refresh the entire tree."""
-        reply = QMessageBox.question(
-            self,
-            "Confirm Refresh",
-            "Reload all folders from network drive? Expanded folders will be collapsed.",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        
-        if reply == QMessageBox.Yes:
-            self._load_root_folders()
+                parent_item.takeChildren()
 
     def _reset_database(self):
-        """Reset all folders to Dismissed so the user can re-watch from scratch."""
+        """Delete the CSV entirely and re-seed from scratch (first-launch flow)."""
         reply = QMessageBox.warning(
             self,
             "Reset Database",
-            "This will set EVERY folder to Dismissed and remove all file entries.\n\n"
+            "This will permanently delete the folder database and rebuild it from\n"
+            "scratch. All watched/dismissed settings will be lost.\n\n"
             "Are you sure you want to continue?",
             QMessageBox.Yes | QMessageBox.Cancel,
             QMessageBox.Cancel
@@ -1237,19 +1326,21 @@ class FolderStatusDialog(QDialog):
         if reply != QMessageBox.Yes:
             return
 
-        # Wait for any in-flight set-status workers before resetting to avoid a
-        # race condition where a background thread writes 'watched' after the reset.
+        # Stop any in-flight workers before wiping state.
         if hasattr(self, '_set_status_workers'):
             for worker in list(self._set_status_workers):
                 worker.wait(5000)
             self._set_status_workers.clear()
 
-        success, msg = self.status_manager.reset_all_folders_to_dismissed()
-        if success:
-            self._load_root_folders()
-            self.statuses_updated.emit()
-        else:
+        success, msg = self.status_manager.delete_db()
+        if not success:
             QMessageBox.critical(self, "Reset Failed", msg)
+            return
+
+        # _load_root_folders will see is_fresh_db=True on the next load_status_db()
+        # call and run the first-launch seed automatically.
+        self._load_root_folders()
+        self.statuses_updated.emit()
     
     def _expand_all(self):
         """Expand all items in the tree."""
