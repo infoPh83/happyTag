@@ -19,9 +19,15 @@ from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt5.QtGui import QColor, QBrush, QIcon
 
 import os
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Set
+try:
+    from utilities.debug_utils import debug as _ht_debug
+except ImportError:
+    def _ht_debug(channel, msg):  # type: ignore
+        logging.debug("[%s] %s", channel, msg)
 from .path_mapper import PathMapper
 from .folder_status_manager import (FolderStatusManager,
                                    STATUS_DISMISSED, STATUS_NEW, STATUS_WATCHED,
@@ -29,6 +35,28 @@ from .folder_status_manager import (FolderStatusManager,
                                    FILE_STATUS_ON_CLOUD, FILE_STATUS_DISMISSED,
                                    FILE_STATUS_NEW, FILE_STATUS_NOT_FOUND)
 from .folder_scanner import FolderScanner, FolderItem, ScanProgress
+
+
+# ---------------------------------------------------------------------------
+# Worker graveyard — keeps QThread Python objects alive until their underlying
+# thread actually finishes.  Without this, dropping the last Python reference
+# while the C++ thread is still running triggers:
+#   "QThread: Destroyed while thread is still running" → SIGABRT
+# ---------------------------------------------------------------------------
+_worker_graveyard: List = []
+
+
+def _park_worker(worker: QThread) -> None:
+    """Keep *worker* alive until its thread finishes, then discard it."""
+    _worker_graveyard.append(worker)
+
+    def _on_finished(w=worker):
+        try:
+            _worker_graveyard.remove(w)
+        except ValueError:
+            pass
+
+    worker.finished.connect(_on_finished)
 
 
 # ---------------------------------------------------------------------------
@@ -381,7 +409,7 @@ class FolderStatusDialog(QDialog):
         button_layout.addStretch()
         
         self.close_btn = QPushButton("Close")
-        self.close_btn.clicked.connect(self.accept)
+        self.close_btn.clicked.connect(self.close)
         button_layout.addWidget(self.close_btn)
         
         layout.addLayout(button_layout)
@@ -781,6 +809,16 @@ class FolderStatusDialog(QDialog):
             scan_action = menu.addAction("Deep Scan (Recursive)")
             scan_action.triggered.connect(lambda: self._deep_scan_folder(item))
 
+        # "Not Found" folders: offer permanent removal from the database
+        if folder_item.status == STATUS_NOT_FOUND:
+            menu.addSeparator()
+            ack_action = menu.addAction("Acknowledge (Remove from DB)")
+            ack_action.setToolTip(
+                "Permanently remove this folder (and all sub-entries) from the database. "
+                "It will no longer appear in this list."
+            )
+            ack_action.triggered.connect(lambda: self._acknowledge_not_found(item))
+
         # Show menu
         menu.exec_(self.tree.viewport().mapToGlobal(position))
     
@@ -1108,6 +1146,61 @@ class FolderStatusDialog(QDialog):
             item.setHidden(not visible)
             iterator += 1
     
+    def _acknowledge_not_found(self, tree_item: QTreeWidgetItem):
+        """Permanently remove a 'Not Found' folder (and all its descendants) from
+        the database so it stops appearing in the tree.
+
+        This is only offered for folders with STATUS_NOT_FOUND, i.e. entries that
+        exist in the CSV but whose corresponding path is no longer on the filesystem.
+        """
+        relative_path = self._get_item_path(tree_item)
+        folder_item = self.loaded_items.get(relative_path)
+        if not folder_item:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Acknowledge Missing Folder",
+            f"Remove '{folder_item.name}' and all its sub-entries from the database?\n\n"
+            "The folder is no longer present on the filesystem. "
+            "Acknowledging it will permanently remove it from this list.\n\n"
+            "This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        success, msg = self.status_manager.purge_from_db(relative_path)
+        if not success:
+            QMessageBox.critical(self, "Error", f"Failed to remove folder: {msg}")
+            return
+
+        # Remove from in-memory tracking
+        parent_item = tree_item.parent()
+        if parent_item:
+            parent_item.removeChild(tree_item)
+        else:
+            index = self.tree.indexOfTopLevelItem(tree_item)
+            if index >= 0:
+                self.tree.takeTopLevelItem(index)
+
+        # Clean up all descendant references from the caches
+        prefix = relative_path + '/'
+        stale_paths = [p for p in list(self.loaded_items.keys())
+                       if p == relative_path or p.startswith(prefix)]
+        for p in stale_paths:
+            self.loaded_items.pop(p, None)
+            self.tree_items.pop(p, None)
+
+        # Update parent's expand arrow if it now has no children
+        if parent_item:
+            parent_rel = self._get_item_path(parent_item)
+            parent_folder = self.loaded_items.get(parent_rel)
+            if parent_folder and not self.status_manager.has_child_folders(parent_rel):
+                parent_item.takeChildren()  # remove any remaining placeholder
+
+        self.statuses_updated.emit()
+
     def _refresh_tree(self):
         """Refresh the entire tree."""
         reply = QMessageBox.question(
@@ -1201,23 +1294,78 @@ class FolderStatusDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _cancel_all_workers(self):
-        """Cancel and wait for all active background workers."""
+        """Cancel all active background workers safely.
+
+        Workers are given up to 5 seconds to stop (important on a slow network
+        drive where a filesystem scan may be mid-call).  Any worker that still
+        hasn't stopped after the timeout is moved into ``_worker_graveyard`` so
+        its Python (and C++) object stays alive until the thread finishes —
+        preventing the fatal "QThread: Destroyed while thread is still running".
+        Signals are disconnected first so no callback fires into this
+        (now-closing) dialog.
+        """
+        _ht_debug("locking", "_cancel_all_workers: starting")
+        workers: List[QThread] = []
+
         if self._root_load_worker is not None:
-            self._root_load_worker.cancel()
-            self._root_load_worker.wait(1000)
+            workers.append(self._root_load_worker)
             self._root_load_worker = None
-        for worker in list(self._expand_workers.values()):
-            worker.cancel()
-            worker.wait(1000)
+
+        workers.extend(list(self._expand_workers.values()))
         self._expand_workers.clear()
+
         if hasattr(self, '_set_status_workers'):
-            for worker in list(self._set_status_workers):
-                worker.wait(3000)
+            workers.extend(list(self._set_status_workers))
             self._set_status_workers.clear()
+
+        _ht_debug("locking", f"_cancel_all_workers: {len(workers)} workers to stop")
+
+        for worker in workers:
+            # Signal cancel flag so the run() loop exits at its next check.
+            if hasattr(worker, 'cancel'):
+                worker.cancel()
+
+            # Disconnect every signal the worker emits so no callback fires
+            # into this dialog after it closes.
+            for sig_name in ('item_reconciled', 'finished', 'children_ready',
+                             'error', 'done'):
+                sig = getattr(worker, sig_name, None)
+                if sig is not None:
+                    try:
+                        sig.disconnect()
+                    except TypeError:
+                        pass  # already disconnected / no connections
+
+            _ht_debug("locking", f"_cancel_all_workers: waiting for {type(worker).__name__}")
+            worker.wait(5000)  # generous timeout for slow network drives
+
+            if worker.isRunning():
+                # Thread didn't stop in time — park it so the Python object
+                # (and underlying QThread) isn't GC'd while the thread runs.
+                _ht_debug("locking", f"_cancel_all_workers: {type(worker).__name__} still running after 5s — parking")
+                _park_worker(worker)
+            else:
+                _ht_debug("locking", f"_cancel_all_workers: {type(worker).__name__} stopped cleanly")
+
+        _ht_debug("locking", "_cancel_all_workers: done")
 
     def closeEvent(self, event):
         """Ensure background workers are stopped and lock released before the dialog closes."""
-        self._lock_refresh_timer.stop()
-        self._cancel_all_workers()
-        self.status_manager.lock_manager.release_lock()
+        _ht_debug("locking", "FolderStatusDialog.closeEvent: starting")
+        try:
+            self._lock_refresh_timer.stop()
+            _ht_debug("locking", "FolderStatusDialog.closeEvent: timer stopped")
+        except Exception as _e:
+            _ht_debug("locking", f"FolderStatusDialog.closeEvent: timer stop failed: {_e}")
+        try:
+            self._cancel_all_workers()
+        except Exception as _e:
+            _ht_debug("locking", f"FolderStatusDialog.closeEvent: _cancel_all_workers raised: {_e}")
+        try:
+            _ht_debug("locking", "FolderStatusDialog.closeEvent: calling release_lock")
+            ok, msg = self.status_manager.lock_manager.release_lock()
+            _ht_debug("locking", f"FolderStatusDialog.closeEvent: release_lock -> ok={ok}, msg={msg}")
+        except Exception as _e:
+            _ht_debug("locking", f"FolderStatusDialog.closeEvent: release_lock raised: {_e}")
+        _ht_debug("locking", "FolderStatusDialog.closeEvent: calling super")
         super().closeEvent(event)

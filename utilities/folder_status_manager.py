@@ -10,6 +10,7 @@ Date: May 2026
 
 import csv
 import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -232,9 +233,19 @@ class FolderStatusManager:
                         'notes': data.get('notes', '')
                     })
             
-            # Replace original file with temp file
-            temp_path.replace(self.csv_path)
-            
+            # Replace original file with temp file.
+            # Path.replace() uses os.replace() which can fail with ENOENT on
+            # SMB/network mounts (macOS + SMB atomic-rename limitation).
+            # Fall back to a copy-then-delete when that happens.
+            try:
+                temp_path.replace(self.csv_path)
+            except OSError:
+                shutil.copy2(str(temp_path), str(self.csv_path))
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass  # .tmp cleanup failure is harmless
+
             count = len(self._status_cache)
             debug("folder_status", f"Saved {count} entries to CSV")
             return True, f"Saved {count} entries"
@@ -1394,6 +1405,38 @@ class FolderStatusManager:
                 'status': data['status']
             })
         return sorted(results, key=lambda x: x['name'].lower())
+
+    def purge_from_db(self, rel_path: str) -> Tuple[bool, str]:
+        """Remove a folder and all its descendants from the CSV cache entirely.
+
+        Intended for "Not Found" folders that no longer exist on the filesystem
+        and which the user wants to stop seeing in the tree.
+
+        Args:
+            rel_path: Relative path of the folder to purge.
+
+        Returns:
+            Tuple of (success, message).
+        """
+        if not self._cache_loaded:
+            self.load_status_db()
+
+        rel_path = self.path_mapper.normalize_path(rel_path)
+        prefix = rel_path + '/'
+
+        keys_to_remove = [
+            k for k in self._status_cache
+            if k == rel_path or k.startswith(prefix)
+        ]
+
+        if not keys_to_remove:
+            return False, f"'{rel_path}' not found in database"
+
+        for key in keys_to_remove:
+            del self._status_cache[key]
+
+        debug("folder_status", f"purge_from_db: removed {len(keys_to_remove)} entries for '{rel_path}'")
+        return self.save_status_db()
 
     def __str__(self) -> str:
         if self._cache_loaded:

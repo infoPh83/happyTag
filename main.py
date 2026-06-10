@@ -4064,22 +4064,85 @@ class MainWindow(QMainWindow):
             self.folder_manager_dialog.show()
 
         except LockError as e:
-            from PyQt5.QtWidgets import QMessageBox
-            from PyQt5.QtCore import QUrl
-            from PyQt5.QtGui import QDesktopServices
-            _lock_msg_box = QMessageBox(self)
-            _lock_msg_box.setIcon(QMessageBox.Warning)
-            _lock_msg_box.setWindowTitle("Folder Manager Already Open")
-            _lock_msg_box.setText(
-                f"The Folder Manager is already open by another instance of HappyTag:\n\n{str(e)}\n\n"
-                "Close the other instance first, or wait for the lock to expire.\n\n"
-                "If the app closed unexpectedly you can manually delete the lock file in the folder below."
+            from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout,
+                                         QLabel, QPushButton, QFrame)
+            from PyQt5.QtCore import Qt
+            from PyQt5.QtGui import QFont
+
+            _dlg = QDialog(self)
+            _dlg.setWindowTitle("Folder Manager Already Open")
+            _dlg.setMinimumWidth(520)
+            _layout = QVBoxLayout(_dlg)
+            _layout.setSpacing(12)
+
+            # Info text
+            _info = QLabel(
+                f"The Folder Manager is already open by another instance of HappyTag:\n\n"
+                f"{str(e)}\n\n"
+                "Close the other instance first, or wait for the lock to expire."
             )
-            _open_btn = _lock_msg_box.addButton("Open Lock Folder in Finder", QMessageBox.ActionRole)
-            _lock_msg_box.addButton(QMessageBox.Ok)
-            _lock_msg_box.exec_()
-            if _lock_msg_box.clickedButton() == _open_btn:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(str(network_root)))
+            _info.setWordWrap(True)
+            _layout.addWidget(_info)
+
+            # Warning box
+            _sep = QFrame()
+            _sep.setFrameShape(QFrame.HLine)
+            _layout.addWidget(_sep)
+
+            _warn = QLabel(
+                "⚠️  DANGER — Force Remove Lock\n\n"
+                "If you force-remove the lock while another user is actively using the "
+                "Folder Manager, both instances will write to the same CSV simultaneously. "
+                "This can corrupt the database and cause data loss.\n\n"
+                "Only use this if the other instance has crashed or was closed without "
+                "releasing the lock and you are certain no one else is using the app right now."
+            )
+            _warn.setWordWrap(True)
+            _warn_font = QFont()
+            _warn_font.setBold(True)
+            _warn.setFont(_warn_font)
+            _warn.setStyleSheet("color: #8B0000; background-color: #FFF0F0; "
+                                "border: 1px solid #c0392b; border-radius: 4px; padding: 8px;")
+            _layout.addWidget(_warn)
+
+            # Buttons
+            _btn_layout = QHBoxLayout()
+            _btn_layout.addStretch()
+
+            _ok_btn = QPushButton("OK")
+            _ok_btn.setDefault(True)
+            _ok_btn.clicked.connect(_dlg.reject)
+            _btn_layout.addWidget(_ok_btn)
+
+            _force_btn = QPushButton("Force Remove Lock and Open")
+            _force_btn.setStyleSheet(
+                "QPushButton { color: white; background-color: #c0392b; font-weight: bold; "
+                "padding: 6px 14px; } "
+                "QPushButton:hover { background-color: #e74c3c; }"
+            )
+
+            def _force_open():
+                _dlg.accept()
+                try:
+                    from utilities.folder_status_dialog import FolderStatusDialog
+                    from utilities.file_lock_manager import FileLockManager
+                    _lock_mgr = FileLockManager(network_root)
+                    _lock_mgr.acquire_lock(force=True)
+                    self.folder_manager_dialog = FolderStatusDialog(network_root, self)
+                    self.folder_manager_dialog.statuses_updated.connect(self.on_folder_statuses_updated)
+                    self.folder_manager_dialog.finished.connect(
+                        lambda: setattr(self, 'folder_manager_dialog', None))
+                    self.folder_manager_dialog.show()
+                except Exception as _ex:
+                    from PyQt5.QtWidgets import QMessageBox
+                    QMessageBox.critical(self, "Error",
+                                         f"Failed to force-open Folder Manager:\n\n{str(_ex)}")
+
+            _force_btn.clicked.connect(_force_open)
+            _btn_layout.addWidget(_force_btn)
+
+            _layout.addLayout(_btn_layout)
+            _dlg.exec_()
         except Exception as e:
             from PyQt5.QtWidgets import QMessageBox
             QMessageBox.critical(
