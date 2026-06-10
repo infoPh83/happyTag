@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
                              QApplication)
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt5.QtGui import QColor, QBrush, QIcon
+import time
 
 import os
 import logging
@@ -86,9 +87,9 @@ class RootLoadWorker(QThread):
             if self._cancelled:
                 break
             try:
-                recon = self._status_manager.reconcile_folder_with_filesystem(
-                    item.relative_path, progress_callback=None
-                )
+                # Use cache-only counts — fast, no filesystem walk on open.
+                # Use the Refresh button to trigger a full filesystem reconcile.
+                recon = self._status_manager.count_from_cache(item.relative_path)
             except Exception:
                 recon = None
             self.item_reconciled.emit(item.relative_path, recon)
@@ -114,6 +115,8 @@ class FolderExpandWorker(QThread):
         self._cancelled = True
 
     def run(self):
+        t_worker_start = time.time()
+        print(f"[EXPAND WORKER] Starting expansion of: {self._folder.relative_path}")
         children = []
         try:
             if self._folder.status == STATUS_DISMISSED:
@@ -131,12 +134,11 @@ class FolderExpandWorker(QThread):
                     )
                     child_item.status = child_data['status']
                     child_item.is_loaded = False
+                    # Use cache-only counts — no filesystem walk on expand
                     if child_item.status != STATUS_DISMISSED:
                         try:
                             child_item.recon_result = (
-                                self._status_manager.reconcile_folder_with_filesystem(
-                                    child_data['rel_path'], progress_callback=None
-                                )
+                                self._status_manager.count_from_cache(child_data['rel_path'])
                             )
                         except Exception:
                             child_item.recon_result = None
@@ -144,35 +146,44 @@ class FolderExpandWorker(QThread):
                         child_item.recon_result = None
                     children.append(child_item)
             else:
-                folder_path = Path(self._path_mapper.to_absolute(self._folder.relative_path))
-                for child_path in sorted(folder_path.iterdir(), key=lambda p: p.name.lower()):
+                folder_abs = self._path_mapper.to_absolute(self._folder.relative_path)
+                t_scan = time.time()
+                print(f"[EXPAND WORKER] Calling scandir on: {folder_abs}")
+                # os.scandir gives is_dir() for free from the DirEntry — no extra stat() call
+                with os.scandir(folder_abs) as it:
+                    entries = sorted(it, key=lambda e: e.name.lower())
+                print(f"[EXPAND WORKER] scandir took {time.time() - t_scan:.3f}s, found {len(entries)} items")
+                for entry in entries:
                     if self._cancelled:
                         break
-                    if child_path.name.startswith('.') or not child_path.is_dir():
+                    if entry.name.startswith('.') or not entry.is_dir():
                         continue
-                    child_rel = self._path_mapper.to_relative(str(child_path))
+                    child_rel = self._path_mapper.to_relative(entry.path)
                     if not child_rel:
                         continue
                     child_item = FolderItem(
                         relative_path=child_rel,
                         is_directory=True,
-                        name=child_path.name,
+                        name=entry.name,
                         parent_path=self._folder.relative_path
                     )
                     child_item.status = self._status_manager.get_status(child_rel)
+                    # Use cache-only counts — no filesystem walk on expand
                     if child_item.status != STATUS_DISMISSED:
                         try:
+                            t_count = time.time()
                             child_item.recon_result = (
-                                self._status_manager.reconcile_folder_with_filesystem(
-                                    child_rel, progress_callback=None
-                                )
+                                self._status_manager.count_from_cache(child_rel)
                             )
-                        except Exception:
+                            print(f"[EXPAND WORKER]   count_from_cache: {child_rel} ({time.time() - t_count:.3f}s)")
+                        except Exception as ex:
+                            print(f"[EXPAND WORKER]   count_from_cache ERROR: {child_rel} -> {ex}")
                             child_item.recon_result = None
                     else:
                         child_item.recon_result = None
                     children.append(child_item)
 
+            print(f"[EXPAND WORKER] Total worker time: {time.time() - t_worker_start:.3f}s for {len(children)} children")
             if not self._cancelled:
                 self.children_ready.emit(self._folder.relative_path, children)
         except Exception as e:

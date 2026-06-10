@@ -11,6 +11,7 @@ Date: May 2026
 import csv
 import os
 import shutil
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -701,7 +702,11 @@ class FolderStatusManager:
         # SCENARIO 5b: Folder is PART_WATCHED - reconcile like watched for file counting
         if folder_status == STATUS_PART_WATCHED and folder_exists:
             debug("folder_status", f"  Scenario 5b: Folder is PART_WATCHED - reconciling contents")
-            return self._reconcile_watched_folder(folder_rel_path, absolute_path, progress_callback)
+            print(f"[RECONCILE] PART_WATCHED reconcile start: {folder_rel_path}")
+            t0 = time.time()
+            result = self._reconcile_watched_folder(folder_rel_path, absolute_path, progress_callback)
+            print(f"[RECONCILE] PART_WATCHED reconcile done:  {folder_rel_path} ({time.time() - t0:.3f}s)")
+            return result
 
         # Default case
         debug("folder_status", f"  Default case - treating as new")
@@ -815,70 +820,66 @@ class FolderStatusManager:
     
     def _reconcile_watched_folder(self, folder_rel_path: str, absolute_path: str, progress_callback=None):
         """Reconcile a WATCHED folder with expected watched/dismissed states.
-        
-        This scans RECURSIVELY through all subfolders to count all images.
-        Direct counts (on_cloud, dismissed, new) apply to images directly in this folder only.
+
+        Uses os.walk instead of Path.rglob so that dirs/files are already
+        separated — no extra is_dir() stat() calls per item.  On Windows UNC
+        shares each Path.is_dir() call is a separate network round-trip (~35 ms);
+        os.walk gets the same information for free from the directory listing.
         """
         debug("folder_status", f"Reconciling WATCHED folder: {folder_rel_path}")
-        
-        folder_path = Path(absolute_path)
-        
+
         # Counters - direct images are in this exact folder; nested are in subfolders
+        print(f"[RECONCILE WATCHED] Starting os.walk on: {absolute_path}")
+        t_walk = time.time()
         direct_count = 0
         nested_count = 0
-        on_cloud_count = 0    # direct images only
-        dismissed_count = 0   # direct images only
-        new_count = 0         # direct images only
-        
+        on_cloud_count = 0
+        dismissed_count = 0
+        new_count = 0
+
         # Get all items currently in repo under this folder
         repo_items = {
             path: data for path, data in self._status_cache.items()
             if path.startswith(folder_rel_path + '/') or path == folder_rel_path
         }
-        
-        # Get all items currently in filesystem (RECURSIVELY)
+
+        # Build set of dismissed folder rel-paths so we can prune entire subtrees.
+        # os.walk lets us remove entries from dirs[] in-place, preventing descent.
+        dismissed_folder_rels = {
+            path for path, data in self._status_cache.items()
+            if data.get('item_type') == 'folder'
+            and data.get('status') == STATUS_DISMISSED
+            and path.startswith(folder_rel_path + '/')
+        }
+
         try:
-            fs_items = list(folder_path.rglob('*'))
-
-            # Build set of dismissed folder rel-paths under this root so we can
-            # skip their entire subtree when counting.
-            dismissed_folder_rels = {
-                path for path, data in self._status_cache.items()
-                if data.get('item_type') == 'folder'
-                and data.get('status') == STATUS_DISMISSED
-                and path.startswith(folder_rel_path + '/')
-            }
-
-            def _inside_dismissed_folder(item_path: Path) -> bool:
-                """Return True if any ancestor between item_path and folder_path is dismissed."""
-                for ancestor in item_path.parents:
-                    if ancestor == folder_path:
-                        break
-                    rel = self.path_mapper.to_relative(str(ancestor))
-                    if rel in dismissed_folder_rels:
-                        return True
-                return False
-
-            # Track which repo items we've seen
             seen_repo_items = set()
-            
-            for idx, item in enumerate(fs_items):
-                if progress_callback:
-                    progress_callback(idx + 1, len(fs_items), f"Checking {item.name}")
-                
-                item_rel_path = self.path_mapper.to_relative(str(item))
-                seen_repo_items.add(item_rel_path)
-                
-                if item.is_dir():
-                    # Skip dirs that are themselves dismissed or inside a dismissed subtree
-                    if item_rel_path in dismissed_folder_rels or _inside_dismissed_folder(item):
+            # Normalise once for the direct-level check (case-insensitive on Windows)
+            abs_path_norm = os.path.normcase(os.path.normpath(absolute_path))
+
+            for root, dirs, files in os.walk(absolute_path):
+                # Prune hidden dirs and dismissed dirs in-place — os.walk won't
+                # descend into entries removed from dirs[].
+                dirs[:] = [
+                    d for d in dirs
+                    if not d.startswith('.')
+                    and self.path_mapper.to_relative(os.path.join(root, d)) not in dismissed_folder_rels
+                ]
+
+                is_direct_level = (os.path.normcase(os.path.normpath(root)) == abs_path_norm)
+
+                # Register subdirectories (already confirmed not dismissed by prune above)
+                for dirname in dirs:
+                    dir_abs = os.path.join(root, dirname)
+                    dir_rel = self.path_mapper.to_relative(dir_abs)
+                    if not dir_rel:
                         continue
-                    # Check if folder is in repo
-                    if item_rel_path not in self._status_cache:
-                        debug("folder_status", f"  New subfolder discovered: {item.name}")
-                        self._status_cache[item_rel_path] = {
+                    seen_repo_items.add(dir_rel)
+                    if dir_rel not in self._status_cache:
+                        debug("folder_status", f"  New subfolder discovered: {dirname}")
+                        self._status_cache[dir_rel] = {
                             'item_type': 'folder',
-                            'status': STATUS_WATCHED,  # inherits parent's watched status
+                            'status': STATUS_WATCHED,
                             'cloudinary_id': '',
                             'cloudinary_url': '',
                             'original_size': '',
@@ -887,77 +888,89 @@ class FolderStatusManager:
                             'last_modified': datetime.now().isoformat(),
                             'notes': 'Auto-discovered in watched folder'
                         }
-                else:
-                    # Skip files inside dismissed subfolders entirely — they don't
-                    # contribute to any count column of the parent.
-                    if _inside_dismissed_folder(item):
+
+                # Process files — no is_dir() call needed
+                for filename in files:
+                    if filename.startswith('.'):
                         continue
-                    # Check if it's an image file
-                    if item.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
-                        is_direct = (item.parent == folder_path)
-                        
-                        if is_direct:
-                            direct_count += 1
-                        else:
-                            nested_count += 1
+                    ext = os.path.splitext(filename)[1].lower()
+                    file_abs = os.path.join(root, filename)
+                    file_rel = self.path_mapper.to_relative(file_abs)
+                    if not file_rel:
+                        continue
+                    seen_repo_items.add(file_rel)
 
-                        # Unsupported by the app — always count as dismissed
-                        if item.suffix.lower() in UNSUPPORTED_BY_APP_EXTENSIONS:
-                            dismissed_count += 1
-                            # Ensure the cache entry reflects dismissed
-                            if item_rel_path not in self._status_cache:
-                                self._status_cache[item_rel_path] = {
-                                    'item_type': 'file',
-                                    'status': FILE_STATUS_DISMISSED,
-                                    'cloudinary_id': '',
-                                    'cloudinary_url': '',
-                                    'original_size': '',
-                                    'upload_size': '',
-                                    'upload_date': '',
-                                    'last_modified': datetime.now().isoformat(),
-                                    'notes': 'Unsupported file type'
-                                }
-                            elif self._status_cache[item_rel_path].get('status') == FILE_STATUS_NEW:
-                                self._status_cache[item_rel_path]['status'] = FILE_STATUS_DISMISSED
-                            continue
+                    if ext not in SUPPORTED_IMAGE_EXTENSIONS:
+                        continue
 
-                        # Check if file is in repo
-                        if item_rel_path in self._status_cache:
-                            file_status = self._status_cache[item_rel_path]['status']
-                            # Count status for ALL files (direct + nested) so that
-                            # on_cloud + dismissed + new == direct + nested at every level
-                            if file_status == FILE_STATUS_ON_CLOUD:
-                                on_cloud_count += 1
-                            elif file_status == FILE_STATUS_DISMISSED:
-                                dismissed_count += 1
-                            else:
-                                new_count += 1
-                        else:
-                            # New file discovered in watched folder
-                            debug("folder_status", f"  New file discovered: {item.name}")
-                            self._status_cache[item_rel_path] = {
+                    if is_direct_level:
+                        direct_count += 1
+                    else:
+                        nested_count += 1
+
+                    # Unsupported by the app — always count as dismissed
+                    if ext in UNSUPPORTED_BY_APP_EXTENSIONS:
+                        dismissed_count += 1
+                        if file_rel not in self._status_cache:
+                            self._status_cache[file_rel] = {
                                 'item_type': 'file',
-                                'status': FILE_STATUS_NEW,
+                                'status': FILE_STATUS_DISMISSED,
                                 'cloudinary_id': '',
                                 'cloudinary_url': '',
                                 'original_size': '',
                                 'upload_size': '',
                                 'upload_date': '',
                                 'last_modified': datetime.now().isoformat(),
-                                'notes': 'Auto-discovered in watched folder'
+                                'notes': 'Unsupported file type'
                             }
+                        elif self._status_cache[file_rel].get('status') == FILE_STATUS_NEW:
+                            self._status_cache[file_rel]['status'] = FILE_STATUS_DISMISSED
+                        continue
+
+                    # Check file status in cache
+                    if file_rel in self._status_cache:
+                        file_status = self._status_cache[file_rel]['status']
+                        if file_status == FILE_STATUS_ON_CLOUD:
+                            on_cloud_count += 1
+                        elif file_status == FILE_STATUS_DISMISSED:
+                            dismissed_count += 1
+                        else:
                             new_count += 1
-            
-            # Check for items in repo that are no longer in filesystem
+                    else:
+                        debug("folder_status", f"  New file discovered: {filename}")
+                        self._status_cache[file_rel] = {
+                            'item_type': 'file',
+                            'status': FILE_STATUS_NEW,
+                            'cloudinary_id': '',
+                            'cloudinary_url': '',
+                            'original_size': '',
+                            'upload_size': '',
+                            'upload_date': '',
+                            'last_modified': datetime.now().isoformat(),
+                            'notes': 'Auto-discovered in watched folder'
+                        }
+                        new_count += 1
+
+            print(f"[RECONCILE WATCHED] os.walk took {time.time() - t_walk:.3f}s for {folder_rel_path}")
+
+            # Check for items in repo that are no longer in filesystem.
+            # Skip items that are dismissed or inside a dismissed subtree — they were
+            # deliberately excluded from the walk and are NOT missing from the filesystem.
             for repo_path, repo_data in repo_items.items():
                 if repo_path not in seen_repo_items and repo_path != folder_rel_path:
+                    repo_status = repo_data.get('status', '')
+                    # Don't overwrite dismissed entries — they were pruned intentionally
+                    if repo_status in (STATUS_DISMISSED, FILE_STATUS_DISMISSED):
+                        continue
+                    # Don't overwrite entries that live inside a dismissed subtree
+                    if any(repo_path.startswith(d + '/') for d in dismissed_folder_rels):
+                        continue
                     debug("folder_status", f"  Item not found in FS: {repo_path}")
-                    # Mark as not found
                     self._status_cache[repo_path]['status'] = FILE_STATUS_NOT_FOUND
-            
+
             # Save changes
             self.save_status_db()
-            
+
             return {
                 'direct': direct_count,
                 'nested': nested_count,
@@ -966,7 +979,7 @@ class FolderStatusManager:
                 'new': new_count,
                 'status': STATUS_WATCHED
             }
-            
+
         except Exception as e:
             debug("errors", f"Error reconciling watched folder {folder_rel_path}: {e}")
             return {
