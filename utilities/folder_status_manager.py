@@ -84,6 +84,7 @@ class FolderStatusManager:
         'relative_path',
         'item_type',  # 'folder' or 'file'
         'status',
+        'previous_status',  # status before being marked not_found; used for restoration
         'cloudinary_id',
         'cloudinary_url',
         'original_size',
@@ -182,6 +183,7 @@ class FolderStatusManager:
                     self._status_cache[rel_path] = {
                         'item_type': item_type,
                         'status': status,
+                        'previous_status': row.get('previous_status', ''),
                         'cloudinary_id': row.get('cloudinary_id', ''),
                         'cloudinary_url': row.get('cloudinary_url', ''),
                         'original_size': row.get('original_size', ''),
@@ -232,6 +234,7 @@ class FolderStatusManager:
                         'relative_path': rel_path,
                         'item_type': data.get('item_type', 'folder'),
                         'status': data['status'],
+                        'previous_status': data.get('previous_status', ''),
                         'cloudinary_id': data.get('cloudinary_id', ''),
                         'cloudinary_url': data.get('cloudinary_url', ''),
                         'original_size': data.get('original_size', ''),
@@ -321,11 +324,22 @@ class FolderStatusManager:
         
         # Preserve existing cloudinary fields if not explicitly overriding
         existing = self._status_cache.get(rel_path, {})
-        
+        existing_status = existing.get('status', '')
+
+        # Track the status before it becomes not_found so it can be restored.
+        if status == STATUS_NOT_FOUND and existing_status not in ('', STATUS_NOT_FOUND):
+            previous_status = existing_status
+        elif status != STATUS_NOT_FOUND:
+            previous_status = ''  # clear on any real status assignment
+        else:
+            # already not_found → keep whatever previous_status was recorded
+            previous_status = existing.get('previous_status', '')
+
         # Update cache
         self._status_cache[rel_path] = {
             'item_type': existing.get('item_type', 'folder'),
             'status': status,
+            'previous_status': previous_status,
             'cloudinary_id': cloudinary_id or existing.get('cloudinary_id', ''),
             'cloudinary_url': existing.get('cloudinary_url', ''),
             'original_size': existing.get('original_size', ''),
@@ -775,7 +789,10 @@ class FolderStatusManager:
         # SCENARIO 3: Folder in repo but NOT FOUND in filesystem
         if folder_in_repo and not folder_exists:
             debug("folder_status", f"  Scenario 3: Folder NOT FOUND in filesystem")
-            # Mark as not found
+            prev = self._status_cache[folder_rel_path].get('status', '')
+            if prev == STATUS_NOT_FOUND:
+                prev = self._status_cache[folder_rel_path].get('previous_status', '')
+            self._status_cache[folder_rel_path]['previous_status'] = prev
             self._status_cache[folder_rel_path]['status'] = STATUS_NOT_FOUND
             self._status_cache[folder_rel_path]['item_type'] = 'folder'
             return {
@@ -956,6 +973,14 @@ class FolderStatusManager:
             abs_path_norm = os.path.normcase(os.path.normpath(absolute_path))
 
             for root, dirs, files in os.walk(absolute_path):
+                # Track ALL visible dirs before pruning — they physically exist
+                # at this level, including dismissed ones we won't descend into.
+                for _d in dirs:
+                    if not _d.startswith('.'):
+                        _dr = self.path_mapper.to_relative(os.path.join(root, _d))
+                        if _dr:
+                            seen_repo_items.add(_dr)
+
                 # Prune hidden dirs and dismissed dirs in-place — os.walk won't
                 # descend into entries removed from dirs[].
                 dirs[:] = [
@@ -972,7 +997,7 @@ class FolderStatusManager:
                     dir_rel = self.path_mapper.to_relative(dir_abs)
                     if not dir_rel:
                         continue
-                    seen_repo_items.add(dir_rel)
+                    # already added to seen_repo_items above
                     if dir_rel not in self._status_cache:
                         debug("folder_status", f"  New subfolder discovered: {dirname}")
                         self._status_cache[dir_rel] = {
@@ -986,6 +1011,15 @@ class FolderStatusManager:
                             'last_modified': datetime.now().isoformat(),
                             'notes': 'Auto-discovered in watched folder'
                         }
+                    elif self._status_cache[dir_rel].get('status') == STATUS_NOT_FOUND:
+                        # Folder was missing but now exists again — restore to its
+                        # previous status (watched, dismissed, etc.) or dismissed as fallback.
+                        restored = (self._status_cache[dir_rel].get('previous_status')
+                                    or STATUS_DISMISSED)
+                        self._status_cache[dir_rel]['status'] = restored
+                        self._status_cache[dir_rel]['previous_status'] = ''
+                        self._status_cache[dir_rel]['last_modified'] = datetime.now().isoformat()
+                        debug("folder_status", f"  Restored not-found subfolder: {dirname} -> {restored}")
 
                 # Process files — no is_dir() call needed
                 for filename in files:
@@ -1052,18 +1086,20 @@ class FolderStatusManager:
             print(f"[RECONCILE WATCHED] os.walk took {time.time() - t_walk:.3f}s for {folder_rel_path}")
 
             # Check for items in repo that are no longer in filesystem.
-            # Skip items that are dismissed or inside a dismissed subtree — they were
-            # deliberately excluded from the walk and are NOT missing from the filesystem.
+            # Dismissed folder/file entries at the outer level ARE checked now:
+            # seen_repo_items tracks all dirs before pruning, and all files in
+            # walked dirs. Only skip entries inside a dismissed subtree — those
+            # were pruned so we have no visibility into their children.
             for repo_path, repo_data in repo_items.items():
                 if repo_path not in seen_repo_items and repo_path != folder_rel_path:
-                    repo_status = repo_data.get('status', '')
-                    # Don't overwrite dismissed entries — they were pruned intentionally
-                    if repo_status in (STATUS_DISMISSED, FILE_STATUS_DISMISSED):
-                        continue
-                    # Don't overwrite entries that live inside a dismissed subtree
+                    # Skip entries that live inside a dismissed subtree (they were pruned)
                     if any(repo_path.startswith(d + '/') for d in dismissed_folder_rels):
                         continue
                     debug("folder_status", f"  Item not found in FS: {repo_path}")
+                    prev = self._status_cache[repo_path].get('status', '')
+                    if prev == FILE_STATUS_NOT_FOUND:
+                        prev = self._status_cache[repo_path].get('previous_status', '')
+                    self._status_cache[repo_path]['previous_status'] = prev
                     self._status_cache[repo_path]['status'] = FILE_STATUS_NOT_FOUND
 
             # Save changes
@@ -1171,8 +1207,13 @@ class FolderStatusManager:
         # If the root folder itself is missing, mark it and bail out.
         if not Path(absolute_path).exists():
             if folder_rel_path in self._status_cache:
-                self._status_cache[folder_rel_path]['status'] = STATUS_NOT_FOUND
-                self._status_cache[folder_rel_path]['last_modified'] = datetime.now().isoformat()
+                entry = self._status_cache[folder_rel_path]
+                prev = entry.get('status', '')
+                if prev == STATUS_NOT_FOUND:
+                    prev = entry.get('previous_status', '')
+                entry['previous_status'] = prev
+                entry['status'] = STATUS_NOT_FOUND
+                entry['last_modified'] = datetime.now().isoformat()
                 self.save_status_db()
             return {'new': 0, 'not_found': 1}
 
@@ -1195,6 +1236,14 @@ class FolderStatusManager:
 
         try:
             for root, dirs, _files in os.walk(absolute_path):
+                # Track ALL visible dirs before pruning — they physically exist
+                # at this level, including dismissed ones we won't descend into.
+                for _d in dirs:
+                    if not _d.startswith('.'):
+                        _dr = self.path_mapper.to_relative(os.path.join(root, _d))
+                        if _dr:
+                            seen_folders.add(_dr)
+
                 # Prune hidden dirs and dismissed dirs in-place so os.walk
                 # doesn't descend into them.
                 dirs[:] = [
@@ -1209,7 +1258,7 @@ class FolderStatusManager:
                     dir_rel = self.path_mapper.to_relative(dir_abs)
                     if not dir_rel:
                         continue
-                    seen_folders.add(dir_rel)
+                    # already added to seen_folders above
 
                     if dir_rel not in self._status_cache:
                         # New sub-folder not in CSV — register as dismissed.
@@ -1230,8 +1279,12 @@ class FolderStatusManager:
                         if progress_callback:
                             progress_callback(dir_rel)
                     elif self._status_cache[dir_rel].get('status') == STATUS_NOT_FOUND:
-                        # Was previously not-found but now exists again.
-                        self._status_cache[dir_rel]['status'] = STATUS_DISMISSED
+                        # Was previously not-found but now exists again — restore its
+                        # previous status (watched, dismissed, etc.) or dismissed as fallback.
+                        restored = (self._status_cache[dir_rel].get('previous_status')
+                                    or STATUS_DISMISSED)
+                        self._status_cache[dir_rel]['status'] = restored
+                        self._status_cache[dir_rel]['previous_status'] = ''
                         self._status_cache[dir_rel]['last_modified'] = now
                         changed = True
 
@@ -1239,19 +1292,26 @@ class FolderStatusManager:
             debug('errors', f'scan_folder_structure_only walk error for {folder_rel_path}: {e}')
 
         # Check CSV entries for sub-folders that were NOT seen during the walk.
-        # Skip dismissed entries (pruned deliberately) and already-not-found.
+        # Dismissed folder entries ARE checked (seen_folders tracks them before pruning).
+        # Only skip already-not-found entries and folders inside a dismissed subtree
+        # (those were not walked, so we have no visibility into their children).
         for path, data in self._status_cache.items():
             if not path.startswith(prefix):
                 continue
             if data.get('item_type') != 'folder':
                 continue
             status = data.get('status', '')
-            if status in (STATUS_DISMISSED, STATUS_NOT_FOUND):
+            if status == STATUS_NOT_FOUND:
                 continue
-            # Skip folders inside a dismissed subtree (they were pruned).
+            # Skip folders inside a dismissed subtree — they were pruned and
+            # we have no way to verify their existence without descending.
             if any(path.startswith(d + '/') for d in dismissed_folder_rels):
                 continue
             if path not in seen_folders:
+                prev = data.get('status', '')
+                if prev == STATUS_NOT_FOUND:
+                    prev = data.get('previous_status', '')
+                data['previous_status'] = prev
                 data['status'] = STATUS_NOT_FOUND
                 data['last_modified'] = now
                 not_found_count += 1

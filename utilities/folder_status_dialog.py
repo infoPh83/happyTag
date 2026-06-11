@@ -99,6 +99,27 @@ class RootLoadWorker(QThread):
         self.finished.emit()
 
 
+class DismissedRescanWorker(QThread):
+    """Soft-scans a dismissed folder's subtree in the background.
+
+    Runs ``scan_folder_structure_only`` on the given path, then emits
+    ``done`` with the result dict so the UI can refresh the tree.
+    """
+    done = pyqtSignal(str, object)  # relative_path, result dict or None
+
+    def __init__(self, status_manager, relative_path: str):
+        super().__init__()
+        self._status_manager = status_manager
+        self._relative_path = relative_path
+
+    def run(self):
+        try:
+            result = self._status_manager.scan_folder_structure_only(self._relative_path)
+        except Exception:
+            result = None
+        self.done.emit(self._relative_path, result)
+
+
 class FolderExpandWorker(QThread):
     """Scans and reconciles children of a folder in the background.
 
@@ -780,15 +801,32 @@ class FolderStatusDialog(QDialog):
         worker = FolderExpandWorker(folder_item, self.status_manager, self.path_mapper)
         worker.children_ready.connect(self._on_children_ready)
         worker.error.connect(self._on_expand_error)
+        # Clean up only after Qt's thread wrapper has fully exited ('finished'
+        # fires after run() returns AND the thread teardown is complete).
+        # Using deleteLater() defers Qt-side deletion to the next event loop
+        # tick, preventing the "QThread destroyed while still running" abort.
+        worker.finished.connect(lambda rp=relative_path: self._cleanup_expand_worker(rp))
         self._expand_workers[relative_path] = worker
         worker.start()
+
+    def _cleanup_expand_worker(self, parent_rel_path: str):
+        """Called via worker.finished — remove and schedule deletion after thread exits."""
+        worker = self._expand_workers.pop(parent_rel_path, None)
+        if worker is not None:
+            worker.deleteLater()
+
+    def _cleanup_set_status_worker(self, worker):
+        """Called via worker.finished — remove and schedule deletion after thread exits."""
+        if hasattr(self, '_set_status_workers') and worker in self._set_status_workers:
+            self._set_status_workers.remove(worker)
+        worker.deleteLater()
 
     def _on_children_ready(self, parent_rel_path: str, children: list):
         """Slot: populate tree with children once the expand worker finishes."""
         tree_item = self.tree_items.get(parent_rel_path)
         folder_item = self.loaded_items.get(parent_rel_path)
         if not tree_item or not folder_item:
-            self._expand_workers.pop(parent_rel_path, None)
+            # Worker cleanup happens via finished → _cleanup_expand_worker
             return
 
         tree_item.takeChildren()
@@ -802,14 +840,15 @@ class FolderStatusDialog(QDialog):
             self._add_item_to_tree(child, tree_item)
 
         self._update_tree_item_status(tree_item, folder_item)
-        self._expand_workers.pop(parent_rel_path, None)
+        # Do NOT pop here — let finished → _cleanup_expand_worker handle it
+        # so the QThread object isn't GC'd before Qt's thread teardown completes.
 
     def _on_expand_error(self, parent_rel_path: str, error_msg: str):
         """Slot: handle error from expand worker."""
         tree_item = self.tree_items.get(parent_rel_path)
         if tree_item:
             tree_item.takeChildren()  # Remove "Loading..." placeholder
-        self._expand_workers.pop(parent_rel_path, None)
+        # Do NOT pop here — let finished → _cleanup_expand_worker handle it.
         QMessageBox.warning(self, "Warning", f"Failed to load folder contents: {error_msg}")
 
     def _show_context_menu(self, position):
@@ -848,6 +887,17 @@ class FolderStatusDialog(QDialog):
             )
             refresh_action.triggered.connect(lambda: self._do_refresh_folder(item))
 
+        # Rescan structure — available for dismissed folders too
+        if folder_item.status == STATUS_DISMISSED:
+            menu.addSeparator()
+            rescan_action = menu.addAction("Rescan Folder Structure")
+            rescan_action.setToolTip(
+                "Scan this folder on the filesystem for new or deleted sub-folders "
+                "and update the database. New sub-folders are added as dismissed; "
+                "deleted ones are marked as Not Found."
+            )
+            rescan_action.triggered.connect(lambda: self._do_rescan_dismissed(item))
+
         # "Not Found" folders: offer relocation or dismissal
         if folder_item.status == STATUS_NOT_FOUND:
             menu.addSeparator()
@@ -865,7 +915,71 @@ class FolderStatusDialog(QDialog):
             dismiss_action.triggered.connect(lambda: self._dismiss_not_found(item))
 
         menu.exec_(self.tree.viewport().mapToGlobal(position))
-    
+
+    def _do_rescan_dismissed(self, tree_item: QTreeWidgetItem):
+        """Soft-scan a dismissed folder's subtree in a background thread.
+
+        Discovers new sub-folders (adds them as dismissed) and marks deleted
+        ones as Not Found, then refreshes the tree item in place.
+        """
+        relative_path = self._get_item_path(tree_item)
+        folder_item = self.loaded_items.get(relative_path)
+        if not folder_item:
+            return
+
+        self.tree.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+
+        worker = DismissedRescanWorker(self.status_manager, relative_path)
+
+        def _on_done(rel_path, result):
+            self.tree.setEnabled(True)
+            QApplication.restoreOverrideCursor()
+
+            fi = self.loaded_items.get(rel_path)
+            ti = self.tree_items.get(rel_path)
+            if fi and ti:
+                fi.status = self.status_manager.get_status(rel_path)
+                # Refresh expand arrow: new sub-folders may have been added.
+                if not fi.is_loaded:
+                    had_arrow = ti.childCount() > 0
+                    has_children = self.status_manager.has_child_folders(rel_path)
+                    if has_children and not had_arrow:
+                        placeholder = QTreeWidgetItem()
+                        placeholder.setText(0, "Loading…")
+                        ti.addChild(placeholder)
+                    elif not has_children and had_arrow:
+                        ti.takeChildren()
+                else:
+                    # Already expanded — invalidate so the next expand re-reads
+                    # the updated cache (picks up new/removed sub-folders).
+                    fi.children.clear()
+                    fi.is_loaded = False
+                    ti.takeChildren()
+                    if self.status_manager.has_child_folders(rel_path):
+                        placeholder = QTreeWidgetItem()
+                        placeholder.setText(0, "Loading…")
+                        ti.addChild(placeholder)
+                self._update_tree_item_status(ti, fi)
+                self._refresh_ancestor_tree_items(ti)
+
+            new_count = result.get('new', 0) if result else 0
+            nf_count  = result.get('not_found', 0) if result else 0
+            if new_count or nf_count:
+                parts = []
+                if new_count:
+                    parts.append(f"{new_count} new sub-folder{'s' if new_count != 1 else ''} added")
+                if nf_count:
+                    parts.append(f"{nf_count} sub-folder{'s' if nf_count != 1 else ''} marked as Not Found")
+                QMessageBox.information(
+                    self, "Rescan Complete",
+                    f"Rescan of '{folder_item.name}' finished.\n\n" + "\n".join(parts)
+                )
+
+        worker.done.connect(_on_done)
+        worker.finished.connect(lambda _w=worker: _w.deleteLater())
+        worker.start()
+
     def _set_item_status(self, tree_item: QTreeWidgetItem, status: str, recursive: bool = False):
         """Set status for a folder. Direct assignments (watched/dismissed) propagate
         to all descendants automatically and recompute ancestor inferred statuses."""
@@ -907,8 +1021,8 @@ class FolderStatusDialog(QDialog):
                 # Restore UI
                 self.tree.setEnabled(True)
                 QApplication.restoreOverrideCursor()
-                if _worker in self._set_status_workers:
-                    self._set_status_workers.remove(_worker)
+                # Do NOT remove _worker here — let finished → cleanup handle it
+                # so the QThread isn't GC'd before Qt's thread teardown completes.
 
                 if not success:
                     QMessageBox.critical(self, "Error", msg)
@@ -934,6 +1048,7 @@ class FolderStatusDialog(QDialog):
                     self._do_refresh_folder(_item)
 
             worker.done.connect(_on_done)
+            worker.finished.connect(lambda _w=worker: self._cleanup_set_status_worker(_w))
             worker.start()
 
         except Exception as e:
@@ -1209,13 +1324,18 @@ class FolderStatusDialog(QDialog):
             )
             return
 
-        # Don't allow relocating to a path that already has a different CSV entry
+        # Block relocation only when the target path already has a meaningful
+        # (non-dismissed) entry — dismissed entries are silently replaced by
+        # remap_path, which is the expected behaviour when the folder was simply
+        # moved to a location that was already tracked.
         existing = self.status_manager._status_cache.get(new_rel_path)
-        if existing and new_rel_path != relative_path:
+        if (existing
+                and new_rel_path != relative_path
+                and existing.get('status') not in (STATUS_DISMISSED,)):
             QMessageBox.warning(
                 self,
                 "Path Already in Database",
-                f"The selected location already has a database entry:\n\n"
+                f"The selected location already has an active database entry:\n\n"
                 f"{new_rel_path}  ({existing.get('status', '?')})\n\n"
                 "Please choose a different location, or dismiss the existing entry first."
             )
