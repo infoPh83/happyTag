@@ -15,6 +15,7 @@ a = Analysis(
     datas=[
         ('ui', 'ui'),
         ('utilities', 'utilities'),
+        ('logo/icon.ico', 'logo'),
         # ExifTool support files for both architectures
         ('packages/exiftool_win64/exiftool-13.34_64/exiftool_files', 'packages/exiftool_win64/exiftool-13.34_64/exiftool_files'),
         ('packages/exiftool_win32/exiftool-13.34_32/exiftool_files', 'packages/exiftool_win32/exiftool-13.34_32/exiftool_files'),

@@ -4922,9 +4922,8 @@ if __name__ == '__main__':
 
         # Set window icon explicitly (ensures taskbar icon on Windows)
         from PyQt5.QtGui import QIcon
-        import os as _os
-        _icon_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'logo', 'icon.ico')
-        if _os.path.exists(_icon_path):
+        _icon_path = resource_path('logo/icon.ico')
+        if os.path.exists(_icon_path):
             app.setWindowIcon(QIcon(_icon_path))
             window.setWindowIcon(QIcon(_icon_path))
         
