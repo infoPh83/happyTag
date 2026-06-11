@@ -373,14 +373,6 @@ class FolderStatusDialog(QDialog):
         self.collapse_btn.clicked.connect(self.tree.collapseAll)
         layout.addWidget(self.collapse_btn)
 
-        # Reset database button (danger — styled red)
-        self.reset_btn = QPushButton("Reset DB")
-        self.reset_btn.setToolTip("Reset all folders to Dismissed so you can re-watch them from scratch")
-        self.reset_btn.setStyleSheet("QPushButton { color: white; background-color: #c0392b; } "
-                                     "QPushButton:hover { background-color: #e74c3c; }")
-        self.reset_btn.clicked.connect(self._reset_database)
-        layout.addWidget(self.reset_btn)
-
         return layout
     
     def _create_bottom_section(self) -> QVBoxLayout:

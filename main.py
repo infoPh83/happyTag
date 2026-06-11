@@ -379,12 +379,12 @@ class MainWindow(QMainWindow):
         # Backward compatibility - keep reference to image_widgets for existing code
         self.image_widgets = []  # Will be updated by flow manager
         
-        # Initialize widget width slider with 5 discrete size steps
-        # Maps slider positions (1-5) to specific pixel widths for modular sizing
-        self.size_steps = {1: 280, 2: 360, 3: 460, 4: 560, 5: 700, 6:1000}  # 5 distinct size options
-        self.horizontalSlider.setMinimum(1)     # Step 1 (smallest)
-        self.horizontalSlider.setMaximum(6)     # Step 5 (largest) 
-        self.horizontalSlider.setValue(1)       # Step 3 (medium, 200px default)
+        # Initialize widget width slider with 8 discrete size steps
+        # Maps slider positions (1-8) to specific pixel widths; steps 1-2 are extra-small
+        self.size_steps = {1: 150, 2: 210, 3: 280, 4: 360, 5: 460, 6: 560, 7: 700, 8: 1000}
+        self.horizontalSlider.setMinimum(1)     # Step 1 (smallest, 150px)
+        self.horizontalSlider.setMaximum(8)     # Step 8 (largest, 1000px)
+        self.horizontalSlider.setValue(3)       # Step 3 (280px default)
         self.horizontalSlider.setTickPosition(self.horizontalSlider.TicksBelow)
         self.horizontalSlider.setTickInterval(1)  # Show tick marks for each step
         
@@ -1097,6 +1097,29 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Handle application close event to clean up resources"""
+        # Warn user if secondary windows are open — closing main window quits the whole app
+        open_windows = []
+        if hasattr(self, 'folder_manager_dialog') and self.folder_manager_dialog is not None:
+            open_windows.append("Folder Manager")
+        if hasattr(self, 'tag_manager') and self.tag_manager is not None and not self.tag_manager.isHidden():
+            open_windows.append("Tag Manager")
+
+        if open_windows:
+            names = " and ".join(open_windows)
+            plural = len(open_windows) > 1
+            reply = QMessageBox.question(
+                self,
+                "Close HappyTag?",
+                f"The {names} window{'s are' if plural else ' is'} still open.\n\n"
+                "Closing this window will quit the entire application.\n\n"
+                "Are you sure you want to exit?",
+                QMessageBox.Yes | QMessageBox.Cancel,
+                QMessageBox.Cancel
+            )
+            if reply != QMessageBox.Yes:
+                event.ignore()
+                return
+
         # Release folder manager lock before closing
         if hasattr(self, 'folder_manager_dialog') and self.folder_manager_dialog is not None:
             try:
@@ -1114,9 +1137,17 @@ class MainWindow(QMainWindow):
         self.update_status_bar()
         
     def on_image_double_clicked(self, file_path):
-        """Handle image double-click from the ImageFlowManager"""
+        """Handle image double-click — open the original image in the native OS viewer"""
         debug("ui_events", f"Image double-clicked: {file_path}")
-        # Add your double-click logic here (e.g., open image in external viewer)
+        try:
+            if sys.platform == "darwin":
+                subprocess.run(["open", file_path], check=False)
+            elif sys.platform == "win32":
+                os.startfile(file_path)
+            else:
+                subprocess.run(["xdg-open", file_path], check=False)
+        except Exception as e:
+            debug("ui_events", f"Failed to open image in native viewer: {e}")
         
     def on_image_tags_changed(self, file_path, new_tags):
         """Handle tag changes from the ImageFlowManager"""

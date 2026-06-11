@@ -73,7 +73,11 @@ class SettingsDialog(QDialog):
         # Connect Cloudinary validate size button
         if hasattr(self, 'validateSize'):
             self.validateSize.clicked.connect(self.validate_cloudinary_capacity)
-            
+
+        # Connect Database tab - Reset DB button
+        if hasattr(self, 'resetDbButton'):
+            self.resetDbButton.clicked.connect(self._reset_database_from_settings)
+
         # Make path labels clickable to open folders
         self.setup_clickable_paths()
         
@@ -695,7 +699,64 @@ class SettingsDialog(QDialog):
         self.update_all_set_checkbox()
         
         return valid_b2b and valid_non_tle and valid_cloudinary and valid_buildings
-        
+
+    _RESET_DB_PASSWORD = "Langham"
+
+    def _reset_database_from_settings(self):
+        """Reset the folder status database after password verification."""
+        entered = self.dbPasswordInput.text() if hasattr(self, 'dbPasswordInput') else ""
+        if entered != self._RESET_DB_PASSWORD:
+            QMessageBox.warning(self, "Wrong Password", "Incorrect password. The database was not reset.")
+            if hasattr(self, 'dbPasswordInput'):
+                self.dbPasswordInput.clear()
+            return
+
+        reply = QMessageBox.warning(
+            self,
+            "Reset Database",
+            "This will permanently delete the folder database and rebuild it from scratch.\n"
+            "All watched/dismissed folder settings will be lost.\n\n"
+            "Are you sure you want to continue?",
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        # Compute the CSV path the same way FolderStatusManager does
+        from pathlib import Path
+        settings = SettingsDialog.get_saved_settings()
+        log_folder = settings.get('cloudinary_log_folder', '').strip()
+        network_root = settings.get('network_root_folder', '').strip()
+
+        if log_folder and os.path.isdir(log_folder):
+            csv_path = Path(log_folder) / "folder_status.csv"
+        elif network_root and os.path.isdir(network_root):
+            csv_path = Path(network_root) / "folder_status.csv"
+        else:
+            QMessageBox.critical(
+                self, "Reset Failed",
+                "Cannot locate the database file.\nPlease check that Log Folder or Network Root is configured correctly."
+            )
+            return
+
+        try:
+            if csv_path.exists():
+                csv_path.unlink()
+            debug_ui_events(f"Database reset: deleted {csv_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Reset Failed", f"Could not delete the database file:\n{e}")
+            return
+
+        if hasattr(self, 'dbPasswordInput'):
+            self.dbPasswordInput.clear()
+
+        QMessageBox.information(
+            self, "Database Reset",
+            "The folder database has been deleted.\n\n"
+            "It will be rebuilt from scratch the next time you open the Folder Manager."
+        )
+
     def accept_settings(self):
         """Handle OK button click"""
         if self.validate_files():
