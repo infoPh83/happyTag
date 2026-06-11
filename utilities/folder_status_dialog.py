@@ -259,7 +259,7 @@ class FolderStatusDialog(QDialog):
     # Signal emitted when statuses are updated
     statuses_updated = pyqtSignal()
     
-    def __init__(self, network_root: str, parent=None):
+    def __init__(self, network_root: str, parent=None, _skip_lock: bool = False):
         super().__init__(parent)
         self.setWindowTitle("Folder Status Manager")
         self.resize(1000, 700)
@@ -269,11 +269,13 @@ class FolderStatusDialog(QDialog):
         self.path_mapper = PathMapper(network_root)
         self.status_manager = FolderStatusManager(network_root)
 
-        # Acquire exclusive lock — raises LockError if another instance holds it
-        from utilities.file_lock_manager import LockError
-        lock_ok, lock_msg = self.status_manager.lock_manager.acquire_lock()
-        if not lock_ok:
-            raise LockError(lock_msg)
+        # Acquire exclusive lock — raises LockError if another instance holds it.
+        # _skip_lock=True means the caller already force-acquired the lock.
+        if not _skip_lock:
+            from utilities.file_lock_manager import LockError
+            lock_ok, lock_msg = self.status_manager.lock_manager.acquire_lock()
+            if not lock_ok:
+                raise LockError(lock_msg)
 
         # Refresh lock every 5 minutes to prevent it expiring while dialog is open
         self._lock_refresh_timer = QTimer(self)
@@ -366,11 +368,7 @@ class FolderStatusDialog(QDialog):
         self.refresh_btn.clicked.connect(self._refresh_selected_folder)
         layout.addWidget(self.refresh_btn)
         
-        # Expand all / Collapse all
-        self.expand_btn = QPushButton("Expand All")
-        self.expand_btn.clicked.connect(self._expand_all)
-        layout.addWidget(self.expand_btn)
-        
+        # Collapse all
         self.collapse_btn = QPushButton("Collapse All")
         self.collapse_btn.clicked.connect(self.tree.collapseAll)
         layout.addWidget(self.collapse_btn)
@@ -1461,18 +1459,6 @@ class FolderStatusDialog(QDialog):
         # call and run the first-launch seed automatically.
         self._load_root_folders()
         self.statuses_updated.emit()
-    
-    def _expand_all(self):
-        """Expand all items in the tree."""
-        reply = QMessageBox.question(
-            self,
-            "Confirm Expand All",
-            "This will scan all folders recursively. For large folder structures, this may take a while. Continue?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        
-        if reply == QMessageBox.Yes:
-            self.tree.expandAll()
     
     def get_selected_paths(self) -> List[str]:
         """Get list of currently selected relative paths."""
