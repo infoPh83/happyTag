@@ -853,14 +853,14 @@ class CloudinaryUploadHandler(QObject):
             try:
                 from utilities.settings_dialog import SettingsDialog
                 from utilities.folder_status_manager import FolderStatusManager
-                from utilities.path_mapper import PathMapper
+                from utilities.path_mapper import create_path_mapper
                 saved = SettingsDialog.get_saved_settings()
                 network_root = saved.get('network_root_folder', '').strip()
                 if network_root and Path(network_root).is_dir():
                     orig_path = Path(original_file_path) if original_file_path else file_path_obj
                     original_size = orig_path.stat().st_size if orig_path.exists() else 0
                     upload_size = response.get('bytes', original_size)
-                    path_mapper = PathMapper(network_root)
+                    path_mapper = create_path_mapper(network_root)
                     rel_path = path_mapper.to_relative(str(orig_path))
                     if rel_path:
                         status_mgr = FolderStatusManager(network_root)

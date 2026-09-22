@@ -3754,9 +3754,9 @@ class MainWindow(QMainWindow):
     
     def show_folder_manager(self):
         """Create and show the folder manager dialog"""
-        # Get network root folder from settings
+        # Get network root folder from settings (primary shared root)
         settings = SettingsDialog.get_saved_settings()
-        network_root = settings.get('network_root_folder', '')
+        network_root = SettingsDialog.get_network_root()
         
         if not network_root:
             from PyQt5.QtWidgets import QMessageBox
@@ -3863,8 +3863,7 @@ class MainWindow(QMainWindow):
         try:
             from utilities.folder_status_manager import FolderStatusManager
             from utilities.settings_dialog import SettingsDialog
-            settings = SettingsDialog.get_cloudinary_settings()
-            network_root = settings.get('network_root', '').strip()
+            network_root = SettingsDialog.get_network_root()
             if network_root and os.path.exists(network_root):
                 if not hasattr(self, '_standalone_status_manager') or self._standalone_status_manager is None:
                     self._standalone_status_manager = FolderStatusManager(network_root)

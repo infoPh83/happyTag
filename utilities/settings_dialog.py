@@ -56,9 +56,14 @@ class SettingsDialog(QDialog):
         # Connect Cloudinary buttons and controls
         self.logFolder_button.clicked.connect(self.select_log_folder)
         
-        # Connect Folder Manager button
+        # Connect Folder Manager button (Marketing Drive root)
         if hasattr(self, 'networkRootFolder_button'):
             self.networkRootFolder_button.clicked.connect(self.select_network_root_folder)
+
+        # Share Point Media Library root (OneDrive sync folder)
+        self.sharepoint_root_folder = ""
+        if hasattr(self, 'sharepointRoot_button'):
+            self.sharepointRoot_button.clicked.connect(self.select_sharepoint_root_folder)
         
         # Connect Cloudinary test connection button
         if hasattr(self, 'testCloudinaryConnection'):
@@ -193,7 +198,36 @@ class SettingsDialog(QDialog):
                     "Invalid Folder",
                     "The selected folder does not exist or is not accessible."
                 )
-            
+
+    def select_sharepoint_root_folder(self):
+        """Select the Share Point Media Library (OneDrive sync) root folder."""
+        from pathlib import Path
+        folder_path = QFileDialog.getExistingDirectory(
+            self,
+            "Select Share Point Media Library Folder",
+            "",
+            QFileDialog.ShowDirsOnly
+        )
+        if not folder_path:
+            return
+        if not Path(folder_path).exists():
+            QMessageBox.warning(self, "Invalid Folder",
+                                "The selected folder does not exist or is not accessible.")
+            return
+
+        # Must differ from the Marketing Drive root.
+        primary = getattr(self, 'network_root_folder', '').strip()
+        if primary and os.path.normcase(os.path.abspath(folder_path)) == \
+                os.path.normcase(os.path.abspath(primary)):
+            QMessageBox.warning(self, "Invalid Folder",
+                                "The Share Point Media Library root must be different "
+                                "from the Marketing Drive root.")
+            return
+
+        self.sharepoint_root_folder = folder_path
+        if hasattr(self, 'sharepointRoot_path'):
+            self.sharepointRoot_path.setText(folder_path)
+
     def update_test_button_state(self):
         """Enable/disable the test connection button based on whether all fields are filled"""
         if hasattr(self, 'testCloudinaryConnection'):
@@ -796,8 +830,9 @@ class SettingsDialog(QDialog):
             'cloudinary_tags_path': self.cloudinary_tags_path if self.cloudinaryTags_checkbox.isChecked() else "",
             'buildings_path': self.buildings_file_path if self.buildings_checkbox.isChecked() else "",
             
-            # Folder Manager settings
+            # Folder Manager settings (multi-root: A = Marketing Drive, B = Share Point)
             'network_root_folder': self.network_root_folder,
+            'sharepoint_root_folder': getattr(self, 'sharepoint_root_folder', ''),
             
             # Cloudinary settings
             'cloudinary_log_folder': self.log_folder_path,
@@ -927,6 +962,18 @@ class SettingsDialog(QDialog):
         else:
             if hasattr(self, 'networkRootFolder_path'):
                 self.networkRootFolder_path.setText("Click 'Locate..' to select network folder")
+
+        # Load Share Point Media Library root (multi-root support)
+        self.sharepoint_root_folder = (settings.get('sharepoint_root_folder') or '').strip()
+        if self.sharepoint_root_folder and os.path.exists(self.sharepoint_root_folder):
+            if hasattr(self, 'sharepointRoot_path'):
+                self.sharepointRoot_path.setText(self.sharepoint_root_folder)
+        else:
+            if self.sharepoint_root_folder:
+                # Configured but not present on this machine
+                self.sharepoint_root_folder = ""
+            if hasattr(self, 'sharepointRoot_path'):
+                self.sharepointRoot_path.setText("Click 'Locate..' to select the Share Point Media Library folder")
 
         # Load Cloudinary API settings
         self.cloudName_text.setText(settings.get('cloudinary_cloud_name', ''))
@@ -1209,6 +1256,80 @@ class SettingsDialog(QDialog):
             cloudinary_settings['api_key'] and
             cloudinary_settings['api_secret']
         )
+
+    # ---- Multi-root shared roots (fixed slots) ----
+    # Two fixed shared roots, each identified by a stable code stored in the
+    # shared CSV and decoded to a machine-local absolute path via settings.pkl.
+    # Users only ever see the friendly labels; the codes are internal.
+    ROOT_CODE_MARKETING = 'A'   # Marketing Drive (e.g. G:\Marketing)
+    ROOT_CODE_SHAREPOINT = 'B'  # Share Point Media Library (OneDrive sync)
+    ROOT_LABELS = {
+        ROOT_CODE_MARKETING: 'Marketing Drive',
+        ROOT_CODE_SHAREPOINT: 'Share Point Media Library',
+    }
+    # settings.pkl keys holding the per-machine absolute path for each code.
+    ROOT_SETTING_KEYS = {
+        ROOT_CODE_MARKETING: 'network_root_folder',        # legacy key, reused
+        ROOT_CODE_SHAREPOINT: 'sharepoint_root_folder',    # new key
+    }
+
+    @staticmethod
+    def get_shared_roots():
+        """
+        Get the configured shared roots as a list of dicts:
+            [{'code': 'A', 'name': 'Marketing Drive', 'path': 'G:\\Marketing'},
+             {'code': 'B', 'name': 'Share Point Media Library', 'path': '...'}]
+
+        Only roots with a configured, non-empty path are returned. The legacy
+        single 'network_root_folder' setting is treated as code 'A'.
+        """
+        settings = SettingsDialog.get_saved_settings()
+        roots = []
+        for code in (SettingsDialog.ROOT_CODE_MARKETING, SettingsDialog.ROOT_CODE_SHAREPOINT):
+            key = SettingsDialog.ROOT_SETTING_KEYS[code]
+            path = (settings.get(key) or '').strip()
+            if path:
+                roots.append({
+                    'code': code,
+                    'name': SettingsDialog.ROOT_LABELS[code],
+                    'path': path,
+                })
+        return roots
+
+    @staticmethod
+    def get_root_path_for_code(code):
+        """Return the configured local absolute path for a root code, or ''."""
+        settings = SettingsDialog.get_saved_settings()
+        key = SettingsDialog.ROOT_SETTING_KEYS.get(code)
+        if not key:
+            return ''
+        return (settings.get(key) or '').strip()
+
+    @staticmethod
+    def get_root_code_for_path(path):
+        """
+        Return the root code ('A'/'B') whose configured path contains the given
+        absolute path, or None. Longest configured path wins (nested safety).
+        """
+        if not path:
+            return None
+        norm = os.path.normcase(os.path.abspath(str(path)))
+        matches = []
+        for r in SettingsDialog.get_shared_roots():
+            root = os.path.normcase(os.path.abspath(r['path']))
+            if norm == root or norm.startswith(root if root.endswith(os.sep) else root + os.sep):
+                matches.append((len(root), r['code']))
+        if not matches:
+            return None
+        matches.sort(reverse=True)
+        return matches[0][1]
+
+    @staticmethod
+    def get_network_root():
+        """
+        Backward-compatible accessor for the primary (Marketing Drive) root path.
+        """
+        return SettingsDialog.get_root_path_for_code(SettingsDialog.ROOT_CODE_MARKETING)
 
     @staticmethod
     def save_ui_preferences(text_size=None, last_path=None):

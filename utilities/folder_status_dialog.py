@@ -266,7 +266,8 @@ class FolderStatusDialog(QDialog):
         
         # Initialize managers
         self.network_root = network_root
-        self.path_mapper = PathMapper(network_root)
+        from .path_mapper import create_path_mapper
+        self.path_mapper = create_path_mapper(network_root)
         self.status_manager = FolderStatusManager(network_root)
 
         # Acquire exclusive lock — raises LockError if another instance holds it.
@@ -531,19 +532,22 @@ class FolderStatusDialog(QDialog):
         - Folders in CSV but not on FS:           shown as STATUS_NOT_FOUND.
         """
         cache = self.status_manager._status_cache
-        network_root = Path(self.network_root)
         new_added = False
 
-        # What's on the filesystem at root level (one iterdir, no recursion)
+        # What's on the filesystem at root level (one iterdir per configured
+        # root, no recursion). A relative path may legitimately exist under
+        # more than one root; we keep the first hit. Folders that only exist
+        # under a non-primary root are still discovered here.
         fs_folders: Dict[str, str] = {}  # rel_path -> name
-        try:
-            for p in sorted(network_root.iterdir(), key=lambda x: x.name.lower()):
-                if p.is_dir() and not p.name.startswith('.'):
-                    rel = self.path_mapper.to_relative(str(p))
-                    if rel:
-                        fs_folders[rel] = p.name
-        except Exception:
-            pass
+        for _code, _name, root_path in self.path_mapper.roots:
+            try:
+                for p in sorted(root_path.iterdir(), key=lambda x: x.name.lower()):
+                    if p.is_dir() and not p.name.startswith('.'):
+                        rel = self.path_mapper.to_relative(str(p))
+                        if rel and rel not in fs_folders:
+                            fs_folders[rel] = p.name
+            except Exception:
+                continue
 
         # CSV root entries (immediate children of network_root = no '/' in path)
         csv_roots = {
@@ -1302,15 +1306,16 @@ class FolderStatusDialog(QDialog):
         if not new_abs_path:
             return  # User cancelled
 
-        # Verify the chosen path is under the network root
+        # Verify the chosen path is under one of the configured shared roots
         new_rel_path = self.path_mapper.to_relative(new_abs_path)
         if not new_rel_path:
+            root_list = "\n".join(f"  • {n}: {p}" for _c, n, p in self.path_mapper.roots)
             QMessageBox.warning(
                 self,
                 "Invalid Location",
-                "The selected folder must be inside the configured network root folder.\n\n"
-                f"Network root: {self.network_root}\n"
-                f"Selected:     {new_abs_path}"
+                "The selected folder must be inside one of the configured shared roots.\n\n"
+                f"Configured roots:\n{root_list}\n\n"
+                f"Selected: {new_abs_path}"
             )
             return
 

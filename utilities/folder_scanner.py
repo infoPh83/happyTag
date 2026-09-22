@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import List, Tuple, Optional, Callable, Dict
 from datetime import datetime
 from utilities.debug_utils import debug
-from utilities.path_mapper import PathMapper
+from utilities.path_mapper import PathMapper, create_path_mapper
 from utilities.folder_status_manager import (
     FolderStatusManager,
     STATUS_DISMISSED,
@@ -121,7 +121,7 @@ class FolderScanner:
             status_manager: FolderStatusManager instance
         """
         self.network_root = Path(network_root)
-        self.path_mapper = PathMapper(network_root)
+        self.path_mapper = create_path_mapper(network_root)
         self.status_manager = status_manager
         self.progress = ScanProgress()
         

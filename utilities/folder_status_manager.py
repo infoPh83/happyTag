@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 from utilities.debug_utils import debug
-from utilities.path_mapper import PathMapper
+from utilities.path_mapper import PathMapper, create_path_mapper
 from utilities.file_lock_manager import FileLockManager
 
 
@@ -81,6 +81,7 @@ class FolderStatusManager:
     
     CSV_FILENAME = "folder_status.csv"
     CSV_HEADERS = [
+        'root_code',    # stable shared-root code: 'A' = Marketing Drive, 'B' = Share Point Media Library
         'relative_path',
         'item_type',  # 'folder' or 'file'
         'status',
@@ -93,7 +94,28 @@ class FolderStatusManager:
         'last_modified',
         'notes'
     ]
-    
+
+    # Root codes (mirror SettingsDialog) — used for CSV migration and defaulting.
+    ROOT_CODE_MARKETING = 'A'
+    ROOT_CODE_SHAREPOINT = 'B'
+    # Relative-path prefix that identifies Share Point (B) rows on migration.
+    SHAREPOINT_PATH_PREFIX = '00. Media Library'
+
+    @staticmethod
+    def infer_root_code(relative_path: str) -> str:
+        """
+        Infer the root code for a legacy (un-coded) relative path.
+
+        Rule (per project convention): anything under '00. Media Library' lives
+        in the Share Point Media Library (B); everything else is on the
+        Marketing Drive (A).
+        """
+        rel = (relative_path or '').lstrip('/')
+        if rel == FolderStatusManager.SHAREPOINT_PATH_PREFIX or \
+                rel.startswith(FolderStatusManager.SHAREPOINT_PATH_PREFIX + '/'):
+            return FolderStatusManager.ROOT_CODE_SHAREPOINT
+        return FolderStatusManager.ROOT_CODE_MARKETING
+
     def __init__(self, network_root: str, logs_folder: str = None):
         """
         Initialize the status manager.
@@ -102,7 +124,7 @@ class FolderStatusManager:
             network_root: Root directory of the network drive
             logs_folder: Optional folder for the CSV file. If None, auto-detected from settings.
         """
-        self.path_mapper = PathMapper(network_root)
+        self.path_mapper = create_path_mapper(network_root)
         self.lock_manager = FileLockManager(network_root)
         
         # Determine CSV location: prefer logs_folder, fallback to settings, then network_root
@@ -156,14 +178,21 @@ class FolderStatusManager:
                 reader = csv.DictReader(f)
                 self._status_cache = {}
                 migrated_count = 0
-                
+                root_migrated = 0
+
                 for row in reader:
                     rel_path = row['relative_path']
                     status = row['status']
-                    
+
                     # Get item_type, default to 'folder' for backward compatibility
                     item_type = row.get('item_type', 'folder')
-                    
+
+                    # Root code: read if present (new schema), else infer (legacy).
+                    root_code = (row.get('root_code') or '').strip()
+                    if not root_code:
+                        root_code = self.infer_root_code(rel_path)
+                        root_migrated += 1
+
                     # Migrate legacy statuses
                     if status == 'not_evaluated':
                         status = STATUS_WATCHED
@@ -179,8 +208,15 @@ class FolderStatusManager:
                         status = STATUS_DISMISSED
                         migrated_count += 1
                         debug("folder_status", f"Migrated {rel_path}: folder 'new' -> dismissed")
-                    
+
+                    # Cache is keyed by the plain relative path. The two roots
+                    # never produce colliding keys in practice because all
+                    # Share Point (B) content is namespaced under
+                    # '00. Media Library'. The root_code is stored as row
+                    # metadata for per-machine decode and dialog grouping.
                     self._status_cache[rel_path] = {
+                        'root_code': root_code,
+                        'relative_path': rel_path,
                         'item_type': item_type,
                         'status': status,
                         'previous_status': row.get('previous_status', ''),
@@ -192,13 +228,13 @@ class FolderStatusManager:
                         'last_modified': row.get('last_modified', ''),
                         'notes': row.get('notes', '')
                     }
-            
+
             self._cache_loaded = True
             count = len(self._status_cache)
-            
+
             # Save immediately if migrations were performed
-            if migrated_count > 0:
-                debug("folder_status", f"Migrated {migrated_count} entries, saving database")
+            if migrated_count > 0 or root_migrated > 0:
+                debug("folder_status", f"Migrated {migrated_count} statuses, {root_migrated} root codes; saving database")
                 self.save_status_db()
 
             # Fix any inferred statuses that are out of sync
@@ -230,7 +266,11 @@ class FolderStatusManager:
                 writer.writeheader()
                 
                 for rel_path, data in self._status_cache.items():
+                    # root_code is stored as row metadata; default by inference
+                    # for any legacy rows that predate the column.
+                    root_code = data.get('root_code') or self.infer_root_code(rel_path)
                     writer.writerow({
+                        'root_code': root_code,
                         'relative_path': rel_path,
                         'item_type': data.get('item_type', 'folder'),
                         'status': data['status'],
@@ -278,10 +318,10 @@ class FolderStatusManager:
         """
         if not self._cache_loaded:
             self.load_status_db()
-        
-        # Normalize path
+
+        # Normalize path (plain relative path == cache key)
         rel_path = self.path_mapper.normalize_path(relative_path)
-        
+
         if rel_path in self._status_cache:
             status = self._status_cache[rel_path]['status']
             debug("folder_status", f"get_status: {rel_path} -> {status}")
@@ -317,11 +357,11 @@ class FolderStatusManager:
             debug("errors", msg)
             return False, msg
         
-        # Normalize path
+        # Normalize path (plain relative path == cache key)
         rel_path = self.path_mapper.normalize_path(relative_path)
-        
+
         now = datetime.now().isoformat()
-        
+
         # Preserve existing cloudinary fields if not explicitly overriding
         existing = self._status_cache.get(rel_path, {})
         existing_status = existing.get('status', '')
@@ -335,8 +375,10 @@ class FolderStatusManager:
             # already not_found → keep whatever previous_status was recorded
             previous_status = existing.get('previous_status', '')
 
-        # Update cache
+        # Update cache (root_code recorded for per-machine decode / grouping)
         self._status_cache[rel_path] = {
+            'root_code': existing.get('root_code', self.infer_root_code(rel_path)),
+            'relative_path': rel_path,
             'item_type': existing.get('item_type', 'folder'),
             'status': status,
             'previous_status': previous_status,
@@ -348,7 +390,7 @@ class FolderStatusManager:
             'last_modified': now,
             'notes': notes or existing.get('notes', '')
         }
-        
+
         debug("folder_status", f"set_status: {rel_path} -> {status}")
         
         # Save to disk
