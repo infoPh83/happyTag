@@ -1,0 +1,188 @@
+Cloudinary Credentials
+***REMOVED - stored in ~/.happytag/settings.pkl via Settings dialog***
+***REMOVED***
+***REMOVED***
+
+new credential June 2026
+***REMOVED - stored in ~/.happytag/settings.pkl via Settings dialog***
+***REMOVED***
+***REMOVED***
+
+
+
+SELECT RIGHT INTERPRETER
+Press Ctrl+Shift+P
+Type "Python: Select Interpreter"
+Pick .venv_win on Windows, .venv on macOS
+
+
+
+git fetch downloads the latest state from the remote without merging anything. 
+After that, git status will tell you if you're behind (e.g. "Your branch is behind 'origin/main' by X commits").
+
+
+git fetch origin
+git status
+git log HEAD..origin/main --oneline
+
+
+TO REGENERATE icon
+source .venv/bin/activate
+python logo/generate_icons.py
+
+
+
+activate virtual env on window
+on Cristina computer
+
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+.venv_win\Scripts\Activate.ps1
+pyinstaller .\HappyTag_Win.spec
+
+
+.venv_win\Scripts\Activate.ps1
+pyinstaller .\HappyTag_Win.spec
+
+
+On Windows, open PowerShell in the project folder and run:
+
+.venv_win\Scripts\Activate.ps1
+
+If you are using Command Prompt instead, run:
+
+.venv_win\Scripts\activate.bat
+
+
+
+
+WIN 64
+pyinstaller --onefile --console --exclude-module pytest --add-data "ui;ui" --add-data "packages\exiftool_win64\exiftool-13.34_64\exiftool(-k).exe;packages\exiftool_win64\exiftool-13.34_64" --add-data "packages\exiftool_win64\exiftool-13.34_64\exiftool_files;packages\exiftool_win64\exiftool-13.34_64\exiftool_files" --name HappyTag main.py --clean
+
+WIN 32
+pyinstaller --onefile --console --exclude-module pytest --add-data "ui;ui" --add-data "packages\exiftool_win32\exiftool-13.34_32\exiftool(-k).exe;packages\exiftool_win32\exiftool-13.34_32" --add-data "packages\exiftool_win32\exiftool-13.34_32\exiftool_files;packages\exiftool_win32\exiftool-13.34_32\exiftool_files" --name HappyTag main.py --clean
+
+MacOS
+INSTRUCTION JUNE 2026
+source .venv/bin/activate && pyinstaller HappyTag_macOS.spec --clean --noconfirm --workpath ~/Desktop/happytag_build_work --distpath ~/Desktop/happytag_dist
+
+
+old ones:
+
+pyinstaller --onefile --console --exclude-module pytest --add-data "ui:ui" --add-data "packages/exiftool_mac/exiftool:packages/exiftool_mac" --name HappyTag main.py --clean
+
+CREATE PY FROM ui
+pyuic5 input_file.ui -o output_file.py
+pyuic5 ui/mainWindow.ui -o ui/mainWindow.py
+pyuic5 ui/tagManagerDialog.ui -o ui/tagManager.py
+
+to push to github. Install git:  https://git-scm.com/download/win
+
+INITIALISE
+git init
+git add .
+git commit -m "Initial commit"
+///
+git remote add origin https://github.com/yourusername/projectName.git
+git branch -M main
+git push -u origin main
+
+
+PUSH A VERSION
+
+git add .
+git commit -m "Describe your changes"
+git push
+
+git add .
+git commit -m "Saving optimization and Clear tag / Select all implemented"
+git push
+
+git add .
+git commit -m "Started Cloudinary integration / Flow layout in main window"
+git push
+
+git commit -m "Uniformed import/cloudinary assessment phase. Showing of synched images"
+
+
+
+
+
+ON OTHER DEVICES
+First time to copy all repository
+git clone https://github.com/yourusername/projectName.git
+
+then PULL to get the updates
+git pull (it's already associated with the project)
+
+check the latest commit description
+git log -1 --pretty=format:"%h - %an, %ar : %s"
+
+git reset --hard HEAD
+git pull
+
+# Force reset to match the remote exactly
+git reset --hard origin/main
+
+
+
+
+DEBUG ON WINDOWS (EXEC) CORRECT HANDLING OF ExifTool
+Detected 64-bit Windows, looking for: C:\Users\simon\AppData\Local\Temp\_MEI206882\packages\exiftool_win64\exiftool-13.34_64\exiftool(-k).exe
+[DEBUG] Local ExifTool path detected: C:\Users\simon\AppData\Local\Temp\_MEI206882\packages\exiftool_win64\exiftool-13.34_64\exiftool(-k).exe
+[DEBUG] Testing local ExifTool at: C:\Users\simon\AppData\Local\Temp\_MEI206882\packages\exiftool_win64\exiftool-13.34_64\exiftool(-k).exe
+[DEBUG] ExifTool version test result: 13.34
+
+
+
+REMOVE CACHE
+Close VS Code
+Delete: %APPDATA%\Code\User\workspaceStorage
+Delete: %APPDATA%\Code\logs
+
+
+
+
+
+
+
+DEBUG CATEGORIES
+image_display - Widget sizing, scaling, dimensions, colors
+layout - Flow layout, positioning, widget arrangement
+tags - Tag handling, metadata extraction, keywords
+metadata - ExifTool operations, file metadata reading
+cloudinary - Cloudinary API calls, sync operations, uploads
+assessment - Image assessment, database operations
+memory - Memory usage, resource monitoring
+timers - Timer operations, callbacks, cleanup
+ui_events - Mouse clicks, selections, user actions
+file_ops - File operations, loading, saving
+startup - Application initialization (enabled by default)
+errors - Error conditions and exceptions (always enabled)
+
+
+ON TERMINAL
+# Enable specific categories
+$env:HAPPYTAG_DEBUG = "layout,tags,cloudinary, upload, errors, assessment"
+$env:HAPPYTAG_DEBUG = "upload, cloudinary, errors, assessment, file_ops, image_loading, ui_events"
+
+# Enable all categories 
+$env:HAPPYTAG_DEBUG = "all"
+
+# Set verbosity level
+$env:HAPPYTAG_DEBUG_LEVEL = "VERBOSE"
+
+# Enable file logging
+$env:HAPPYTAG_DEBUG_FILE = "debug.log"
+
+
+
+ON Mac
+
+# Set environment variable for current session
+export HAPPYTAG_DEBUG="all"
+
+# Or run the app with the environment variable in one command
+HAPPYTAG_DEBUG="all" python main.py
+
+# Or run with virtual environment
+cd "/Volumes/Marketing/Simone Morciano/python working folder/happyTag/happyTag" && source .venv/bin/activate && HAPPYTAG_DEBUG="all" python main.py
