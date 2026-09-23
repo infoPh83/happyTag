@@ -560,6 +560,9 @@ class TagManager(QDialog):
             message_parts.append("  - Check if the file has the correct column headers:")
             message_parts.append("    'Tenant Name', 'Property', 'Street name', 'Category', 'B2B/B2C'")
             message_parts.append("  - Verify there are rows with 'B2C' in the B2B/B2C column")
+            b2b_err = getattr(self, '_b2b_read_error', None)
+            if b2b_err:
+                message_parts.append(f"  - Actual error: {b2b_err}")
         else:
             message_parts.append(f"• B2B + B2C final.ods: Found {b2b_count} categories")
         
@@ -569,6 +572,9 @@ class TagManager(QDialog):
             message_parts.append("• NON TLE tenants list.ods: No B2C businesses found")
             message_parts.append("  - Check if the file has the correct column headers")
             message_parts.append("  - Verify there are rows with 'B2C' in the B2B/B2C column")
+            non_tle_err = getattr(self, '_non_tle_read_error', None)
+            if non_tle_err:
+                message_parts.append(f"  - Actual error: {non_tle_err}")
         else:
             message_parts.append(f"• NON TLE tenants list.ods: Found {non_tle_count} categories")
         
@@ -591,6 +597,9 @@ class TagManager(QDialog):
             message_parts.append("❌ B2B + B2C final.ods: No B2C businesses found")
             message_parts.append("   • Check column headers: 'Tenant Name', 'Property', 'Street name', 'Category', 'B2B/B2C'")
             message_parts.append("   • Verify rows have 'B2C' in the B2B/B2C column")
+            b2b_err = getattr(self, '_b2b_read_error', None)
+            if b2b_err:
+                message_parts.append(f"   • Actual error: {b2b_err}")
         else:
             message_parts.append(f"✅ B2B + B2C final.ods: Successfully loaded {b2b_count} categories")
         
@@ -600,6 +609,9 @@ class TagManager(QDialog):
             message_parts.append("❌ NON TLE tenants list.ods: No B2C businesses found")
             message_parts.append("   • Check column headers match expected format")
             message_parts.append("   • Verify rows have 'B2C' in the B2B/B2C column")
+            non_tle_err = getattr(self, '_non_tle_read_error', None)
+            if non_tle_err:
+                message_parts.append(f"   • Actual error: {non_tle_err}")
         else:
             message_parts.append(f"✅ NON TLE tenants list.ods: Successfully loaded {non_tle_count} categories")
         
@@ -1270,6 +1282,7 @@ class TagManager(QDialog):
     
     def read_businesses_from_ods(self, file_path):
         """Read business data from the B2B + B2C final file (supports ODS, Excel XLSX, and Excel XLSM formats), Table1 sheet"""
+        self._b2b_read_error = None
         try:
             debug_tag_widgets(f"Starting to read file: {file_path}")
             import pandas as pd
@@ -1301,7 +1314,8 @@ class TagManager(QDialog):
             # Check if all required columns were found
             missing_columns = [col for col, idx in col_indexes.items() if idx is None]
             if missing_columns:
-                debug_errors(f"Missing required columns: {missing_columns}")
+                self._b2b_read_error = f"Missing required columns: {missing_columns}"
+                debug_errors(self._b2b_read_error)
                 return []
             
             # Filter rows where B2B/B2C column = "B2C"
@@ -1382,11 +1396,13 @@ class TagManager(QDialog):
             return business_data
             
         except Exception as e:
+            self._b2b_read_error = f"{type(e).__name__}: {e}"
             debug_errors(f"Error reading business data from file: {e}")
             return []
 
     def read_non_tle_businesses_from_ods(self, file_path):
         """Read non-TLE business data from the NON TLE tenants list file (supports ODS, Excel XLSX, and Excel XLSM formats)"""
+        self._non_tle_read_error = None
         try:
             debug_tag_widgets(f"Starting to read NON TLE file: {file_path}")
             import pandas as pd
@@ -1420,7 +1436,8 @@ class TagManager(QDialog):
             # Check if all required columns were found
             missing_columns = [col for col, idx in col_indexes.items() if idx is None]
             if missing_columns:
-                debug_errors(f"Missing required columns in NON TLE file: {missing_columns}")
+                self._non_tle_read_error = f"Missing required columns in NON TLE file: {missing_columns}"
+                debug_errors(self._non_tle_read_error)
                 return []
             
             # Filter rows where B2B/B2C column = "B2C"
@@ -1507,6 +1524,7 @@ class TagManager(QDialog):
             return business_data
             
         except Exception as e:
+            self._non_tle_read_error = f"{type(e).__name__}: {e}"
             debug_errors(f"Error reading non-TLE business data from file: {e}")
             return []
     
@@ -1585,6 +1603,7 @@ class TagManager(QDialog):
 
     def read_streets_from_ods(self, file_path):
         """Read street and building data from the Buildings and Streets file (supports both ODS and Excel formats)"""
+        self._streets_read_error = None
         try:
             debug_tag_widgets(f"Starting to read Buildings and Streets file: {file_path}")
             import pandas as pd
@@ -1616,7 +1635,8 @@ class TagManager(QDialog):
             # Check if all required columns were found
             missing_columns = [col for col, idx in col_indexes.items() if idx is None]
             if missing_columns:
-                debug_tag_widgets(f"ERROR: Missing required columns in Buildings and Streets file: {missing_columns}")
+                self._streets_read_error = f"Missing required columns in Buildings and Streets file: {missing_columns}"
+                debug_tag_widgets(f"ERROR: {self._streets_read_error}")
                 return None
             
             # Extract colors from headers (first row of data contains header colors)
@@ -1672,6 +1692,7 @@ class TagManager(QDialog):
             return result
             
         except Exception as e:
+            self._streets_read_error = f"{type(e).__name__}: {e}"
             debug_errors(f"Error reading Buildings and Streets data from file: {e}")
             return None
 
@@ -1764,10 +1785,14 @@ class TagManager(QDialog):
         msg_box = QMessageBox()
         msg_box.setIcon(QMessageBox.Warning)
         msg_box.setWindowTitle("No Street/Building Data Found")
-        msg_box.setText(f"Could not load street or building data from:\n{file_path}\n\n"
-                       "Please check that the file has:\n"
-                       "• A sheet named 'Buildings and Streets'\n"
-                       "• Columns named 'BUILDINGS' and 'STREET'\n"
-                       "• Valid data in those columns")
+        text = (f"Could not load street or building data from:\n{file_path}\n\n"
+                "Please check that the file has:\n"
+                "• A sheet named 'Buildings and Streets'\n"
+                "• Columns named 'BUILDINGS' and 'STREET'\n"
+                "• Valid data in those columns")
+        streets_err = getattr(self, '_streets_read_error', None)
+        if streets_err:
+            text += f"\n\nActual error: {streets_err}"
+        msg_box.setText(text)
         msg_box.setStandardButtons(QMessageBox.Ok)
         msg_box.exec_()
