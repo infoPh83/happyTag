@@ -21,6 +21,9 @@ build/
 dist/
 *.spec.bak
 
+# Build with Inno Setup
+installer/installer_output/
+    
 # IDEs
 .vscode/
 .idea/
